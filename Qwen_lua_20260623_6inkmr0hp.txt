@@ -1,82 +1,167 @@
--- ПОЛНЫЙ ТЕСТ ВСЕХ ЭЛЕМЕНТОВ БИБЛИОТЕКИ
-local function LoadLibrary()
-    local url = "https://raw.githubusercontent.com/Morozhka144/GreenyUI/refs/heads/main/main.lua"
-    return loadstring(game:HttpGet(url))()
+-- 1. Загрузка библиотеки
+local Library
+local okLoad, errLoad = pcall(function()
+    Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GreenyUI/refs/heads/main/main.lua"))()
+end)
+
+if not okLoad or not Library then
+    warn("❌ Не удалось загрузить библиотеку!")
+    warn("   Причина: " .. tostring(errLoad))
+    return
 end
 
-local Library = LoadLibrary()
+print("=====================================")
+print("✅ Библиотека успешно загружена!")
+print("=====================================")
 
-if Library then
-    print("✅ Библиотека загружена!")
-    
-    local Win = Library:CreateWindow("TEST UI")
-    
-    -- === ТАБ 1: Все элементы ===
-    local Tab1 = Win:CreateTab("All Elements")
-    
-    Tab1:AddSection("КНОПКИ")
-    
-    Tab1:AddButton("Обычная кнопка", function()
-        print("🔘 Обычная кнопка!")
-        Library:Notify("Тест", "Обычная кнопка работает", 2)
+-- 2. Счётчики и хелпер для безопасного вызова
+local passed, failed = 0, 0
+
+local function safe(name, fn)
+    local ok, err = pcall(fn)
+    if ok then
+        passed = passed + 1
+        print("✅ " .. name)
+    else
+        failed = failed + 1
+        warn("❌ " .. name .. " → " .. tostring(err))
+    end
+end
+
+-- 3. Создание окна
+local Win
+safe("CreateWindow", function()
+    Win = Library:CreateWindow("TEST UI")
+end)
+
+if not Win then
+    warn("❌ Окно не создано — тест прерван.")
+    return
+end
+
+-- 4. Уведомление
+safe("Notify", function()
+    Library:Notify("Запуск теста", "Проверяем все элементы...", 3)
+end)
+
+--========================================================--
+--                     ВКЛАДКА 1                          --
+--========================================================--
+local Tab1
+safe("CreateTab #1", function()
+    Tab1 = Win:CreateTab("All Elements")
+end)
+
+if Tab1 then
+    -- Секции
+    safe("AddSection", function()
+        Tab1:AddSection("КНОПКИ")
     end)
-    
-    Tab1:AddAccentButton("Зелёная кнопка", function()
-        print("🟢 Зелёная кнопка!")
-        Library:Notify("Тест", "Зелёная кнопка работает", 2)
+
+    -- Обычная кнопка
+    safe("AddButton", function()
+        Tab1:AddButton("Обычная кнопка", function()
+            Library:Notify("Тест", "Обычная кнопка работает", 2)
+        end)
     end)
-    
-    Tab1:AddDivider()
-    Tab1:AddSection("ПЕРЕКЛЮЧАТЕЛИ")
-    
-    Tab1:AddToggle("Тоггл 1", function(state)
-        print("🔘 Тоггл 1:", state)
-        Library:Notify("Тоггл 1", state and "ВКЛ" or "ВЫКЛ", 1.5)
+
+    -- Акцентная (зелёная) кнопка
+    safe("AddAccentButton", function()
+        Tab1:AddAccentButton("Зелёная кнопка", function()
+            Library:Notify("Тест", "Зелёная кнопка работает", 2)
+        end)
     end)
-    
-    Tab1:AddToggle("Тоггл 2", function(state)
-        print("🔘 Тоггл 2:", state)
+
+    -- Разделитель
+    safe("AddDivider", function()
+        Tab1:AddDivider()
     end)
-    
-    Tab1:AddDivider()
-    Tab1:AddSection("ВВОД ДАННЫХ")
-    
-    Tab1:AddTextBox("Текстовое поле", "Введите что-нибудь...", function(text)
-        print("📝 Текст:", text)
-        Library:Notify("Текст", "Вы ввели: " .. text, 2)
+
+    -- Секция: переключатели
+    safe("AddSection (Toggles)", function()
+        Tab1:AddSection("ПЕРЕКЛЮЧАТЕЛИ")
     end)
-    
-    Tab1:AddDropdown("Выберите опцию", {"Опция 1", "Опция 2", "Опция 3", "Опция 4"}, function(selected)
-        print("📋 Выбрано:", selected)
-        Library:Notify("Dropdown", "Выбрано: " .. selected, 2)
+
+    -- Toggle
+    safe("AddToggle", function()
+        Tab1:AddToggle("Тестовый Toggle", false, function(state)
+            Library:Notify("Toggle", "Состояние: " .. tostring(state), 2)
+        end)
     end)
-    
-    Tab1:AddDivider()
-    Tab1:AddSection("СЛАЙДЕР")
-    
-    Tab1:AddSlider("Громкость", 0, 100, 50, function(value)
-        print("️ Значение:", value)
+
+    -- Секция: ввод
+    safe("AddSection (Input)", function()
+        Tab1:AddSection("ВВОД")
     end)
-    
-    Tab1:AddSlider("Скорость", 10, 200, 50, function(value)
-        print("🎚️ Скорость:", value)
+
+    -- TextBox
+    safe("AddTextBox", function()
+        Tab1:AddTextBox("Введите текст", "Плейсхолдер...", function(text)
+            Library:Notify("TextBox", "Вы ввели: " .. tostring(text), 2)
+        end)
     end)
-    
-    Tab1:AddDivider()
-    Tab1:AddSection("РАЗНОЕ")
-    
-    Tab1:AddLabel("Это просто текстовый лейбл")
-    Tab1:AddLabel("Можно использовать для описаний")
-    
-    -- === ТАБ 2: Пустой для проверки переключения ===
-    local Tab2 = Win:CreateTab("Empty Tab")
-    Tab2:AddLabel("Этот таб почти пустой")
-    Tab2:AddButton("Тест переключения табов", function()
-        Library:Notify("Табы", "Переключение работает!", 2)
+
+    -- Dropdown
+    safe("AddDropdown", function()
+        Tab1:AddDropdown("Выпадающий список", {"Опция 1", "Опция 2", "Опция 3"}, function(choice)
+            Library:Notify("Dropdown", "Выбрано: " .. tostring(choice), 2)
+        end)
     end)
-    
-    print("✅ Все элементы созданы!")
-    Library:Notify("TEST UI", "Проверь все элементы!", 3)
+
+    -- Slider
+    safe("AddSlider", function()
+        Tab1:AddSlider("Слайдер", 0, 100, 50, function(value)
+            Library:Notify("Slider", "Значение: " .. tostring(value), 2)
+        end)
+    end)
+
+    -- Label
+    safe("AddLabel", function()
+        Tab1:AddLabel("Это тестовая метка (Label)")
+    end)
+end
+
+--========================================================--
+--                     ВКЛАДКА 2                          --
+--========================================================--
+local Tab2
+safe("CreateTab #2", function()
+    Tab2 = Win:CreateTab("Second Tab")
+end)
+
+if Tab2 then
+    safe("Tab2: AddSection", function()
+        Tab2:AddSection("ПРОВЕРКА ПЕРЕКЛЮЧЕНИЯ ВКЛАДОК")
+    end)
+
+    safe("Tab2: AddLabel", function()
+        Tab2:AddLabel("Если ты это видишь — переключение табов работает ✅")
+    end)
+
+    safe("Tab2: AddButton", function()
+        Tab2:AddButton("Кнопка на 2-й вкладке", function()
+            Library:Notify("Tab2", "Работает!", 2)
+        end)
+    end)
+end
+
+--========================================================--
+--                   ИТОГОВЫЙ ОТЧЁТ                       --
+--========================================================--
+print("=====================================")
+print("📊 РЕЗУЛЬТАТЫ ТЕСТА")
+print("   ✅ Успешно: " .. passed)
+print("   ❌ Ошибок:  " .. failed)
+print("=====================================")
+
+if failed == 0 then
+    print("🎉 ВСЕ ЭЛЕМЕНТЫ РАБОТАЮТ!")
+    pcall(function()
+        Library:Notify("Тест завершён", "Все элементы работают ✅", 4)
+    end)
 else
-    warn("❌ Не удалось загрузить библиотеку!")
+    warn("⚠️ Есть ошибки — смотри лог выше.")
+    pcall(function()
+        Library:Notify("Тест завершён", "Ошибок: " .. failed .. " (смотри консоль)", 5)
+    end)
 end
