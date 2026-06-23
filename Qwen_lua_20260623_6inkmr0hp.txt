@@ -1,0 +1,82 @@
+-- ПОЛНЫЙ ТЕСТ ВСЕХ ЭЛЕМЕНТОВ БИБЛИОТЕКИ
+local function LoadLibrary()
+    local url = "https://raw.githubusercontent.com/Morozhka144/GreenyUI/refs/heads/main/main.lua"
+    return loadstring(game:HttpGet(url))()
+end
+
+local Library = LoadLibrary()
+
+if Library then
+    print("✅ Библиотека загружена!")
+    
+    local Win = Library:CreateWindow("TEST UI")
+    
+    -- === ТАБ 1: Все элементы ===
+    local Tab1 = Win:CreateTab("All Elements")
+    
+    Tab1:AddSection("КНОПКИ")
+    
+    Tab1:AddButton("Обычная кнопка", function()
+        print("🔘 Обычная кнопка!")
+        Library:Notify("Тест", "Обычная кнопка работает", 2)
+    end)
+    
+    Tab1:AddAccentButton("Зелёная кнопка", function()
+        print("🟢 Зелёная кнопка!")
+        Library:Notify("Тест", "Зелёная кнопка работает", 2)
+    end)
+    
+    Tab1:AddDivider()
+    Tab1:AddSection("ПЕРЕКЛЮЧАТЕЛИ")
+    
+    Tab1:AddToggle("Тоггл 1", function(state)
+        print("🔘 Тоггл 1:", state)
+        Library:Notify("Тоггл 1", state and "ВКЛ" or "ВЫКЛ", 1.5)
+    end)
+    
+    Tab1:AddToggle("Тоггл 2", function(state)
+        print("🔘 Тоггл 2:", state)
+    end)
+    
+    Tab1:AddDivider()
+    Tab1:AddSection("ВВОД ДАННЫХ")
+    
+    Tab1:AddTextBox("Текстовое поле", "Введите что-нибудь...", function(text)
+        print("📝 Текст:", text)
+        Library:Notify("Текст", "Вы ввели: " .. text, 2)
+    end)
+    
+    Tab1:AddDropdown("Выберите опцию", {"Опция 1", "Опция 2", "Опция 3", "Опция 4"}, function(selected)
+        print("📋 Выбрано:", selected)
+        Library:Notify("Dropdown", "Выбрано: " .. selected, 2)
+    end)
+    
+    Tab1:AddDivider()
+    Tab1:AddSection("СЛАЙДЕР")
+    
+    Tab1:AddSlider("Громкость", 0, 100, 50, function(value)
+        print("️ Значение:", value)
+    end)
+    
+    Tab1:AddSlider("Скорость", 10, 200, 50, function(value)
+        print("🎚️ Скорость:", value)
+    end)
+    
+    Tab1:AddDivider()
+    Tab1:AddSection("РАЗНОЕ")
+    
+    Tab1:AddLabel("Это просто текстовый лейбл")
+    Tab1:AddLabel("Можно использовать для описаний")
+    
+    -- === ТАБ 2: Пустой для проверки переключения ===
+    local Tab2 = Win:CreateTab("Empty Tab")
+    Tab2:AddLabel("Этот таб почти пустой")
+    Tab2:AddButton("Тест переключения табов", function()
+        Library:Notify("Табы", "Переключение работает!", 2)
+    end)
+    
+    print("✅ Все элементы созданы!")
+    Library:Notify("TEST UI", "Проверь все элементы!", 3)
+else
+    warn("❌ Не удалось загрузить библиотеку!")
+end
