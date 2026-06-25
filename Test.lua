@@ -1,5 +1,5 @@
 local function SafeLoad()
-    local url = "https://raw.githubusercontent.com/Morozhka144/GreenyUI/refs/heads/main/main.lua"
+    local url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
 
     local ok, content = pcall(function()
         return game:HttpGet(url)
