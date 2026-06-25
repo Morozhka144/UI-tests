@@ -4,7 +4,7 @@
 --===================================================================================--
 
 -- ⬇️ ЗАМЕНИ НА СВОЮ RAW ССЫЛКУ
-local RAW_URL = "https://raw.githubusercontent.com/USERNAME/REPO/main/MoroLumina.lua"
+local RAW_URL = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
 
 -- безопасная загрузка
 local Library
