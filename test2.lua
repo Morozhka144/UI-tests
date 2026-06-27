@@ -1,6 +1,7 @@
 --===================================================================================--
 --                       MOROLUMINA UI — FULL TEST SUITE                               --
 --          Проверка всех элементов, флагов, конфигов и методов библиотеки             --
+--                        (с иконками Lucide вместо rbxassetid)                         --
 --===================================================================================--
 
 -- ⬇️ ЗАМЕНИ НА СВОЮ RAW ССЫЛКУ
@@ -32,7 +33,7 @@ print("[TEST] Окно создано ✓")
 --===================================================================================--
 --   TAB 1: ELEMENTS — проверка каждого элемента                                       --
 --===================================================================================--
-local t1 = Window:CreateTab({ Name = "Elements", Icon = "rbxassetid://3926307971" })
+local t1 = Window:CreateTab({ Name = "Elements", Icon = "layout-grid" })
 
 -- ЛЕВАЯ КОЛОНКА -------------------------------------------------------------------
 local s1 = t1:CreateSection({ Name = "Basics" })
@@ -58,7 +59,7 @@ s1:AddButton({
 
 s1:AddToggle({
     Name = "Тоггл (default ON)",
-    Icon = "rbxassetid://3926305904",
+    Icon = "toggle-right",
     Default = true,
     Flag = "Test_Toggle",
     Callback = function(v)
@@ -68,6 +69,7 @@ s1:AddToggle({
 
 s1:AddSlider({
     Name = "Целый слайдер",
+    Icon = "sliders-horizontal",
     Min = 0, Max = 100, Default = 50, Suffix = "%",
     Flag = "Test_SliderInt",
     Callback = function(v) print("[TEST] SliderInt =", v) end,
@@ -75,6 +77,7 @@ s1:AddSlider({
 
 s1:AddSlider({
     Name = "Дробный слайдер",
+    Icon = "gauge",
     Min = 0, Max = 5, Default = 2.5, Decimals = 2, Suffix = "x",
     Flag = "Test_SliderFloat",
     Callback = function(v) print("[TEST] SliderFloat =", v) end,
@@ -86,6 +89,7 @@ local s2 = t1:CreateSection({ Name = "Inputs" })
 
 s2:AddTextbox({
     Name = "Текстовое поле",
+    Icon = "text-cursor-input",
     Placeholder = "Введите текст...",
     Default = "",
     Flag = "Test_Textbox",
@@ -96,6 +100,7 @@ s2:AddTextbox({
 
 s2:AddTextbox({
     Name = "Числовое поле",
+    Icon = "hash",
     Placeholder = "0",
     Numeric = true,
     Flag = "Test_NumBox",
@@ -106,6 +111,7 @@ s2:AddTextbox({
 
 s2:AddKeybind({
     Name = "Тестовый бинд",
+    Icon = "keyboard",
     Default = Enum.KeyCode.F,
     Flag = "Test_Keybind",
     Callback = function()
@@ -118,6 +124,7 @@ s2:AddKeybind({
 
 s2:AddColorPicker({
     Name = "Выбор цвета",
+    Icon = "palette",
     Default = Color3.fromRGB(0, 225, 134),
     Flag = "Test_Color",
     Callback = function(c)
@@ -129,11 +136,12 @@ s2:AddColorPicker({
 --===================================================================================--
 --   TAB 2: DROPDOWNS — обычный и мульти + динамическое обновление                     --
 --===================================================================================--
-local t2 = Window:CreateTab({ Name = "Dropdowns", Icon = "rbxassetid://3926305904" })
+local t2 = Window:CreateTab({ Name = "Dropdowns", Icon = "chevrons-up-down" })
 
 local s3 = t2:CreateSection({ Name = "Single Dropdown" })
 local singleDD = s3:AddDropdown({
     Name = "Один выбор",
+    Icon = "list",
     Default = "Опция 2",
     Options = {"Опция 1", "Опция 2", "Опция 3", "Опция 4"},
     Flag = "Test_Single",
@@ -156,6 +164,7 @@ local s4 = t2:CreateSection({ Name = "Multi Dropdown" })
 
 local multiDD = s4:AddMultiDropdown({
     Name = "Мульти выбор",
+    Icon = "list-checks",
     Sub = "Можно выбрать несколько",
     Default = {"Алмаз", "Золото"},
     Placeholder = "Ничего",
@@ -169,6 +178,7 @@ local multiDD = s4:AddMultiDropdown({
 
 local limitedDD = s4:AddMultiDropdown({
     Name = "Лимит (макс 2)",
+    Icon = "target",
     Default = {},
     Max = 2,
     Options = {"Цель 1", "Цель 2", "Цель 3", "Цель 4"},
@@ -196,7 +206,7 @@ end })
 --===================================================================================--
 --   TAB 3: NOTIFICATIONS — все типы                                                   --
 --===================================================================================--
-local t3 = Window:CreateTab({ Name = "Notify", Icon = "rbxassetid://3926305904" })
+local t3 = Window:CreateTab({ Name = "Notify", Icon = "bell" })
 local s5 = t3:CreateSection({ Name = "Notification Types" })
 
 s5:AddButton({ Name = "Info", Callback = function()
@@ -231,7 +241,7 @@ end })
 --===================================================================================--
 --   TAB 4: FLAGS & CONFIG — проверка системы флагов и сохранения                      --
 --===================================================================================--
-local t4 = Window:CreateTab({ Name = "Flags", Icon = "rbxassetid://3926305904" })
+local t4 = Window:CreateTab({ Name = "Flags", Icon = "flag" })
 local s7 = t4:CreateSection({ Name = "Flag System" })
 
 s7:AddButton({ Name = "Вывести ВСЕ флаги", Callback = function()
@@ -256,8 +266,8 @@ end })
 
 t4:Column("right")
 local s8 = t4:CreateSection({ Name = "Config Save/Load" })
-local cfgName = s8:AddTextbox({ Name = "Имя конфига", Placeholder = "test_config" })
-local cfgList = s8:AddDropdown({ Name = "Сохранённые", Options = Library:GetConfigs(), Default = "" })
+local cfgName = s8:AddTextbox({ Name = "Имя конфига", Icon = "file-pen", Placeholder = "test_config" })
+local cfgList = s8:AddDropdown({ Name = "Сохранённые", Icon = "folder", Options = Library:GetConfigs(), Default = "" })
 
 s8:AddButton({ Name = "Save Config", Primary = true, Callback = function()
     local n = cfgName.Get()
@@ -291,13 +301,13 @@ end })
 --===================================================================================--
 --   TAB 5: WINDOW METHODS — управление окном                                          --
 --===================================================================================--
-local t5 = Window:CreateTab({ Name = "Window", Icon = "rbxassetid://3926307971" })
+local t5 = Window:CreateTab({ Name = "Window", Icon = "app-window" })
 local s9 = t5:CreateSection({ Name = "Window Control" })
 
 s9:AddButton({ Name = "Toggle окна", Primary = true, Callback = function()
     Window:Toggle()
 end })
-s9:AddKeybind({ Name = "Toggle бинд", Default = Enum.KeyCode.RightShift, Callback = function()
+s9:AddKeybind({ Name = "Toggle бинд", Icon = "keyboard", Default = Enum.KeyCode.RightShift, Callback = function()
     Window:Toggle()
 end })
 s9:AddButton({ Name = "Сменить акцент (Cyan)", Callback = function()
@@ -307,12 +317,12 @@ end })
 
 t5:Column("right")
 local s10 = t5:CreateSection({ Name = "Game Test" })
-s10:AddSlider({ Name = "WalkSpeed", Min = 16, Max = 200, Default = 16, Flag = "WalkSpeed",
+s10:AddSlider({ Name = "WalkSpeed", Icon = "footprints", Min = 16, Max = 200, Default = 16, Flag = "WalkSpeed",
     Callback = function(v)
         local c = LP.Character
         if c and c:FindFirstChild("Humanoid") then c.Humanoid.WalkSpeed = v end
     end })
-s10:AddSlider({ Name = "JumpPower", Min = 50, Max = 300, Default = 50, Flag = "JumpPower",
+s10:AddSlider({ Name = "JumpPower", Icon = "move-up", Min = 50, Max = 300, Default = 50, Flag = "JumpPower",
     Callback = function(v)
         local c = LP.Character
         if c and c:FindFirstChild("Humanoid") then c.Humanoid.JumpPower = v end
@@ -325,7 +335,7 @@ end })
 --===================================================================================--
 --   TAB 6: CREDITS                                                                    --
 --===================================================================================--
-local t6 = Window:CreateTab({ Name = "Credits", Icon = "rbxassetid://3926305904" })
+local t6 = Window:CreateTab({ Name = "Credits", Icon = "heart" })
 local s11 = t6:CreateSection({ Name = "About" })
 s11:AddLabel("MoroLumina UI — Test Suite")
 s11:AddLabel("Проверено элементов: 100%")
