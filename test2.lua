@@ -14,6 +14,7 @@ local ok, err = pcall(function()
 end)
 if not ok or not Library then
     warn("[TEST] Не удалось загрузить библиотеку: " .. tostring(err))
+    error(err)
     return
 end
 print("[TEST] Библиотека загружена ✓")
