@@ -91,7 +91,7 @@ local s2 = t1:CreateSection({ Name = "Inputs" })
 s2:AddTextbox({
     Name = "Текстовое поле",
     Icon = "text-cursor-input",
-    Placeholder = "Введите текст...",
+    Placeholder = "Текст...",
     Default = "",
     Flag = "Test_Textbox",
     Callback = function(text, enter)
