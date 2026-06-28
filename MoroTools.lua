@@ -1,29 +1,16 @@
-local function SafeLoad()
-    local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"))()
-    if not isfile(path) then
-        warn("ОШИБКА: Файл " .. path .. " не найден в папке workspace!")
-        return nil
-    end
-    local content = readfile(path)
-    if not content or content == "" then
-        warn("ОШИБКА: Файл найден, но он пустой!")
-        return nil
-    end
-    local func, err = loadstring(content)
-    if not func then
-        warn("ОШИБКА СИНТАКСИСА в MoroLumina.lua: " .. tostring(err))
-        return nil
-    end
-    local success, result = pcall(func)
-    if not success then
-        warn("ОШИБКА ВЫПОЛНЕНИЯ библиотеки: " .. tostring(result))
-        return nil
-    end
-    if result == nil then
-        warn("ОШИБКА: Библиотека загружена, но забыт 'return Library' в конце файла!")
-    end
-    return result
+local RAW_URL = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
+
+-- безопасная загрузка
+local Library
+local ok, err = pcall(function()
+    Library = loadstring(game:HttpGet(RAW_URL))()
+end)
+if not ok or not Library then
+    warn("[TEST] Не удалось загрузить библиотеку: " .. tostring(err))
+    error(err)
+    return
 end
+print("[TEST] Библиотека загружена ✓")
 
 local Library = SafeLoad()
 
