@@ -1,7 +1,9 @@
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 
--- 1. Таблица базовых множителей из твоего roles.txt
+-- 1. Таблица базовых множителей ускорения
 local roleBaseAccelerations = {
     ["Runner"] = 1.0, ["Tagger"] = 2.5, ["Infected"] = 0.4, ["PatientZero"] = 3.0,
     ["FastInfected"] = 0.2, ["BabyInfected"] = 0.6, ["JumpingInfected"] = 0.75,
@@ -18,49 +20,43 @@ local roleBaseAccelerations = {
     ["SubspaceBomb"] = 3.5, ["RunnerTagger"] = 1.5, ["Toxic"] = 3.5
 }
 
--- Переменные
+-- Переменные состояния
 local isBoosterEnabled = false
 local boostMultiplier = 1.0
+local tracersEnabled = false
+local selectedRoles = {}
+local lines = {}
 
--- Путь к роли
-local function getRoleObj()
+-- Вспомогательные функции пути
+local function getRoleName()
+    return LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value or "Runner"
+end
+
+local function getRoleAttrObj()
     return LocalPlayer:FindFirstChild("Modifiers") and LocalPlayer.Modifiers:FindFirstChild("Role")
 end
 
-local function getBaseAcceleration()
-    local roleObj = getRoleObj()
-    local roleName = roleObj and roleObj.Value or "Runner"
-    return roleBaseAccelerations[roleName] or 1.0
-end
-
+-- Логика ускорения
 local function applyBoost()
-    local roleObj = getRoleObj()
+    local roleObj = getRoleAttrObj()
     if not roleObj then return end
     
-    local base = getBaseAcceleration()
-    if roleObj:GetAttribute("AccelerationMultiplier") == nil then
-        roleObj:SetAttribute("AccelerationMultiplier", base)
-    end
+    local base = roleBaseAccelerations[getRoleName()] or 1.0
+    local targetVal = isBoosterEnabled and (base * boostMultiplier) or base
     
-    if isBoosterEnabled then
-        roleObj:SetAttribute("AccelerationMultiplier", base * boostMultiplier)
-    else
-        roleObj:SetAttribute("AccelerationMultiplier", base)
-    end
+    roleObj:SetAttribute("AccelerationMultiplier", targetVal)
 end
-
 
 -- Инициализация UI
 local Lumina = loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"))()
+local Window = Lumina:CreateWindow({ Title = "MoroLumina | Evade" })
 
-local Window = Lumina:CreateWindow({ Title = "MoroLumina | Movement" })
+-- Вкладка Movement
 local moveTab = Window:CreateTab({ Name = "Movement" })
 local accelSection = moveTab:CreateSection({ Name = "Acceleration" })
 
--- Лейбл
-local defaultAccelLabel = accelSection:AddLabel("Default: " .. tostring(getBaseAcceleration()))
+local defaultAccelLabel = accelSection:AddLabel("Default: " .. tostring(roleBaseAccelerations[getRoleName()] or 1.0))
 
--- Тоггл
 accelSection:AddToggle({
     Name = "Acceleration Booster",
     Default = false,
@@ -70,57 +66,17 @@ accelSection:AddToggle({
     end
 })
 
--- Слайдер
 accelSection:AddSlider({
     Name = "Boost Multiplier",
-    Min = 0.5,
-    Max = 10.0,
-    Default = 1.0,
-    Decimals = 1,
+    Min = 0.5, Max = 10.0, Default = 1.0, Decimals = 1,
     Callback = function(value)
         boostMultiplier = value
         if isBoosterEnabled then applyBoost() end
     end
 })
 
--- Обновление при смене роли
-local function refresh()
-    defaultAccelLabel.Set("Default: " .. tostring(getBaseAcceleration()))
-    applyBoost()
-end
-
-local roleObj = getRoleObj()
-if roleObj then
-    roleObj:GetPropertyChangedSignal("Value"):Connect(refresh)
-    roleObj:GetAttributeChangedSignal("AccelerationMultiplier"):Connect(function()
-        -- Если игра меняет атрибут, принудительно переприменяем наш буст
-        if isBoosterEnabled then task.defer(applyBoost) end
-    end)
-end
-
-local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
-
--- Настройки трейсеров
-local tracersEnabled = false
-local selectedRoles = {} -- Сюда будут попадать выбранные роли
-
--- Функция для рисования линий
-local lines = {} -- Хранилище объектов Drawing
-
-local function createLine()
-    local line = Drawing.new("Line")
-    line.Thickness = 1.5
-    line.Color = Color3.fromRGB(255, 255, 255)
-    line.Transparency = 1
-    line.Visible = false
-    return line
-end
-
 -- Вкладка Visuals
-local visualsTab = Window:CreateTab({ Name = "Visuals", Icon = "eye" })
+local visualsTab = Window:CreateTab({ Name = "Visuals" })
 local visSection = visualsTab:CreateSection({ Name = "Tracers" })
 
 visSection:AddToggle({
@@ -128,63 +84,46 @@ visSection:AddToggle({
     Default = false,
     Callback = function(state)
         tracersEnabled = state
-        if not state then
-            for _, line in pairs(lines) do line.Visible = false end
-        end
+        if not state then for _, l in pairs(lines) do l.Visible = false end end
     end
 })
-
--- Список всех ролей для выпадающего списка
-local roleList = {}
-for roleName, _ in pairs(roleBaseAccelerations) do
-    table.insert(roleList, roleName)
-end
 
 visSection:AddMultiDropdown({
     Name = "Select Roles",
-    Options = roleList,
+    Options = {unpack(table.clone(table.keys(roleBaseAccelerations)))}, -- Взятие всех ключей
     Default = {},
-    Callback = function(values)
-        selectedRoles = values
-    end
+    Callback = function(values) selectedRoles = values end
 })
 
--- Основной цикл отрисовки
+-- Обновление UI и логики
+LocalPlayer:FindFirstChild("PlayerRole"):GetPropertyChangedSignal("Value"):Connect(function()
+    defaultAccelLabel:Set("Default: " .. tostring(roleBaseAccelerations[getRoleName()] or 1.0))
+    applyBoost()
+end)
+
+-- Рендер трейсеров
 RunService.RenderStepped:Connect(function()
     if not tracersEnabled then return end
-
-    -- Очистка старых линий, если игроков стало меньше
-    for i, player in pairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer or not player.Character then continue end
         
-        if not lines[player.Name] then lines[player.Name] = createLine() end
-        
-        local line = lines[player.Name]
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        
-        -- Проверяем роль игрока
-        local pRoleObj = player:FindFirstChild("Modifiers") and player.Modifiers:FindFirstChild("Role")
-        local pRole = pRoleObj and pRoleObj.Value or "None"
-        
-        local isSelected = false
-        for _, r in pairs(selectedRoles) do
-            if r == pRole then isSelected = true break end
+        if not lines[player.Name] then
+            local l = Drawing.new("Line")
+            l.Thickness = 1.5; l.Color = Color3.new(1,1,1); lines[player.Name] = l
         end
-
-        if isSelected and hrp then
+        
+        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+        local pRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+        
+        local show = hrp and table.find(selectedRoles, pRole)
+        if show then
             local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
             if onScreen then
-                line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y) -- Из центра низа экрана
-                line.To = Vector2.new(pos.X, pos.Y)
-                line.Visible = true
-            else
-                line.Visible = false
-            end
-        else
-            line.Visible = false
-        end
+                lines[player.Name].From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+                lines[player.Name].To = Vector2.new(pos.X, pos.Y)
+                lines[player.Name].Visible = true
+            else lines[player.Name].Visible = false end
+        else lines[player.Name].Visible = false end
     end
 end)
 
-print("[MoroLumina]: Скрипт активен, путь исправлен на Modifiers.Role")
