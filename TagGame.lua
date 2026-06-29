@@ -78,10 +78,10 @@ local function applyBuff()
     isUpdating = true
     if isBoosterEnabled then
         -- Умножаем базовое значение роли на наш буст
-        activeModifiers:SetAttribute("Acceleration", baseAccel * boostMultiplier)
+        activeModifiers:SetAttribute("AccelerationMultiplier", baseAccel * boostMultiplier)
     else
         -- Возвращаем к оригинальному значению
-        activeModifiers:SetAttribute("Acceleration", baseAccel)
+        activeModifiers:SetAttribute("AccelerationMultiplier", baseAccel)
     end
     isUpdating = false
 end
