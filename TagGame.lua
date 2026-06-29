@@ -33,18 +33,22 @@ local function getBaseAcceleration()
     return roleBaseAccelerations[roleName] or 1.0
 end
 
--- Функция применения буста
 local function applyBoost()
     local roleObj = getRoleObj()
     if not roleObj then return end
     
     local base = getBaseAcceleration()
+    if roleObj:GetAttribute("AccelerationMultiplier") == nil then
+        roleObj:SetAttribute("AccelerationMultiplier", base)
+    end
+    
     if isBoosterEnabled then
         roleObj:SetAttribute("AccelerationMultiplier", base * boostMultiplier)
     else
         roleObj:SetAttribute("AccelerationMultiplier", base)
     end
 end
+
 
 -- Инициализация UI
 local Lumina = loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"))()
