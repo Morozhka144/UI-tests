@@ -98,4 +98,93 @@ if roleObj then
     end)
 end
 
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Настройки трейсеров
+local tracersEnabled = false
+local selectedRoles = {} -- Сюда будут попадать выбранные роли
+
+-- Функция для рисования линий
+local lines = {} -- Хранилище объектов Drawing
+
+local function createLine()
+    local line = Drawing.new("Line")
+    line.Thickness = 1.5
+    line.Color = Color3.fromRGB(255, 255, 255)
+    line.Transparency = 1
+    line.Visible = false
+    return line
+end
+
+-- Вкладка Visuals
+local visualsTab = Window:CreateTab({ Name = "Visuals", Icon = "eye" })
+local visSection = visualsTab:CreateSection({ Name = "Tracers" })
+
+visSection:AddToggle({
+    Name = "Enable Tracers",
+    Default = false,
+    Callback = function(state)
+        tracersEnabled = state
+        if not state then
+            for _, line in pairs(lines) do line.Visible = false end
+        end
+    end
+})
+
+-- Список всех ролей для выпадающего списка
+local roleList = {}
+for roleName, _ in pairs(roleBaseAccelerations) do
+    table.insert(roleList, roleName)
+end
+
+visSection:AddMultiDropdown({
+    Name = "Select Roles",
+    Options = roleList,
+    Default = {},
+    Callback = function(values)
+        selectedRoles = values
+    end
+})
+
+-- Основной цикл отрисовки
+RunService.RenderStepped:Connect(function()
+    if not tracersEnabled then return end
+
+    -- Очистка старых линий, если игроков стало меньше
+    for i, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        if not lines[player.Name] then lines[player.Name] = createLine() end
+        
+        local line = lines[player.Name]
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        
+        -- Проверяем роль игрока
+        local pRoleObj = player:FindFirstChild("Modifiers") and player.Modifiers:FindFirstChild("Role")
+        local pRole = pRoleObj and pRoleObj.Value or "None"
+        
+        local isSelected = false
+        for _, r in pairs(selectedRoles) do
+            if r == pRole then isSelected = true break end
+        end
+
+        if isSelected and hrp then
+            local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+            if onScreen then
+                line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y) -- Из центра низа экрана
+                line.To = Vector2.new(pos.X, pos.Y)
+                line.Visible = true
+            else
+                line.Visible = false
+            end
+        else
+            line.Visible = false
+        end
+    end
+end)
+
 print("[MoroLumina]: Скрипт активен, путь исправлен на Modifiers.Role")
