@@ -97,12 +97,16 @@ local function updateRing()
         local pos = Vector3.new(hrp.Position.X, floorY, hrp.Position.Z)
         local radius = _G.KillAuraRange
         
-        killAuraRingOuter.CFrame = CFrame.new(pos)
-        killAuraRingOuter.Size = Vector3.new(0.2, radius * 2, radius * 2)
+        -- ПОВОРАЧИВАЕМ цилиндр горизонтально (на 90° вокруг оси X)
+        local horizontalCFrame = CFrame.new(pos) * CFrame.Angles(math.rad(90), 0, 0)
+        
+        -- Размер для ГОРИЗОНТАЛЬНОГО цилиндра: (диаметр X, толщина Y, диаметр Z)
+        killAuraRingOuter.CFrame = horizontalCFrame
+        killAuraRingOuter.Size = Vector3.new(radius * 2, 0.2, radius * 2)
         killAuraRingOuter.Transparency = 0.4
         
-        killAuraRingInner.CFrame = CFrame.new(pos)
-        killAuraRingInner.Size = Vector3.new(0.3, (radius - 0.5) * 2, (radius - 0.5) * 2)
+        killAuraRingInner.CFrame = horizontalCFrame
+        killAuraRingInner.Size = Vector3.new((radius - 0.5) * 2, 0.3, (radius - 0.5) * 2)
     else
         killAuraRingOuter.Transparency = 1
         killAuraRingInner.Transparency = 1
@@ -158,14 +162,11 @@ local function autoTagLoop()
             local targetPlayer = Players:GetPlayerFromCharacter(char)
             local targetRole = targetPlayer and targetPlayer:FindFirstChild("PlayerRole") and targetPlayer.PlayerRole.Value
             
+            if targetRole and IGNORED_ROLES[targetRole] then continue end
 
             if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
             if myRole == "Chiller" and targetRole == "Frozen" then continue end
-            
-            if myRole ~= "Alone" then
-                if myRole and targetRole and myRole == targetRole then continue end
-            end
-            
+            if myRole ~= "Alone" and myRole == targetRole then continue end
             if targetRole and IGNORED_ROLES[targetRole] then continue end
             
             local targetHRP = char.HumanoidRootPart
@@ -528,18 +529,29 @@ local TAGGER_ROLES = {
 }
 
 local function isEnemy(player)
+    -- OOF и Frozen игроки НЕ считаются врагами — у них свои категории
+    if isOOF(player) or isFrozen(player) then return false end
+    
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
     if not myRole or not theirRole then return false end
+    
+    -- Не считаем себя врагом
+    if player == LocalPlayer then return false end
+    
     local iAmTagger = table.find(TAGGER_ROLES, myRole) ~= nil
     local theyAreTagger = table.find(TAGGER_ROLES, theirRole) ~= nil
     return iAmTagger ~= theyAreTagger
 end
 
 local function isMyTeam(player)
+    -- OOF и Frozen игроки НЕ считаются тиммейтами
+    if isOOF(player) or isFrozen(player) then return false end
+    
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
     if not myRole or not theirRole then return false end
+    
     return myRole == theirRole
 end
 
@@ -650,7 +662,7 @@ runSec:AddToggle({
     end,
 })
 runSec:AddSlider({
-    Name = "Run Multiplier", Icon = "trending-up", Min = 0.1, Max = 2.0, Default = 1.07, Decimals = 2,
+    Name = "Run Multiplier", Icon = "trending-up", Min = 0.1, Max = 2.0, Default = 1.1, Decimals = 2,
     Callback = function(v) boosters.RunSpeedMultiplier.mult = v; applyAllBoosts() end,
 })
 
@@ -728,7 +740,7 @@ local categoryDropdown = tracerSec:AddMultiDropdown({
     Name = "Select Categories",
     Icon = "users",
     Options = {"Enemies", "My Team", "OOF", "Frozen"},
-    Default = {},
+    Default = {"Enemies"},
     Callback = function(values) selectedCategories = values end,
 })
 
@@ -871,22 +883,35 @@ RunService.RenderStepped:Connect(function()
             if player == LocalPlayer then continue end
             
             local char = player.Character
-            if not char then
-                -- Если персонажа нет, скрываем трейсер
-                if lines[player.Name] then
-                    pcall(function() lines[player.Name].Visible = false end)
+            
+            -- Создаём линию заранее (даже если персонажа пока нет)
+            if not lines[player.Name] then
+                local success, line = pcall(function()
+                    local l = Drawing.new("Line")
+                    l.Thickness = 1.5
+                    l.Color = Color3.new(1, 1, 1)
+                    l.Visible = false
+                    return l
+                end)
+                if success and line then
+                    lines[player.Name] = line
+                else
+                    continue
                 end
+            end
+            
+            -- Если персонажа нет или нет HRP — скрываем линию
+            if not char then
+                pcall(function() lines[player.Name].Visible = false end)
                 continue
             end
-
+            
             local hrp = char:FindFirstChild("HumanoidRootPart")
             if not hrp then
-                if lines[player.Name] then
-                    pcall(function() lines[player.Name].Visible = false end)
-                end
+                pcall(function() lines[player.Name].Visible = false end)
                 continue
             end
-
+            
             -- Проверяем категории
             local show = false
             for _, category in ipairs(selectedCategories) do
@@ -895,39 +920,24 @@ RunService.RenderStepped:Connect(function()
                 if category == "OOF" and isOOF(player) then show = true break end
                 if category == "Frozen" and isFrozen(player) then show = true break end
             end
-
+            
             if show then
-                -- Создаём линию, если её нет или она невалидна
-                if not lines[player.Name] then
-                    local success, line = pcall(function()
-                        local l = Drawing.new("Line")
-                        l.Thickness = 1.5
-                        l.Color = Color3.new(1, 1, 1)
-                        return l
-                    end)
-                    if success and line then
-                        lines[player.Name] = line
-                    else
-                        continue
-                    end
-                end
-
                 local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
                 if onScreen then
                     local pRoleObj = player:FindFirstChild("PlayerRole")
                     local pRole = pRoleObj and pRoleObj.Value
                     
-                    lines[player.Name].From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
-                    lines[player.Name].To = Vector2.new(pos.X, pos.Y)
-                    lines[player.Name].Color = getRoleColor(pRole)
-                    lines[player.Name].Visible = true
+                    pcall(function()
+                        lines[player.Name].From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                        lines[player.Name].To = Vector2.new(pos.X, pos.Y)
+                        lines[player.Name].Color = getRoleColor(pRole)
+                        lines[player.Name].Visible = true
+                    end)
                 else
-                    lines[player.Name].Visible = false
+                    pcall(function() lines[player.Name].Visible = false end)
                 end
             else
-                if lines[player.Name] then
-                    lines[player.Name].Visible = false
-                end
+                pcall(function() lines[player.Name].Visible = false end)
             end
         end
     end
