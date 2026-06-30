@@ -884,6 +884,270 @@ hitboxSec:AddToggle({
     Callback = function(state) hitboxVisualize = state end,
 })
 
+-- ===================== COSMETICS TAB =====================
+local cosmeticsTab = Window:CreateTab({ Name = "Cosmetics", Icon = "shirt" })
+
+-- Функция для работы с инвентарём
+local function getInventory()
+    local inv = LocalPlayer:FindFirstChild("Inventory")
+    if not inv then return nil end
+    local success, data = pcall(function()
+        return game:GetService("HttpService"):JSONDecode(inv.Value)
+    end)
+    return success and data or nil
+end
+
+local function setInventory(data)
+    local inv = LocalPlayer:FindFirstChild("Inventory")
+    if not inv then return false end
+    local success = pcall(function()
+        inv.Value = game:GetService("HttpService"):JSONEncode(data)
+    end)
+    return success
+end
+
+-- Добавляет косметику в Owned
+local function addCosmetic(category, itemName)
+    local data = getInventory()
+    if not data or not data.Owned then return false end
+    if not data.Owned[category] then data.Owned[category] = {} end
+    
+    -- Проверяем, есть ли уже
+    for _, item in ipairs(data.Owned[category]) do
+        if item == itemName then return true end
+    end
+    
+    table.insert(data.Owned[category], itemName)
+    return setInventory(data)
+end
+
+-- Экипирует косметику (если игра поддерживает Equipped)
+local function equipCosmetic(category, itemName)
+    local data = getInventory()
+    if not data then return false end
+    
+    -- Пробуем разные варианты хранения экипировки
+    if not data.Equipped then data.Equipped = {} end
+    if not data.Equipped[category] then data.Equipped[category] = {} end
+    
+    -- Очищаем текущую экипировку этой категории
+    data.Equipped[category] = {}
+    table.insert(data.Equipped[category], itemName)
+    
+    return setInventory(data)
+end
+
+-- Список всех трейлов из cosmetic.txt
+local TRAILS_LIST = {
+    "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
+    "Whirlpool", "Gradient", "LightGradient", "DarkGradient", "Error", "Tron",
+    "Tron2", "Vantablack", "ZFight", "Snarp", "AwesomeHumanTrail", "Visualizer",
+    "Freedom", "Solid", "Sparkletime", "BitWave", "Kinetic", "Cloudy", "Arithmetic",
+    "Arrow", "Subspace", "cape", "Encrypted", "Stinky", "DraculaWalker", "StarTrail",
+    "ghostrider", "HomingMissile", "SpeedCoilTrail", "StringLights", "Bonsai",
+    "Snowflakes", "Lovestruck", "Driftin", "CherryBlossom", "JetTrail", "StarRoot",
+    "IceSkates", "Tachophobia", "Ablaze", "Decorated Tree", "Snowflake Power",
+    "Knight", "TankKnight", "Boombox", "MeteorFists", "PersonalSun", "PentagonTrail",
+    "Spellbook", "NorthStarTrail", "CelestialHead", "YinYang", "Condiments",
+    "OverfilledBriefcase", "ACUnit", "HeartTrail", "RadioHead", "SaltNPepper",
+    "LovePower", "SecretSanta", "Circle", "Triangle", "StarBeam", "IdeaTrail",
+    "frostbite", "Sparklinghands", "Segmented", "Illusions", "GuppyTrail", "TESTING"
+}
+
+-- Категории косметики
+local CATEGORIES = {
+    { Name = "Trails", Key = "Trails", Items = TRAILS_LIST },
+    { Name = "Emotes", Key = "Emotes", Items = {} },
+    { Name = "Tag Effects", Key = "TagEffects", Items = {} },
+    { Name = "Banners", Key = "Banners", Items = {} },
+    { Name = "Outfits", Key = "Outfits", Items = {} },
+    { Name = "Stickers", Key = "Stickers", Items = {} },
+}
+
+local selectedCategory = CATEGORIES[1]
+local selectedItem = nil
+
+-- Секция: Добавить косметику
+cosmeticsTab:Column("left")
+local addSec = cosmeticsTab:CreateSection({ Name = "Add to Inventory", Icon = "plus" })
+
+local categoryDrop = addSec:AddDropdown({
+    Name = "Category",
+    Icon = "layers",
+    Options = (function()
+        local names = {}
+        for _, cat in ipairs(CATEGORIES) do table.insert(names, cat.Name) end
+        return names
+    end)(),
+    Default = "Trails",
+    Callback = function(val)
+        for _, cat in ipairs(CATEGORIES) do
+            if cat.Name == val then selectedCategory = cat break end
+        end
+    end,
+})
+
+local itemDrop = addSec:AddDropdown({
+    Name = "Item",
+    Icon = "box",
+    Options = TRAILS_LIST,
+    Default = TRAILS_LIST[1],
+    Callback = function(val) selectedItem = val end,
+})
+
+addSec:AddButton({
+    Name = "Add to Inventory",
+    Primary = true,
+    Icon = "plus",
+    Callback = function()
+        if not selectedItem then
+            Window:Notify({ Title = "Cosmetics", Content = "Select an item first", Type = "Warning" })
+            return
+        end
+        
+        if addCosmetic(selectedCategory.Key, selectedItem) then
+            Window:Notify({ 
+                Title = "Cosmetics", 
+                Content = "Added " .. selectedItem .. " to " .. selectedCategory.Name,
+                Type = "Success",
+                Duration = 3
+            })
+        else
+            Window:Notify({ Title = "Cosmetics", Content = "Failed to add item", Type = "Error" })
+        end
+    end,
+})
+
+addSec:AddButton({
+    Name = "Equip Item",
+    Icon = "check",
+    Callback = function()
+        if not selectedItem then
+            Window:Notify({ Title = "Cosmetics", Content = "Select an item first", Type = "Warning" })
+            return
+        end
+        
+        if equipCosmetic(selectedCategory.Key, selectedItem) then
+            Window:Notify({ 
+                Title = "Cosmetics", 
+                Content = "Equipped " .. selectedItem,
+                Type = "Success",
+                Duration = 3
+            })
+        else
+            Window:Notify({ Title = "Cosmetics", Content = "Failed to equip", Type = "Error" })
+        end
+    end,
+})
+
+-- Секция: Кастомный ввод
+cosmeticsTab:Column("right")
+local customSec = cosmeticsTab:CreateSection({ Name = "Custom Item", Icon = "edit" })
+
+local customCategoryDrop = customSec:AddDropdown({
+    Name = "Category",
+    Icon = "layers",
+    Options = (function()
+        local names = {}
+        for _, cat in ipairs(CATEGORIES) do table.insert(names, cat.Name) end
+        return names
+    end)(),
+    Default = "Trails",
+    Callback = function(val)
+        for _, cat in ipairs(CATEGORIES) do
+            if cat.Name == val then selectedCategory = cat break end
+        end
+    end,
+})
+
+local customNameBox = customSec:AddTextbox({
+    Name = "Item Name",
+    Placeholder = "Enter custom name",
+})
+
+customSec:AddButton({
+    Name = "Add Custom Item",
+    Primary = true,
+    Icon = "plus",
+    Callback = function()
+        local name = customNameBox.Get()
+        if not name or name == "" then
+            Window:Notify({ Title = "Cosmetics", Content = "Enter item name", Type = "Warning" })
+            return
+        end
+        
+        if addCosmetic(selectedCategory.Key, name) then
+            Window:Notify({ 
+                Title = "Cosmetics", 
+                Content = "Added " .. name .. " to " .. selectedCategory.Name,
+                Type = "Success",
+                Duration = 3
+            })
+        else
+            Window:Notify({ Title = "Cosmetics", Content = "Failed to add", Type = "Error" })
+        end
+    end,
+})
+
+customSec:AddButton({
+    Name = "Equip Custom",
+    Icon = "check",
+    Callback = function()
+        local name = customNameBox.Get()
+        if not name or name == "" then
+            Window:Notify({ Title = "Cosmetics", Content = "Enter item name", Type = "Warning" })
+            return
+        end
+        
+        if equipCosmetic(selectedCategory.Key, name) then
+            Window:Notify({ 
+                Title = "Cosmetics", 
+                Content = "Equipped " .. name,
+                Type = "Success",
+                Duration = 3
+            })
+        else
+            Window:Notify({ Title = "Cosmetics", Content = "Failed to equip", Type = "Error" })
+        end
+    end,
+})
+
+-- Секция: Быстрые действия
+local quickSec = cosmeticsTab:CreateSection({ Name = "Quick Actions", Icon = "zap" })
+
+quickSec:AddButton({
+    Name = "Add ALL Trails",
+    Primary = true,
+    Icon = "zap",
+    Callback = function()
+        local count = 0
+        for _, trail in ipairs(TRAILS_LIST) do
+            if addCosmetic("Trails", trail) then count = count + 1 end
+        end
+        Window:Notify({ 
+            Title = "Cosmetics", 
+            Content = "Added " .. count .. " trails",
+            Type = "Success",
+            Duration = 4
+        })
+    end,
+})
+
+quickSec:AddButton({
+    Name = "Clear Inventory",
+    Icon = "trash",
+    Callback = function()
+        local data = getInventory()
+        if data and data.Owned then
+            for cat, _ in pairs(data.Owned) do
+                data.Owned[cat] = {}
+            end
+            setInventory(data)
+            Window:Notify({ Title = "Cosmetics", Content = "Inventory cleared", Type = "Info" })
+        end
+    end,
+})
+
 -- ============================================================
 -- [[ SETTINGS TAB (в самом низу сайдбара) ]] --
 -- ============================================================
