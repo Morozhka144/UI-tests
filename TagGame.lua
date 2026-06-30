@@ -27,6 +27,9 @@ _G.AutoParryEnabled = false
 _G.KillAuraRange = 15
 _G.AutoParryRange = 12
 _G.ShowKillAuraRing = true
+_G.AutoDodgeEnabled = false
+_G.DodgeRadius = 12
+_G.DodgeInputMethod = "Keyboard"
 
 -- [[ Helpers ]] --
 local function getHRP()
@@ -208,6 +211,183 @@ local function autoParryLoop()
                 pcall(function() PlayerParryEvent:FireServer() end)
             end
         end
+    end
+end
+
+-- ============================================================
+-- [[ AUTO DODGE (LEGIT) ]] --
+-- ============================================================
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local dodgeCooldown = 0.5
+local lastDodgeTime = 0
+
+local function isTagger(player)
+    local roleObj = player:FindFirstChild("PlayerRole")
+    if roleObj then
+        return table.find(TAGGER_ROLES, roleObj.Value) ~= nil
+    end
+    return false
+end
+
+local function isLookingAtMe(taggerHrp, myHrp)
+    local lookVector = taggerHrp.CFrame.LookVector
+    local direction = (myHrp.Position - taggerHrp.Position).Unit
+    local dot = lookVector:Dot(direction)
+    return dot > 0.7 -- Угол < 45°
+end
+
+local function checkObstacle(myHrp, direction)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    
+    local ray = workspace:Raycast(
+        myHrp.Position + direction * 2,
+        direction * 5,
+        rayParams
+    )
+    
+    return ray ~= nil -- Есть препятствие
+end
+
+local function performDodge(taggerHrp, myHrp)
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChild("Humanoid")
+    if not hum then return end
+    
+    -- Определяем направление для strafe (перпендикулярно к тэггеру)
+    local toTagger = (taggerHrp.Position - myHrp.Position).Unit
+    local strafeDir = Vector3.new(-toTagger.Z, 0, toTagger.X)
+    
+    -- Случайный выбор: влево или вправо
+    if math.random() > 0.5 then
+        strafeDir = -strafeDir
+    end
+    
+    -- Проверяем препятствия в обоих направлениях
+    if checkObstacle(myHrp, strafeDir) then
+        strafeDir = -strafeDir -- Меняем направление
+        if checkObstacle(myHrp, strafeDir) then
+            return -- Оба направления заблокированы, не уклоняемся
+        end
+    end
+    
+    -- Прыжок (если на земле)
+    if hum.FloorMaterial ~= Enum.Material.Air then
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+    
+    -- Симуляция движения в зависимости от метода ввода
+    if _G.DodgeInputMethod == "Keyboard" then
+        -- Клавиатура: используем VirtualInputManager
+        local moveX = strafeDir.X > 0 and 1 or -1
+        local moveZ = strafeDir.Z > 0 and 1 or -1
+        
+        -- Симулируем нажатие клавиш A/D и W/S
+        task.spawn(function()
+            local duration = 0.3
+            local startTime = tick()
+            
+            while tick() - startTime < duration do
+                -- Симулируем движение через клавиши
+                if moveX ~= 0 then
+                    local key = moveX > 0 and Enum.KeyCode.D or Enum.KeyCode.A
+                    VirtualInputManager:SendKeyEvent(true, key, false, game)
+                    task.wait(0.05)
+                    VirtualInputManager:SendKeyEvent(false, key, false, game)
+                end
+                if moveZ ~= 0 then
+                    local key = moveZ > 0 and Enum.KeyCode.W or Enum.KeyCode.S
+                    VirtualInputManager:SendKeyEvent(true, key, false, game)
+                    task.wait(0.05)
+                    VirtualInputManager:SendKeyEvent(false, key, false, game)
+                end
+                task.wait(0.05)
+            end
+        end)
+    else
+        -- Джойстик: используем ContextActionService или прямое управление
+        task.spawn(function()
+            local duration = 0.3
+            local startTime = tick()
+            local cameraCF = Camera.CFrame
+            local relativeDir = cameraCF:VectorToObjectSpace(strafeDir)
+            
+            -- Нормализуем для контроллера
+            local moveX = math.clamp(relativeDir.X, -1, 1)
+            local moveZ = math.clamp(-relativeDir.Z, -1, 1)
+            
+            while tick() - startTime < duration do
+                -- Симулируем движение через джойстик
+                -- Используем Thumbstick1 для движения
+                local thumbstickValue = Vector3.new(moveX, 0, moveZ)
+                
+                -- Симулируем ввод джойстика
+                pcall(function()
+                    VirtualInputManager:SendGamepadEvent(
+                        Enum.UserInputType.Gamepad1,
+                        Enum.KeyCode.Thumbstick1,
+                        thumbstickValue,
+                        game
+                    )
+                end)
+                
+                task.wait(0.05)
+            end
+            
+            -- Возвращаем джойстик в центр
+            pcall(function()
+                VirtualInputManager:SendGamepadEvent(
+                    Enum.UserInputType.Gamepad1,
+                    Enum.KeyCode.Thumbstick1,
+                    Vector3.new(0, 0, 0),
+                    game
+                )
+            end)
+        end)
+    end
+end
+
+local function autoDodgeLoop()
+    if not _G.AutoDodgeEnabled then return end
+    
+    local char = LocalPlayer.Character
+    local myHrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return end
+    
+    -- Проверяем, что мы выживший (не таггер)
+    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
+    if isTagger(LocalPlayer) then return end
+    
+    -- Кулдаун
+    if tick() - lastDodgeTime < dodgeCooldown then return end
+    
+    -- Ищем ближайшую угрозу
+    local closestTagger, closestDist = nil, _G.DodgeRadius
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and isTagger(player) then
+            -- Не уклоняемся от тиммейтов
+            if isMyTeam(player) then continue end
+            
+            local taggerHrp = player.Character:FindFirstChild("HumanoidRootPart")
+            if taggerHrp then
+                local dist = (taggerHrp.Position - myHrp.Position).Magnitude
+                
+                if dist < closestDist and isLookingAtMe(taggerHrp, myHrp) then
+                    closestDist = dist
+                    closestTagger = taggerHrp
+                end
+            end
+        end
+    end
+    
+    -- Если нашли угрозу, которая смотрит на нас
+    if closestTagger then
+        performDodge(closestTagger, myHrp)
+        lastDodgeTime = tick()
     end
 end
 
@@ -569,6 +749,22 @@ autoParrySec:AddSlider({
     Callback = function(val) _G.AutoParryRange = val end,
 })
 
+local autoDodgeSec = combatTab:CreateSection({ Name = "Auto Dodge", Icon = "shield" })
+autoDodgeSec:AddToggle({
+    Name = "Auto Dodge (Legit)", Icon = "shield", Default = false,
+    Callback = function(state) _G.AutoDodgeEnabled = state end,
+})
+autoDodgeSec:AddSlider({
+    Name = "Dodge Radius", Icon = "maximize", Min = 5, Max = 25, Default = 12, Decimals = 0,
+    Callback = function(val) _G.DodgeRadius = val end,
+})
+autoDodgeSec:AddDropdown({
+    Name = "Input Method", Icon = "keyboard",
+    Options = {"Keyboard", "Joystick"},
+    Default = "Keyboard",
+    Callback = function(val) _G.DodgeInputMethod = val end,
+})
+
 local lookSec = combatTab:CreateSection({ Name = "Look At Player", Icon = "eye" })
 lookSec:AddToggle({
     Name = "Enable Look At", Icon = "eye", Default = false,
@@ -609,6 +805,7 @@ hitboxSec:AddToggle({
 RunService.Heartbeat:Connect(function()
     autoTagLoop()
     autoParryLoop()
+    autoDodgeLoop()
     applyAllBoosts()
     updateHitboxes()
 end)
