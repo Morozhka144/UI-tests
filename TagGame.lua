@@ -1024,7 +1024,7 @@ lookSec:AddButton({
 -- ===================== COSMETICS TAB =====================
 local cosmeticsTab = Window:CreateTab({ Name = "Cosmetics", Icon = "shirt" })
 
--- Списки предметов для каждой категории
+-- Только Trails и Outfits
 local ITEMS_BY_CATEGORY = {
     Trails = {
         "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
@@ -1041,15 +1041,12 @@ local ITEMS_BY_CATEGORY = {
         "LovePower", "SecretSanta", "Circle", "Triangle", "StarBeam", "IdeaTrail",
         "frostbite", "Sparklinghands", "Segmented", "Illusions", "GuppyTrail", "TESTING"
     },
-    Emotes = {"Wave", "Dance", "Laugh", "Cheer", "Salute", "Flex"},
-    TagEffects = {"Fire", "Ice", "Lightning", "Sparkle", "Shadow", "Rainbow"},
-    Banners = {"Default", "Victory", "Champion", "Elite", "Legendary"},
     Outfits = {"Classic", "Warrior", "Mage", "Assassin", "Knight"},
-    Stickers = {"Smile", "Heart", "Star", "Fire", "Lightning"},
 }
 
-local CATEGORY_KEYS = {"Trails", "Emotes", "TagEffects", "Banners", "Outfits", "Stickers"}
+local CATEGORY_KEYS = {"Trails", "Outfits"}
 
+-- Переменные для отслеживания выбора
 local selectedCategoryKey = "Trails"
 local selectedItemName = "Box"
 
@@ -1067,7 +1064,7 @@ local cosmeticCategoryDrop = equipSec:AddDropdown({
         -- Обновляем опции в dropdown предметов
         local newItems = ITEMS_BY_CATEGORY[val] or {}
         if itemDrop then
-            itemDrop.Refresh(newItems, true)
+            itemDrop.Refresh(newItems, false) -- false = не сохранять выбор
             -- Устанавливаем первый предмет как выбранный
             if newItems[1] then
                 selectedItemName = newItems[1]
@@ -1077,13 +1074,13 @@ local cosmeticCategoryDrop = equipSec:AddDropdown({
 })
 
 -- Dropdown предметов (динамически обновляется)
-itemDrop = equipSec:AddDropdown({
+local itemDrop = equipSec:AddDropdown({
     Name = "Item",
     Icon = "box",
     Options = ITEMS_BY_CATEGORY["Trails"],
     Default = "Box",
     Callback = function(val)
-        selectedItemName = val
+        selectedItemName = val  -- ВАЖНО: обновляем при выборе
     end,
 })
 
@@ -1098,6 +1095,7 @@ equipSec:AddButton({
             return
         end
         
+        -- ВАЖНО: передаем именно selectedItemName, а не hardcoded значение
         local success = equipCosmeticVisual(selectedCategoryKey, selectedItemName)
         if success then
             lastEquipped[selectedCategoryKey] = selectedItemName
@@ -1294,7 +1292,6 @@ invSec:AddButton({
         })
     end,
 })
-
 -- ============================================================
 -- [[ SETTINGS TAB ]] --
 -- ============================================================
