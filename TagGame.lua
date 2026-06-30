@@ -35,11 +35,12 @@ local function getHRP()
 end
 
 -- ============================================================
--- [[ VISUALIZER RING (только для Kill Aura) ]] --
+-- [[ VISUALIZER RING (Кольцо на земле) ]] --
 -- ============================================================
 local killAuraRing = Instance.new("Part")
 killAuraRing.Name = "MoroKillAuraRing"
-killAuraRing.Shape = Enum.PartType.Cylinder
+killAuraRing.Shape = Enum.PartType.Ball
+killAuraRing.Size = Vector3.new(1, 1, 1)
 killAuraRing.Material = Enum.Material.Neon
 killAuraRing.Color = Color3.fromRGB(255, 0, 0)
 killAuraRing.Transparency = 1
@@ -48,9 +49,14 @@ killAuraRing.CanTouch = false
 killAuraRing.CanQuery = false
 killAuraRing.Massless = true
 killAuraRing.Anchored = true
-killAuraRing.TopSurface = Enum.SurfaceType.Smooth
-killAuraRing.BottomSurface = Enum.SurfaceType.Smooth
 killAuraRing.Parent = workspace
+
+local ringMesh = Instance.new("SpecialMesh")
+ringMesh.MeshType = Enum.MeshType.FileMesh
+ringMesh.MeshId = "rbxassetid://292863596" -- Torus mesh
+ringMesh.TextureId = ""
+ringMesh.Scale = Vector3.new(1, 1, 0.1)
+ringMesh.Parent = killAuraRing
 
 local floorRayParams = RaycastParams.new()
 floorRayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -58,11 +64,27 @@ floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
 
 local function updateRing()
     local hrp = getHRP()
-    if hrp and _G.AutoTagEnabled and _G.ShowKillAuraRing then
-        local pos = hrp.Position - Vector3.new(0, (hrp.Size.Y / 2) + 0.05, 0)
-        killAuraRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
-        killAuraRing.Size = Vector3.new(0.2, _G.KillAuraRange * 2, _G.KillAuraRange * 2)
-        killAuraRing.Transparency = 0.6
+    if hrp and _G.AutoTagEnabled then
+        floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+        local ray = workspace:Raycast(
+            hrp.Position + Vector3.new(0, 2, 0),
+            Vector3.new(0, -50, 0),
+            floorRayParams
+        )
+        
+        local floorY
+        if ray then
+            floorY = ray.Position.Y + 0.05
+        else
+            floorY = hrp.Position.Y - (hrp.Size.Y / 2) - 2
+        end
+
+        local pos = Vector3.new(hrp.Position.X, floorY, hrp.Position.Z)
+        killAuraRing.CFrame = CFrame.new(pos)
+        local radius = _G.KillAuraRange
+        ringMesh.Scale = Vector3.new(radius * 2, radius * 2, 0.15)
+        
+        killAuraRing.Transparency = 0.4
     else
         killAuraRing.Transparency = 1
     end
@@ -117,7 +139,13 @@ local function autoTagLoop()
             local targetPlayer = Players:GetPlayerFromCharacter(char)
             local targetRole = targetPlayer and targetPlayer:FindFirstChild("PlayerRole") and targetPlayer.PlayerRole.Value
             
-            if myRole and targetRole and myRole == targetRole then continue end
+
+            if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
+            
+            if myRole ~= "Alone" then
+                if myRole and targetRole and myRole == targetRole then continue end
+            end
+            
             if targetRole and IGNORED_ROLES[targetRole] then continue end
             
             local targetHRP = char.HumanoidRootPart
@@ -308,16 +336,51 @@ local function isFrozen(player)
 end
 
 local roleColors = {
-    ["Crown"] = Color3.fromRGB(255, 215, 0), ["Monarch"] = Color3.fromRGB(255, 215, 0),
-    ["Tagger"] = Color3.fromRGB(255, 0, 0), ["RunnerTagger"] = Color3.fromRGB(255, 0, 0),
-    ["Infected"] = Color3.fromRGB(50, 205, 50), ["PatientZero"] = Color3.fromRGB(50, 205, 50),
-    ["Bomb"] = Color3.fromRGB(255, 140, 0), ["SubspaceBomb"] = Color3.fromRGB(255, 140, 0),
-    ["Slasher"] = Color3.fromRGB(75, 0, 130), ["HiddenSlasher"] = Color3.fromRGB(75, 0, 130),
-    ["Knight"] = Color3.fromRGB(169, 169, 169), ["Bodyguard"] = Color3.fromRGB(169, 169, 169),
-    ["Peasant"] = Color3.fromRGB(139, 69, 19), ["Baron"] = Color3.fromRGB(139, 69, 19),
-    ["Freezer"] = Color3.fromRGB(0, 206, 209), ["Chiller"] = Color3.fromRGB(0, 206, 209),
-    ["Arsonist"] = Color3.fromRGB(255, 69, 0), ["Burning"] = Color3.fromRGB(255, 69, 0),
+    ["Crown"] = Color3.fromRGB(255, 215, 0),
+    ["Monarch"] = Color3.fromRGB(255, 215, 0),
+    ["Tagger"] = Color3.fromRGB(255, 0, 0),
+    ["RunnerTagger"] = Color3.fromRGB(255, 0, 0),
+    ["FFATagger"] = Color3.fromRGB(255, 0, 0),
+    ["SlapFFATagger"] = Color3.fromRGB(255, 0, 0),
+    ["Infected"] = Color3.fromRGB(50, 205, 50),
+    ["PatientZero"] = Color3.fromRGB(50, 205, 50),
+    ["FastInfected"] = Color3.fromRGB(50, 205, 50),
+    ["BabyInfected"] = Color3.fromRGB(50, 205, 50),
+    ["JumpingInfected"] = Color3.fromRGB(50, 205, 50),
+    ["BigInfected"] = Color3.fromRGB(50, 205, 50),
+    ["CloakInfected"] = Color3.fromRGB(50, 205, 50),
+    ["InfectedRunner"] = Color3.fromRGB(50, 205, 50),
+    ["Bomb"] = Color3.fromRGB(255, 140, 0),
+    ["SubspaceBomb"] = Color3.fromRGB(255, 140, 0),
+    ["AshyBomb"] = Color3.fromRGB(255, 140, 0),
+    ["HotBomb"] = Color3.fromRGB(255, 140, 0),
+    ["FunnyBomb"] = Color3.fromRGB(255, 140, 0),
+    ["Nuke"] = Color3.fromRGB(255, 140, 0),
+    ["Slasher"] = Color3.fromRGB(75, 0, 130),
+    ["HiddenSlasher"] = Color3.fromRGB(75, 0, 130),
+    ["Haunter"] = Color3.fromRGB(75, 0, 130),
+    ["Knight"] = Color3.fromRGB(169, 169, 169),
+    ["Bodyguard"] = Color3.fromRGB(169, 169, 169),
+    ["Peasant"] = Color3.fromRGB(139, 69, 19),
+    ["Baron"] = Color3.fromRGB(139, 69, 19),
+    ["Freezer"] = Color3.fromRGB(0, 206, 209),
+    ["Chiller"] = Color3.fromRGB(0, 206, 209),
+    ["Arsonist"] = Color3.fromRGB(255, 69, 0),
+    ["Burning"] = Color3.fromRGB(255, 69, 0),
     ["Toxic"] = Color3.fromRGB(126, 255, 5),
+    ["Seeker"] = Color3.fromRGB(50, 50, 255),
+    ["Overseer"] = Color3.fromRGB(50, 50, 255),
+    ["Hunter"] = Color3.fromRGB(50, 50, 255),
+    ["Eliminator"] = Color3.fromRGB(50, 50, 255),
+    ["Assassin"] = Color3.fromRGB(50, 50, 255),
+    ["Juggernaut"] = Color3.fromRGB(50, 50, 255),
+    ["Target"] = Color3.fromRGB(255, 100, 255),
+    ["HiddenBeing"] = Color3.fromRGB(255, 100, 255),
+    ["Runner"] = Color3.fromRGB(100, 200, 255),
+    ["Hider"] = Color3.fromRGB(100, 200, 255),
+    ["Medic"] = Color3.fromRGB(100, 200, 255),
+    ["Spectator"] = Color3.fromRGB(128, 128, 128),
+    ["pingus"] = Color3.fromRGB(128, 128, 128),
 }
 local function getRoleColor(role) return roleColors[role] or Color3.fromRGB(255, 255, 255) end
 
@@ -344,7 +407,7 @@ accelSec:AddToggle({
     end,
 })
 accelSec:AddSlider({
-    Name = "Accel Multiplier", Icon = "trending-up", Min = 0.1, Max = 20.0, Default = 1.0, Decimals = 2,
+    Name = "Accel Multiplier", Icon = "trending-up", Min = 0.1, Max = 20.0, Default = 20.0, Decimals = 2,
     Callback = function(v) boosters.AccelerationMultiplier.mult = v; applyAllBoosts() end,
 })
 
@@ -361,7 +424,7 @@ runSec:AddToggle({
     end,
 })
 runSec:AddSlider({
-    Name = "Run Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2,
+    Name = "Run Multiplier", Icon = "trending-up", Min = 0.1, Max = 2.0, Default = 1.07, Decimals = 2,
     Callback = function(v) boosters.RunSpeedMultiplier.mult = v; applyAllBoosts() end,
 })
 
@@ -417,11 +480,10 @@ headSec:AddToggle({
     end,
 })
 headSec:AddSlider({
-    Name = "Head Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2,
+    Name = "Head Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2,
     Callback = function(v) boosters.HeadSizeMultiplier.mult = v; applyAllBoosts() end,
 })
 
--- Правая колонка — ТРЕЙСЕРЫ ПО КАТЕГОРИЯМ
 visualsTab:Column("right")
 local tracerSec = visualsTab:CreateSection({ Name = "Tracers", Icon = "crosshair" })
 tracerSec:AddToggle({
@@ -436,7 +498,6 @@ tracerSec:AddToggle({
     end,
 })
 
--- НОВЫЙ MultiDropdown с категориями (вместо ролей)
 local categoryDropdown = tracerSec:AddMultiDropdown({
     Name = "Select Categories",
     Icon = "users",
@@ -462,7 +523,7 @@ tagCdSec:AddToggle({
     end,
 })
 tagCdSec:AddSlider({
-    Name = "Cooldown Multiplier", Icon = "trending-up", Min = 0.01, Max = 5.0, Default = 1.0, Decimals = 2,
+    Name = "Cooldown Multiplier", Icon = "trending-up", Min = 0.01, Max = 2.0, Default = 1.0, Decimals = 2,
     Callback = function(v) boosters.TagCooldown.mult = v; applyAllBoosts() end,
 })
 
@@ -490,7 +551,7 @@ autoTagSec:AddToggle({
     Callback = function(state) _G.AutoTagEnabled = state end,
 })
 autoTagSec:AddSlider({
-    Name = "Tag Radius", Icon = "maximize", Min = 5, Max = 30, Default = 15, Decimals = 0,
+    Name = "Tag Radius", Icon = "maximize", Min = 5, Max = 20, Default = 10, Decimals = 0,
     Callback = function(val) _G.KillAuraRange = val end,
 })
 autoTagSec:AddToggle({
@@ -504,7 +565,7 @@ autoParrySec:AddToggle({
     Callback = function(state) _G.AutoParryEnabled = state end,
 })
 autoParrySec:AddSlider({
-    Name = "Parry Radius", Icon = "maximize", Min = 5, Max = 25, Default = 12, Decimals = 0,
+    Name = "Parry Radius", Icon = "maximize", Min = 5, Max = 20, Default = 12, Decimals = 0,
     Callback = function(val) _G.AutoParryRange = val end,
 })
 
@@ -534,7 +595,7 @@ hitboxSec:AddToggle({
     Callback = function(state) hitboxEnabled = state end,
 })
 hitboxSec:AddSlider({
-    Name = "Hitbox Size", Icon = "maximize", Min = 1.0, Max = 3.0, Default = 1.5, Decimals = 1,
+    Name = "Hitbox Size", Icon = "maximize", Min = 1.0, Max = 10.0, Default = 1.5, Decimals = 1,
     Callback = function(val) hitboxMultiplier = val end,
 })
 hitboxSec:AddToggle({
