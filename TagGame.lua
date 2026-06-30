@@ -38,6 +38,106 @@ local function getHRP()
 end
 
 -- ============================================================
+-- [[ ЗАЩИТА ТРЕЙЛА ОТ УДАЛЕНИЯ ИГРОЙ ]] --
+-- ============================================================
+local oldNamecall
+oldNamecall = hookmetamethods(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    
+    -- Если кто-то пытается удалить наш фейковый трейл — блокируем
+    if currentFakeTrail and (method == "Destroy" or method == "Remove" or method == "remove") then
+        if self == currentFakeTrail or (self.Parent and self:IsDescendantOf(currentFakeTrail)) then
+            -- Вместо удаления просто отключаем видимость (или игнорируем)
+            return nil
+        end
+    end
+    
+    return oldNamecall(self, ...)
+end)
+
+-- Флаг, что трейл уже установлен (чтобы не спамить пересозданием)
+local trailInstalled = false
+
+-- ============================================================
+-- [[ ФУНКЦИЯ ЭКИПИРОВКИ ЛОКАЛЬНОГО ТРЕЙЛА ]] --
+-- ============================================================
+local function equipFakeTrail(character)
+    if not fakeTrailEnabled then return end
+    
+    local hrp = character:WaitForChild("HumanoidRootPart", 5)
+    local trailsFolder = ReplicatedStorage:WaitForChild("Trails", 5)
+    
+    if not (hrp and trailsFolder) then return end
+    
+    local originalTrailModel = trailsFolder:FindFirstChild(selectedTrailModelName)
+    if not originalTrailModel then
+        warn("[MoroLumina]: Модель " .. selectedTrailModelName .. " не найдена")
+        return
+    end
+    
+    -- Удаляем старый трейл (если был)
+    if currentFakeTrail then
+        pcall(function() currentFakeTrail:Destroy() end)
+        currentFakeTrail = nil
+    end
+    
+    -- Клонируем модель
+    currentFakeTrail = originalTrailModel:Clone()
+    currentFakeTrail.Parent = character
+    
+    -- Настраиваем Attachment'ы для Trail
+    local trailComponent = currentFakeTrail:FindFirstChildOfClass("Trail") or currentFakeTrail
+    if trailComponent and trailComponent:IsA("Trail") then
+        local att0 = hrp:FindFirstChild("MoroTrailAtt0") or Instance.new("Attachment", hrp)
+        att0.Name = "MoroTrailAtt0"
+        att0.Position = Vector3.new(0, 1, 0)
+        
+        local att1 = hrp:FindFirstChild("MoroTrailAtt1") or Instance.new("Attachment", hrp)
+        att1.Name = "MoroTrailAtt1"
+        att1.Position = Vector3.new(0, -1, 0)
+        
+        trailComponent.Attachment0 = att0
+        trailComponent.Attachment1 = att1
+    end
+    
+    trailInstalled = true
+    print("[MoroLumina]: Трейл " .. selectedTrailModelName .. " применён и защищён!")
+end
+
+-- ============================================================
+-- [[ ПОСТОЯННАЯ ПРОВЕРКА: если игра удалила трейл — возвращаем ]] --
+-- ============================================================
+task.spawn(function()
+    while true do
+        task.wait(1) -- Проверяем раз в секунду
+        
+        if fakeTrailEnabled and LocalPlayer.Character then
+            -- Если трейл был установлен, но его больше нет — пересоздаём
+            if trailInstalled and (not currentFakeTrail or not currentFakeTrail.Parent) then
+                print("[MoroLumina]: Игра удалила трейл, возвращаем...")
+                equipFakeTrail(LocalPlayer.Character)
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- [[ ХУКАЕМ СПАВН ПЕРСОНАЖА ]] --
+-- ============================================================
+LocalPlayer.CharacterAdded:Connect(function(character)
+    trailInstalled = false
+    task.wait(1.5) -- Даём игре время настроить свои эффекты
+    equipFakeTrail(character)
+end)
+
+if LocalPlayer.Character then
+    task.defer(function()
+        task.wait(1.5)
+        equipFakeTrail(LocalPlayer.Character)
+    end)
+end
+
+-- ============================================================
 -- [[ VISUALIZER RING (Кольцо на земле) ]] --
 -- ============================================================
 -- Создаём кольцо из двух цилиндров (внешний и внутренний)
