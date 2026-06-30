@@ -20,6 +20,15 @@ local roleBaseAccelerations = {
     ["SubspaceBomb"] = 3.5, ["RunnerTagger"] = 1.5, ["Toxic"] = 3.5
 }
 
+-- Функция для получения ключей таблицы (в Lua нет table.keys)
+local function getTableKeys(t)
+    local keys = {}
+    for k in pairs(t) do
+        table.insert(keys, k)
+    end
+    return keys
+end
+
 -- Переменные состояния
 local isBoosterEnabled = false
 local boostMultiplier = 1.0
@@ -90,16 +99,19 @@ visSection:AddToggle({
 
 visSection:AddMultiDropdown({
     Name = "Select Roles",
-    Options = {unpack(table.clone(table.keys(roleBaseAccelerations)))}, -- Взятие всех ключей
+    Options = getTableKeys(roleBaseAccelerations), -- ИСПРАВЛЕНО: используем свою функцию
     Default = {},
     Callback = function(values) selectedRoles = values end
 })
 
 -- Обновление UI и логики
-LocalPlayer:FindFirstChild("PlayerRole"):GetPropertyChangedSignal("Value"):Connect(function()
-    defaultAccelLabel:Set("Default: " .. tostring(roleBaseAccelerations[getRoleName()] or 1.0))
-    applyBoost()
-end)
+local roleObj = LocalPlayer:FindFirstChild("PlayerRole")
+if roleObj then
+    roleObj:GetPropertyChangedSignal("Value"):Connect(function()
+        defaultAccelLabel:Set("Default: " .. tostring(roleBaseAccelerations[getRoleName()] or 1.0))
+        applyBoost()
+    end)
+end
 
 -- Рендер трейсеров
 RunService.RenderStepped:Connect(function()
@@ -126,4 +138,3 @@ RunService.RenderStepped:Connect(function()
         else lines[player.Name].Visible = false end
     end
 end)
-
