@@ -40,7 +40,7 @@ local function getHRP()
 end
 
 -- ============================================================
--- [[ ATTRIBUTE BOOSTERS ]] --
+-- [[ ATTRIBUTE BOOSTERS (с новыми множителями) ]] --
 -- ============================================================
 local baseAttributes = {
     ["AccelerationMultiplier"] = 3,
@@ -50,6 +50,7 @@ local baseAttributes = {
     ["HeadSizeMultiplier"] = 1,
     ["TagCooldown"] = 0.666,
     ["TagPlayerKnockback"] = 0.75,
+    -- Новые множители
     ["RangeMultiplier"] = 1,
     ["MomentumMultiplier"] = 1,
     ["MomentumDecayMultiplier"] = 1,
@@ -91,7 +92,6 @@ local function autoTagLoop()
     
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     local closestTarget, closestDist = nil, _G.KillAuraRange
-    
     local myChar = LocalPlayer.Character
     
     for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
@@ -111,7 +111,6 @@ local function autoTagLoop()
             
             local targetHRP = char.HumanoidRootPart
             local dist = (targetHRP.Position - hrp.Position).Magnitude
-            
             if dist < closestDist then
                 closestDist = dist
                 closestTarget = char
@@ -176,6 +175,9 @@ end
 -- ============================================================
 -- [[ AUTO DODGE (LEGIT) ]] --
 -- ============================================================
+local dodgeCooldown = 0.5
+local lastDodgeTime = 0
+
 local TAGGER_ROLES = {
     "Tagger", "Infected", "PatientZero", "FastInfected", "BabyInfected",
     "JumpingInfected", "BigInfected", "CloakInfected", "InfectedRunner",
@@ -190,39 +192,6 @@ local function isTagger(player)
         return table.find(TAGGER_ROLES, roleObj.Value) ~= nil
     end
     return false
-end
-
-local function isOOF(player)
-    local char = player.Character
-    if not char then return false end
-    return char:GetAttribute("OOF") == true or
-           char:GetAttribute("Eliminated") == true or
-           char:GetAttribute("Dead") == true or
-           (char:FindFirstChild("Humanoid") and char.Humanoid.Health <= 0)
-end
-
-local function isFrozen(player)
-    local char = player.Character
-    if not char then return false end
-    return char:GetAttribute("Frozen") == true or
-           char:GetAttribute("Chilled") == true or
-           char:GetAttribute("Ice") == true
-end
-
-local function isEnemy(player)
-    if isOOF(player) or isFrozen(player) then return false end
-    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
-    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
-    if not myRole or not theirRole then return false end
-    return myRole ~= theirRole or myRole == "Alone"
-end
-
-local function isMyTeam(player)
-    if isOOF(player) or isFrozen(player) then return false end
-    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
-    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
-    if not myRole or not theirRole then return false end
-    return myRole == theirRole and myRole ~= "Alone" and myRole ~= "OOF"
 end
 
 local function isLookingAtMe(taggerHrp, myHrp)
@@ -330,9 +299,6 @@ local function performDodge(taggerHrp, myHrp)
     end
 end
 
-local dodgeCooldown = 0.5
-local lastDodgeTime = 0
-
 local function autoDodgeLoop()
     if not _G.AutoDodgeEnabled then return end
     
@@ -349,6 +315,8 @@ local function autoDodgeLoop()
     
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and isTagger(player) then
+            if isMyTeam(player) then continue end
+            
             local taggerHrp = player.Character:FindFirstChild("HumanoidRootPart")
             if taggerHrp then
                 local dist = (taggerHrp.Position - myHrp.Position).Magnitude
@@ -383,71 +351,10 @@ local function lookAtLoop()
 end
 
 -- ============================================================
--- [[ HITBOX EXPANDER ]] --
--- ============================================================
-local hitboxEnabled = false
-local hitboxMultiplier = 1.5
-local hitboxVisualize = false
-local hitboxCache = {}
-
-local function createHitboxPart(part, multiplier)
-    local hitbox = Instance.new("Part")
-    hitbox.Name = "MoroHitbox"
-    hitbox.Transparency = hitboxVisualize and 0.7 or 1
-    hitbox.Color = Color3.fromRGB(255, 0, 0)
-    hitbox.CanCollide = false
-    hitbox.Anchored = false
-    hitbox.Size = part.Size * multiplier
-    hitbox.CFrame = part.CFrame
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = part
-    weld.Part1 = hitbox
-    weld.Parent = hitbox
-    hitbox.Parent = part
-    return hitbox
-end
-
-local function updateHitboxes()
-    if not hitboxEnabled then
-        for char, parts in pairs(hitboxCache) do
-            for _, hitbox in pairs(parts) do
-                if hitbox.Parent then hitbox:Destroy() end
-            end
-        end
-        hitboxCache = {}
-        return
-    end
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local char = player.Character
-            if not hitboxCache[char] then
-                hitboxCache[char] = {}
-                local partsToExpand = {
-                    "Head", "UpperTorso", "LowerTorso",
-                    "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
-                    "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
-                }
-                for _, partName in ipairs(partsToExpand) do
-                    local part = char:FindFirstChild(partName)
-                    if part then hitboxCache[char][part] = createHitboxPart(part, hitboxMultiplier) end
-                end
-            else
-                for part, hitbox in pairs(hitboxCache[char]) do
-                    if hitbox.Parent then
-                        hitbox.Size = part.Size * hitboxMultiplier
-                        hitbox.Transparency = hitboxVisualize and 0.7 or 1
-                    end
-                end
-            end
-        end
-    end
-end
-
--- ============================================================
--- [[ TRACERS ]] --
+-- [[ TRACERS ]] — с категориями и цветными ролями
 -- ============================================================
 local tracersEnabled = false
-local selectedCategories = {}
+local selectedCategories = {"Enemies"}
 local lines = {}
 
 local function clearTracerCache(playerName)
@@ -477,6 +384,53 @@ end)
 Players.PlayerRemoving:Connect(function(player)
     clearTracerCache(player.Name)
 end)
+
+-- Функции категорий
+local function getRole(player)
+    local roleObj = player:FindFirstChild("PlayerRole")
+    return roleObj and roleObj.Value
+end
+
+local function isOOF(player)
+    local role = getRole(player)
+    return role == "OOF"
+end
+
+local function isAshen(player)
+    local role = getRole(player)
+    return role == "Ashen"
+end
+
+local function isFrozen(player)
+    local role = getRole(player)
+    return role == "Frozen"
+end
+
+local function isEnemy(player)
+    local myRole = getRole(LocalPlayer)
+    local theirRole = getRole(player)
+    if not myRole or not theirRole then return false end
+    
+    -- Исключаем спец-роли
+    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" or theirRole == "Ashen" then
+        return false
+    end
+    
+    -- Враг = роль отличается от моей
+    return theirRole ~= myRole
+end
+
+local function isMyTeam(player)
+    local myRole = getRole(LocalPlayer)
+    local theirRole = getRole(player)
+    if not myRole or not theirRole then return false end
+    
+    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" then
+        return false
+    end
+    
+    return theirRole == myRole
+end
 
 local roleColors = {
     ["Crown"] = Color3.fromRGB(255, 215, 0),
@@ -525,12 +479,14 @@ local roleColors = {
     ["Medic"] = Color3.fromRGB(100, 200, 255),
     ["Spectator"] = Color3.fromRGB(128, 128, 128),
     ["pingus"] = Color3.fromRGB(128, 128, 128),
+    ["Ashen"] = Color3.fromRGB(80, 80, 80),
+    ["Alone"] = Color3.fromRGB(200, 200, 200),
 }
 
 local function getRoleColor(role) return roleColors[role] or Color3.fromRGB(255, 255, 255) end
 
 -- ============================================================
--- [[ VISUALIZER RING ]] --
+-- [[ VISUALIZER RING (Кольцо на земле) ]] --
 -- ============================================================
 local killAuraRingOuter = Instance.new("Part")
 killAuraRingOuter.Name = "MoroKillAuraRingOuter"
@@ -601,99 +557,114 @@ local function updateRing()
 end
 
 -- ============================================================
--- [[ COSMETICS ]] --
+-- [[ COSMETICS (из cosmetic.txt) ]] --
 -- ============================================================
 local currentTrail = nil
 local currentOutfit = nil
+local lastEquippedTrail = nil
+local lastEquippedOutfit = nil
 
+-- Данные из cosmetic.txt: display name -> model name
 local TRAILS_DATA = {
-    {display = "basic", model = "Basic"},
     {display = "+", model = "+"},
-    {display = "V", model = "V"},
-    {display = "T", model = "T"},
-    {display = "X", model = "X"},
-    {display = "real PNG", model = "RealPNG"},
-    {display = "box", model = "Box"},
-    {display = "comet", model = "Comet"},
-    {display = "rainbow comet", model = "RainbowComet"},
-    {display = "whirlpool", model = "WhirlPool"},
-    {display = "gradient", model = "Gradient"},
-    {display = "light gradient", model = "LightGradient"},
-    {display = "dark gradient", model = "DarkGradient"},
-    {display = "error", model = "Error"},
-    {display = "tron", model = "Tron"},
-    {display = "tron 2", model = "Tron2"},
-    {display = "vantablack", model = "Vantablack"},
-    {display = "zfight", model = "ZFight"},
-    {display = "snarp", model = "snarp"},
-    {display = "awesome human trail", model = "AwesomeHumanTrail"},
-    {display = "visualizer", model = "Visualizer"},
-    {display = "freedom", model = "Freedom"},
-    {display = "solid", model = "Solid"},
-    {display = "sparkletime", model = "Sparkletime"},
-    {display = "bitwave", model = "BitWaves"},
-    {display = "kinetic", model = "Kinetic"},
-    {display = "cloudy", model = "Cloudy"},
+    {display = "6 color", model = "Pride"},
+    {display = "abro", model = "Pride"},
+    {display = "ace", model = "Pride"},
+    {display = "ac unit", model = "ACUnit"},
+    {display = "ablaze", model = "Ablaze"},
     {display = "arithmetic", model = "Arithmetic"},
     {display = "arrow", model = "Arrow"},
-    {display = "subspace", model = "Subspace"},
-    {display = "cape", model = "Cape"},
-    {display = "encrypted", model = "Encrypted"},
-    {display = "stinky", model = "Stinky"},
-    {display = "dracula walker", model = "draculawalker"},
-    {display = "star", model = "StarTrail"},
-    {display = "flaming skull", model = "ghostrider"},
-    {display = "homing missile", model = "homingmissle"},
-    {display = "speedcoil", model = "SpeedCoilTrail"},
-    {display = "string lights", model = "StringLights"},
+    {display = "awesome human trail", model = "AwesomeHumanTrail"},
+    {display = "basic", model = "Basic"},
+    {display = "bi", model = "Pride"},
+    {display = "bitwave", model = "BitWaves"},
     {display = "bonsai", model = "Bonsai"},
-    {display = "snowflakes", model = "Snowflakes"},
-    {display = "lovestruck", model = "Lovestruck"},
-    {display = "driftin", model = "Driftin"},
-    {display = "cherry blossom", model = "CherryBlossom"},
-    {display = "jet", model = "JetTrail"},
-    {display = "star power", model = "StarRoot"},
-    {display = "ice skating", model = "IceSkates"},
-    {display = "tachophobia", model = "Tachophobia"},
-    {display = "ablaze", model = "Ablaze"},
-    {display = "decorated tree", model = "Decorated Tree"},
-    {display = "snowflake power", model = "Snowflake Power"},
-    {display = "knight", model = "Knight"},
-    {display = "tank knight", model = "TankKnight"},
-    {display = "boombox", model = "Boombox"},
-    {display = "meteor fists", model = "MeteorFists"},
-    {display = "personal sun", model = "PersonalSun"},
-    {display = "pentagon", model = "PentagonTrail"},
-    {display = "spellbook", model = "Spellbook"},
-    {display = "polaris", model = "NorthStarTrail"},
+    {display = "box", model = "Box"},
+    {display = "cape", model = "Cape"},
     {display = "celestial head", model = "CelestialHead"},
-    {display = "yinyang", model = "YinYang"},
-    {display = "condiments", model = "Condiments"},
-    {display = "overfilled briefcase", model = "OverfilledBriefcase"},
-    {display = "ac unit", model = "ACUnit"},
+    {display = "cherry blossom", model = "CherryBlossom"},
     {display = "chocolate box", model = "HeartTrail"},
-    {display = "radio head", model = "RadioHead"},
-    {display = "salt n' pepper", model = "SaltNPepper"},
-    {display = "love power", model = "LovePower"},
-    {display = "secret santa", model = "SecretSanta"},
     {display = "circle", model = "Circle"},
-    {display = "triangle", model = "Triangle"},
-    {display = "star beam", model = "StarTrail2"},
-    {display = "idea", model = "IdeaTrail"},
+    {display = "cloudy", model = "Cloudy"},
+    {display = "comet", model = "Comet"},
+    {display = "condiments", model = "Condiments"},
+    {display = "dark gradient", model = "DarkGradient"},
+    {display = "decorated tree", model = "Decorated Tree"},
+    {display = "dracula walker", model = "draculawalker"},
+    {display = "driftin", model = "Driftin"},
+    {display = "encrypted", model = "Encrypted"},
+    {display = "error", model = "Error"},
+    {display = "flaming skull", model = "ghostrider"},
+    {display = "fluid", model = "Pride"},
+    {display = "freedom", model = "Freedom"},
     {display = "frostbite", model = "frostbite"},
-    {display = "sparkling hands", model = "Sparklinghands"},
-    {display = "segmented", model = "Segmented"},
+    {display = "gilbert", model = "Pride"},
+    {display = "gradient", model = "Gradient"},
+    {display = "homing missile", model = "homingmissle"},
+    {display = "ice skating", model = "IceSkates"},
+    {display = "idea", model = "IdeaTrail"},
     {display = "illusions", model = "Illusions"},
+    {display = "jet", model = "JetTrail"},
+    {display = "kinetic", model = "Kinetic"},
+    {display = "knight", model = "Knight"},
+    {display = "light gradient", model = "LightGradient"},
+    {display = "love power", model = "LovePower"},
+    {display = "lovestruck", model = "Lovestruck"},
+    {display = "m.l.m.", model = "Pride"},
+    {display = "meteor fists", model = "MeteorFists"},
+    {display = "n.b.", model = "Pride"},
+    {display = "overfilled briefcase", model = "OverfilledBriefcase"},
+    {display = "pan", model = "Pride"},
+    {display = "pentagon", model = "PentagonTrail"},
+    {display = "personal sun", model = "PersonalSun"},
+    {display = "philly", model = "Pride"},
+    {display = "polaris", model = "NorthStarTrail"},
+    {display = "pride", model = "Pride"},
+    {display = "radio head", model = "RadioHead"},
+    {display = "rainbow comet", model = "RainbowComet"},
+    {display = "real PNG", model = "RealPNG"},
+    {display = "salt n' pepper", model = "SaltNPepper"},
+    {display = "secret santa", model = "SecretSanta"},
+    {display = "segmented", model = "Segmented"},
+    {display = "snarp", model = "snarp"},
+    {display = "snowflake power", model = "Snowflake Power"},
+    {display = "snowflakes", model = "Snowflakes"},
+    {display = "solid", model = "Solid"},
+    {display = "sparkletime", model = "Sparkletime"},
+    {display = "sparkling hands", model = "Sparklinghands"},
+    {display = "speedcoil", model = "SpeedCoilTrail"},
+    {display = "spellbook", model = "Spellbook"},
+    {display = "star", model = "StarTrail"},
+    {display = "star beam", model = "StarTrail2"},
+    {display = "star power", model = "StarRoot"},
+    {display = "stinky", model = "Stinky"},
+    {display = "string lights", model = "StringLights"},
+    {display = "subspace", model = "Subspace"},
+    {display = "T", model = "T"},
+    {display = "tachophobia", model = "Tachophobia"},
+    {display = "tank knight", model = "TankKnight"},
     {display = "the trail", model = "GuppyTrail"},
     {display = "trail test", model = "GuppyTrail"},
-    {display = "pride", model = "Pride"},
+    {display = "trans", model = "Pride"},
+    {display = "triangle", model = "Triangle"},
+    {display = "tron", model = "Tron"},
+    {display = "tron 2", model = "Tron2"},
+    {display = "V", model = "V"},
+    {display = "vantablack", model = "Vantablack"},
+    {display = "visualizer", model = "Visualizer"},
+    {display = "w.l.w.", model = "Pride"},
+    {display = "whirlpool", model = "WhirlPool"},
+    {display = "X", model = "X"},
+    {display = "yinyang", model = "YinYang"},
+    {display = "zfight", model = "ZFight"},
 }
 
+-- Сортируем по алфавиту
 table.sort(TRAILS_DATA, function(a, b) return a.display:lower() < b.display:lower() end)
 
-local TRAIL_NAMES = {}
+local TRAIL_DISPLAY_NAMES = {}
 for _, trail in ipairs(TRAILS_DATA) do
-    table.insert(TRAIL_NAMES, trail.display)
+    table.insert(TRAIL_DISPLAY_NAMES, trail.display)
 end
 
 local function getTrailModel(displayName)
@@ -705,6 +676,26 @@ local function getTrailModel(displayName)
     return displayName
 end
 
+-- Защита косметики от удаления игрой
+local hookAvailable = (hookmetamethods ~= nil and getnamecallmethod ~= nil)
+
+if hookAvailable then
+    local oldNamecall
+    oldNamecall = hookmetamethods(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "Destroy" or method == "Remove" or method == "remove" then
+            if currentTrail and (self == currentTrail or (typeof(self) == "Instance" and self:IsDescendantOf(currentTrail))) then
+                return nil
+            end
+            if currentOutfit and (self == currentOutfit or (typeof(self) == "Instance" and self:IsDescendantOf(currentOutfit))) then
+                return nil
+            end
+        end
+        return oldNamecall(self, ...)
+    end))
+    print("[MoroLumina]: Hook защита косметики активна")
+end
+
 local function equipTrail(displayName)
     local char = LocalPlayer.Character
     if not char then return false end
@@ -712,6 +703,7 @@ local function equipTrail(displayName)
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
     
+    -- Удаляем старый трейл
     if currentTrail and currentTrail.Parent then
         pcall(function() currentTrail:Destroy() end)
     end
@@ -726,6 +718,7 @@ local function equipTrail(displayName)
     currentTrail = model:Clone()
     currentTrail.Parent = char
     
+    -- Настраиваем аттачменты
     local trailObj = currentTrail:FindFirstChildOfClass("Trail")
     if trailObj then
         local att0 = hrp:FindFirstChild("TrailAttachment0") or Instance.new("Attachment", hrp)
@@ -740,14 +733,16 @@ local function equipTrail(displayName)
         trailObj.Attachment1 = att1
     end
     
+    lastEquippedTrail = displayName
     return true
 end
 
 local function unequipTrail()
     if currentTrail and currentTrail.Parent then
         pcall(function() currentTrail:Destroy() end)
-        currentTrail = nil
     end
+    currentTrail = nil
+    lastEquippedTrail = nil
 end
 
 local function equipOutfit(outfitName)
@@ -767,15 +762,47 @@ local function equipOutfit(outfitName)
     currentOutfit = model:Clone()
     currentOutfit.Parent = char
     
+    lastEquippedOutfit = outfitName
     return true
 end
 
 local function unequipOutfit()
     if currentOutfit and currentOutfit.Parent then
         pcall(function() currentOutfit:Destroy() end)
-        currentOutfit = nil
     end
+    currentOutfit = nil
+    lastEquippedOutfit = nil
 end
+
+-- Мониторинг: восстанавливаем косметику, если игра её удалила
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        
+        if LocalPlayer.Character then
+            -- Проверяем трейл
+            if lastEquippedTrail and (not currentTrail or not currentTrail.Parent) then
+                equipTrail(lastEquippedTrail)
+            end
+            
+            -- Проверяем аутфит
+            if lastEquippedOutfit and (not currentOutfit or not currentOutfit.Parent) then
+                equipOutfit(lastEquippedOutfit)
+            end
+        end
+    end
+end)
+
+-- Восстановление при спавне
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1.5)
+    if lastEquippedTrail then
+        equipTrail(lastEquippedTrail)
+    end
+    if lastEquippedOutfit then
+        equipOutfit(lastEquippedOutfit)
+    end
+end)
 
 -- ============================================================
 -- [[ UI ]] --
@@ -856,7 +883,7 @@ sizeSec:AddToggle({
     end,
 })
 sizeSec:AddSlider({
-    Name: "Size Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2,
+    Name = "Size Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2,
     Callback = function(v) boosters.SizeMultiplier.mult = v; applyAllBoosts() end,
 })
 
@@ -896,7 +923,9 @@ local categoryDropdown = tracerSec:AddMultiDropdown({
     Icon = "users",
     Options = {"Enemies", "My Team", "OOF", "Frozen"},
     Default = {"Enemies"},
-    Callback = function(values) selectedCategories = values end,
+    Callback = function(values)
+        selectedCategories = values or {}
+    end,
 })
 
 -- ===================== COMBAT TAB =====================
@@ -937,6 +966,7 @@ tagKbSec:AddSlider({
     Callback = function(v) boosters.TagPlayerKnockback.mult = v; applyAllBoosts() end,
 })
 
+-- НОВЫЕ МНОЖИТЕЛИ
 local rangeSec = combatTab:CreateSection({ Name = "Tag Range", Icon = "maximize" })
 rangeSec:AddToggle({
     Name = "Range Booster", Icon = "maximize", Default = false,
@@ -1015,21 +1045,7 @@ lookSec:AddButton({
     end,
 })
 
-local hitboxSec = combatTab:CreateSection({ Name = "Hitbox Expander", Icon = "box" })
-hitboxSec:AddToggle({
-    Name = "Enable Hitbox", Icon = "box", Default = false,
-    Callback = function(state) hitboxEnabled = state end,
-})
-hitboxSec:AddSlider({
-    Name = "Hitbox Size", Icon = "maximize", Min = 1.0, Max = 10.0, Default = 1.5, Decimals = 1,
-    Callback = function(val) hitboxMultiplier = val end,
-})
-hitboxSec:AddToggle({
-    Name = "Visualize Hitboxes", Icon = "eye", Default = false,
-    Callback = function(state) hitboxVisualize = state end,
-})
-
--- ===================== ADVANCED TAB =====================
+-- ===================== ADVANCED TAB (НОВЫЕ МНОЖИТЕЛИ) =====================
 local advancedTab = Window:CreateTab({ Name = "Advanced", Icon = "settings" })
 
 advancedTab:Column("left")
@@ -1126,8 +1142,8 @@ local trailsSec = cosmeticsTab:CreateSection({ Name = "Trails", Icon = "zap" })
 local trailDrop = trailsSec:AddDropdown({
     Name = "Select Trail",
     Icon = "layers",
-    Options = TRAIL_NAMES,
-    Default = TRAIL_NAMES[1],
+    Options = TRAIL_DISPLAY_NAMES,
+    Default = TRAIL_DISPLAY_NAMES[1],
 })
 
 trailsSec:AddButton({
@@ -1188,6 +1204,7 @@ trailsSec:AddButton({
             return
         end
         
+        -- Ищем модель напрямую
         local char = LocalPlayer.Character
         if not char then return end
         
@@ -1229,6 +1246,7 @@ trailsSec:AddButton({
             trailObj.Attachment1 = att1
         end
         
+        lastEquippedTrail = name
         Window:Notify({
             Title = "Trail",
             Content = "Equipped: " .. name,
@@ -1241,6 +1259,7 @@ trailsSec:AddButton({
 cosmeticsTab:Column("right")
 local outfitsSec = cosmeticsTab:CreateSection({ Name = "Outfits", Icon = "shirt" })
 
+-- Сканируем аутфиты
 local OUTFIT_NAMES = {}
 local outfitsFolder = ReplicatedStorage:FindFirstChild("Outfits")
 if outfitsFolder then
@@ -1348,7 +1367,6 @@ RunService.Heartbeat:Connect(function()
     autoParryLoop()
     autoDodgeLoop()
     applyAllBoosts()
-    updateHitboxes()
 end)
 
 RunService.RenderStepped:Connect(function()
@@ -1364,11 +1382,15 @@ RunService.RenderStepped:Connect(function()
             
             local show = false
             if hrp then
-                for _, category in ipairs(selectedCategories) do
-                    if category == "Enemies" and isEnemy(player) then show = true break end
-                    if category == "My Team" and isMyTeam(player) then show = true break end
-                    if category == "OOF" and isOOF(player) then show = true break end
-                    if category == "Frozen" and isFrozen(player) then show = true break end
+                if #selectedCategories == 0 then
+                    show = false
+                else
+                    for _, category in ipairs(selectedCategories) do
+                        if category == "Enemies" and isEnemy(player) then show = true break end
+                        if category == "My Team" and isMyTeam(player) then show = true break end
+                        if category == "OOF" and (isOOF(player) or isAshen(player)) then show = true break end
+                        if category == "Frozen" and isFrozen(player) then show = true break end
+                    end
                 end
             end
             
