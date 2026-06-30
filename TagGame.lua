@@ -144,6 +144,7 @@ local function autoTagLoop()
             
 
             if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
+            if myRole == "Chiller" and targetRole == "Frozen" then continue end
             
             if myRole ~= "Alone" then
                 if myRole and targetRole and myRole == targetRole then continue end
@@ -479,7 +480,7 @@ local TAGGER_ROLES = {
     "JumpingInfected", "BigInfected", "CloakInfected", "InfectedRunner",
     "Slasher", "HiddenSlasher", "Haunter", "FFATagger", "SlapFFATagger",
     "Seeker", "Overseer", "Assassin", "Eliminator", "Juggernaut", "Hunter",
-    "Freezer", "Chiller", "Arsonist", "Toxic", "RunnerTagger"
+    "Freezer", "Chiller", "Arsonist", "Toxic", "RunnerTagger", "Frozen"
 }
 
 local function isEnemy(player)
@@ -545,6 +546,7 @@ local roleColors = {
     ["Baron"] = Color3.fromRGB(139, 69, 19),
     ["Freezer"] = Color3.fromRGB(0, 206, 209),
     ["Chiller"] = Color3.fromRGB(0, 206, 209),
+    ["Frozen"] = Color3.fromRGB(0, 206, 209),
     ["Arsonist"] = Color3.fromRGB(255, 69, 0),
     ["Burning"] = Color3.fromRGB(255, 69, 0),
     ["Toxic"] = Color3.fromRGB(126, 255, 5),
