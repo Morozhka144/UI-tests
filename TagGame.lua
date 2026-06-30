@@ -45,8 +45,9 @@ end
 local fakeCosmeticEnabled = true
 local selectedCosmeticCategory = "Trails"
 local selectedCosmeticModel = "Box"
-local currentFakeCosmetics = {} -- category -> model instance
-local cosmeticsInstalled = {}   -- category -> bool
+local currentFakeCosmetics = currentFakeCosmetics or {} -- category -> model instance
+local cosmeticsInstalled = cosmeticsInstalled or {}     -- category -> bool
+local lastEquipped = lastEquipped or {}                 -- category -> itemName
 
 -- ============================================================
 -- [[ ЗАЩИТА КОСМЕТИКИ ОТ УДАЛЕНИЯ ИГРОЙ ]] --
@@ -257,19 +258,25 @@ task.spawn(function()
         
         if fakeCosmeticEnabled and LocalPlayer.Character then
             -- Проверяем каждую категорию, которая была экипирована
-            for category, itemName in pairs(lastEquipped) do
-                local instance = currentFakeCosmetics[category]
-                
-                -- Если экипировка пропала — восстанавливаем именно то, что было экипировано
-                if not instance or not instance.Parent then
-                    print("[MoroLumina]: Восстанавливаем " .. category .. " -> " .. itemName)
-                    equipCosmeticVisual(category, itemName)
-                elseif not hookAvailable then
-                    -- Дополнительная защита: если hook недоступен, проверяем видимость
-                    for _, descendant in ipairs(instance:GetDescendants()) do
-                        if descendant:IsA("Trail") or descendant:IsA("ParticleEmitter") then
-                            pcall(function() descendant.Enabled = true end)
+            if lastEquipped and type(lastEquipped) == "table" then
+                for category, itemName in pairs(lastEquipped) do
+                    local instance = currentFakeCosmetics and currentFakeCosmetics[category]
+                    
+                    -- Если экипировка пропала — восстанавливаем именно то, что было экипировано
+                    if not instance or not instance.Parent then
+                        print("[MoroLumina]: Восстанавливаем " .. tostring(category) .. " -> " .. tostring(itemName))
+                        if equipCosmeticVisual then
+                            pcall(equipCosmeticVisual, category, itemName)
                         end
+                    elseif not hookAvailable then
+                        -- Дополнительная защита: если hook недоступен, проверяем видимость
+                        pcall(function()
+                            for _, descendant in ipairs(instance:GetDescendants()) do
+                                if descendant:IsA("Trail") or descendant:IsA("ParticleEmitter") then
+                                    descendant.Enabled = true
+                                end
+                            end
+                        end)
                     end
                 end
             end
@@ -280,16 +287,18 @@ end)
 -- ============================================================
 -- [[ ХУКАЕМ СПАВН ПЕРСОНАЖА ]] --
 -- ============================================================
-local lastEquipped = {}
-
 LocalPlayer.CharacterAdded:Connect(function(character)
     cosmeticsInstalled = {}
     currentFakeCosmetics = {}
-    task.wait(0.3)
+    task.wait(1.5)
     
     -- Восстанавливаем экипированную косметику
-    for category, itemName in pairs(lastEquipped) do
-        equipCosmeticVisual(category, itemName)
+    if lastEquipped and type(lastEquipped) == "table" then
+        for category, itemName in pairs(lastEquipped) do
+            if equipCosmeticVisual then
+                pcall(equipCosmeticVisual, category, itemName)
+            end
+        end
     end
 end)
 
