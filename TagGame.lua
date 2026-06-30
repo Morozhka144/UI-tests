@@ -1083,7 +1083,6 @@ RunService.Heartbeat:Connect(function()
     autoParryLoop()
     autoDodgeLoop()
     applyAllBoosts()
-    updateHitboxes()
 end)
 
 RunService.RenderStepped:Connect(function()
