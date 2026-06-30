@@ -166,6 +166,7 @@ local function autoTagLoop()
 
             if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
             if myRole == "Chiller" and targetRole == "Frozen" then continue end
+            if myRole == "Runner" and targetRole == "Chiller" then continue end
             if myRole ~= "Alone" and myRole == targetRole then continue end
             if targetRole and IGNORED_ROLES[targetRole] then continue end
             
