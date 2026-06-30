@@ -4,6 +4,8 @@ local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedFirst = game:GetService("ReplicatedFirst")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -38,17 +40,17 @@ local function getHRP()
 end
 
 -- ============================================================
--- [[ ПЕРЕМЕННЫЕ ТРЕЙЛА (объявляем ПЕРЕД использованием) ]] --
+-- [[ ПЕРЕМЕННЫЕ КОСМЕТИКИ (динамические) ]] --
 -- ============================================================
-local fakeTrailEnabled = true
-local selectedTrailModelName = "Box" -- Имя модели из ReplicatedStorage.Trails
-local currentFakeTrail = nil
-local trailInstalled = false
+local fakeCosmeticEnabled = true
+local selectedCosmeticCategory = "Trails"
+local selectedCosmeticModel = "Box"
+local currentFakeCosmetics = {} -- category -> model instance
+local cosmeticsInstalled = {}   -- category -> bool
 
 -- ============================================================
--- [[ ЗАЩИТА ТРЕЙЛА ОТ УДАЛЕНИЯ ИГРОЙ ]] --
+-- [[ ЗАЩИТА КОСМЕТИКИ ОТ УДАЛЕНИЯ ИГРОЙ ]] --
 -- ============================================================
--- Проверяем, доступен ли hookmetamethods
 local hookAvailable = (hookmetamethods ~= nil and getnamecallmethod ~= nil)
 
 if hookAvailable then
@@ -56,87 +58,223 @@ if hookAvailable then
     oldNamecall = hookmetamethods(game, "__namecall", function(self, ...)
         local method = getnamecallmethod()
         
-        -- Если кто-то пытается удалить наш фейковый трейл — блокируем
-        if currentFakeTrail and (method == "Destroy" or method == "Remove" or method == "remove") then
-            if self == currentFakeTrail or (self.Parent and self:IsDescendantOf(currentFakeTrail)) then
-                return nil
+        if method == "Destroy" or method == "Remove" or method == "remove" then
+            for cat, instance in pairs(currentFakeCosmetics) do
+                if instance and (self == instance or (self.Parent and self:IsDescendantOf(instance))) then
+                    return nil
+                end
             end
         end
         
         return oldNamecall(self, ...)
     end)
-    print("[MoroLumina]: Hook защита трейла активирована")
+    print("[MoroLumina]: Hook защита косметики активирована")
 else
     print("[MoroLumina]: hookmetamethods недоступен, используем мониторинг")
 end
 
+-- ============================================================
+-- [[ МАППИНГ ИМЕН ПРЕДМЕТОВ К ИМЕНАМ МОДЕЛЕЙ В ИГРЕ ]] --
+-- ============================================================
+-- Имя предмета в UI -> имя модели в ReplicatedStorage
+local MODEL_NAME_MAP = {
+    Trails = {
+        ["Basic"] = "Basic", ["Plus"] = "+", ["V"] = "V", ["T"] = "T", ["X"] = "X",
+        ["RealPNG"] = "RealPNG", ["Box"] = "Box", ["Comet"] = "Comet",
+        ["RainbowComet"] = "RainbowComet", ["Whirlpool"] = "Whirlpool",
+        ["Gradient"] = "Gradient", ["LightGradient"] = "LightGradient",
+        ["DarkGradient"] = "DarkGradient", ["Error"] = "Error", ["Tron"] = "Tron",
+        ["Tron2"] = "Tron2", ["Vantablack"] = "Vantablack", ["ZFight"] = "ZFight",
+        ["Snarp"] = "Snarp", ["AwesomeHumanTrail"] = "AwesomeHumanTrail",
+        ["Visualizer"] = "Visualizer", ["Freedom"] = "Freedom", ["Solid"] = "Solid",
+        ["Sparkletime"] = "Sparkletime", ["BitWave"] = "BitWave", ["Kinetic"] = "Kinetic",
+        ["Cloudy"] = "Cloudy", ["Arithmetic"] = "Arithmetic", ["Arrow"] = "Arrow",
+        ["Subspace"] = "Subspace", ["cape"] = "cape", ["Encrypted"] = "Encrypted",
+        ["Stinky"] = "Stinky", ["DraculaWalker"] = "DraculaWalker",
+        ["StarTrail"] = "StarTrail", ["ghostrider"] = "ghostrider",
+        ["HomingMissile"] = "HomingMissile", ["SpeedCoilTrail"] = "SpeedCoilTrail",
+        ["StringLights"] = "StringLights", ["Bonsai"] = "Bonsai",
+        ["Snowflakes"] = "Snowflakes", ["Lovestruck"] = "Lovestruck",
+        ["Driftin"] = "Driftin", ["CherryBlossom"] = "CherryBlossom",
+        ["JetTrail"] = "JetTrail", ["StarRoot"] = "StarRoot",
+        ["IceSkates"] = "IceSkates", ["Tachophobia"] = "Tachophobia",
+        ["Ablaze"] = "Ablaze", ["Decorated Tree"] = "Decorated Tree",
+        ["Snowflake Power"] = "Snowflake Power", ["Knight"] = "Knight",
+        ["TankKnight"] = "TankKnight", ["Boombox"] = "Boombox",
+        ["MeteorFists"] = "MeteorFists", ["PersonalSun"] = "PersonalSun",
+        ["PentagonTrail"] = "PentagonTrail", ["Spellbook"] = "Spellbook",
+        ["NorthStarTrail"] = "NorthStarTrail", ["CelestialHead"] = "CelestialHead",
+        ["YinYang"] = "YinYang", ["Condiments"] = "Condiments",
+        ["OverfilledBriefcase"] = "OverfilledBriefcase", ["ACUnit"] = "ACUnit",
+        ["HeartTrail"] = "HeartTrail", ["RadioHead"] = "RadioHead",
+        ["SaltNPepper"] = "SaltNPepper", ["LovePower"] = "LovePower",
+        ["SecretSanta"] = "SecretSanta", ["Circle"] = "Circle",
+        ["Triangle"] = "Triangle", ["StarBeam"] = "StarBeam",
+        ["IdeaTrail"] = "IdeaTrail", ["frostbite"] = "frostbite",
+        ["Sparklinghands"] = "Sparklinghands", ["Segmented"] = "Segmented",
+        ["Illusions"] = "Illusions", ["GuppyTrail"] = "GuppyTrail",
+        ["TESTING"] = "TESTING"
+    },
+    Emotes = {},
+    TagEffects = {},
+    Banners = {},
+    Outfits = {},
+    Stickers = {},
+}
 
--- ============================================================
--- [[ ФУНКЦИЯ ЭКИПИРОВКИ ЛОКАЛЬНОГО ТРЕЙЛА ]] --
--- ============================================================
-local function equipFakeTrail(character)
-    if not fakeTrailEnabled then return end
+-- Возвращает имя модели для предмета в заданной категории
+local function getModelName(category, itemName)
+    local map = MODEL_NAME_MAP[category]
+    if map and map[itemName] then
+        return map[itemName]
+    end
+    -- Если нет в маппинге — пробуем имя как есть
+    return itemName
+end
+
+-- Ищет папку с моделями для категории в ReplicatedStorage
+local function getModelsFolder(category)
+    -- Пробуем разные варианты названий папок
+    local possibleNames = {
+        category,                              -- "Trails"
+        category:sub(1, -2),                   -- "Trail" (без s)
+        category .. "Folder",                  -- "TrailsFolder"
+        category:lower(),                      -- "trails"
+    }
     
-    local hrp = character:WaitForChild("HumanoidRootPart", 5)
-    local trailsFolder = ReplicatedStorage:WaitForChild("Trails", 5)
-    
-    if not (hrp and trailsFolder) then return end
-    
-    local originalTrailModel = trailsFolder:FindFirstChild(selectedTrailModelName)
-    if not originalTrailModel then
-        warn("[MoroLumina]: Модель " .. selectedTrailModelName .. " не найдена")
-        return
+    for _, name in ipairs(possibleNames) do
+        local folder = ReplicatedStorage:FindFirstChild(name)
+        if folder then return folder end
     end
     
-    -- Удаляем старый трейл (если был)
-    if currentFakeTrail then
-        pcall(function() currentFakeTrail:Destroy() end)
-        currentFakeTrail = nil
+    -- Если нет в ReplicatedStorage, пробуем ReplicatedFirst.content
+    local content = ReplicatedFirst:FindFirstChild("content")
+    if content then
+        for _, name in ipairs(possibleNames) do
+            local folder = content:FindFirstChild(name)
+            if folder then return folder end
+        end
     end
     
-    -- Клонируем модель
-    currentFakeTrail = originalTrailModel:Clone()
-    currentFakeTrail.Parent = character
-    
-    -- Настраиваем Attachment'ы для Trail
-    local trailComponent = currentFakeTrail:FindFirstChildOfClass("Trail") or currentFakeTrail
-    if trailComponent and trailComponent:IsA("Trail") then
-        local att0 = hrp:FindFirstChild("MoroTrailAtt0") or Instance.new("Attachment", hrp)
-        att0.Name = "MoroTrailAtt0"
-        att0.Position = Vector3.new(0, 1, 0)
-        
-        local att1 = hrp:FindFirstChild("MoroTrailAtt1") or Instance.new("Attachment", hrp)
-        att1.Name = "MoroTrailAtt1"
-        att1.Position = Vector3.new(0, -1, 0)
-        
-        trailComponent.Attachment0 = att0
-        trailComponent.Attachment1 = att1
-    end
-    
-    trailInstalled = true
-    print("[MoroLumina]: Трейл " .. selectedTrailModelName .. " применён и защищён!")
+    return nil
 end
 
 -- ============================================================
--- [[ ПОСТОЯННАЯ ПРОВЕРКА: если игра удалила трейл — возвращаем ]] --
+-- [[ ФУНКЦИИ ЭКИПИРОВКИ/СНЯТИЯ КОСМЕТИКИ ]] --
+-- ============================================================
+local function unequipCosmetic(category)
+    local instance = currentFakeCosmetics[category]
+    if instance then
+        pcall(function() instance:Destroy() end)
+        currentFakeCosmetics[category] = nil
+        cosmeticsInstalled[category] = false
+    end
+    
+    -- Удаляем атрибут с персонажа
+    local char = LocalPlayer.Character
+    if char then
+        local attrName = "Equipped" .. category
+        pcall(function() char:SetAttribute(attrName, nil) end)
+    end
+    
+    print("[MoroLumina]: Снята косметика категории " .. category)
+end
+
+local function equipCosmeticVisual(category, itemName)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    -- Снимаем старую косметику этой категории
+    unequipCosmetic(category)
+    
+    if not fakeCosmeticEnabled then return false end
+    
+    local folder = getModelsFolder(category)
+    if not folder then
+        warn("[MoroLumina]: Папка для категории " .. category .. " не найдена")
+        return false
+    end
+    
+    local modelName = getModelName(category, itemName)
+    local originalModel = folder:FindFirstChild(modelName)
+    
+    if not originalModel then
+        -- Пробуем найти по другим вариантам
+        for _, child in ipairs(folder:GetChildren()) do
+            if child.Name:lower() == modelName:lower() then
+                originalModel = child
+                break
+            end
+        end
+    end
+    
+    if not originalModel then
+        warn("[MoroLumina]: Модель '" .. modelName .. "' не найдена в папке " .. category)
+        return false
+    end
+    
+    -- Клонируем модель
+    local cloned = originalModel:Clone()
+    cloned.Parent = char
+    currentFakeCosmetics[category] = cloned
+    cosmeticsInstalled[category] = true
+    
+    -- Специальная логика для трейлов: настраиваем Attachment'ы
+    if category == "Trails" then
+        local trailComponent = cloned:FindFirstChildOfClass("Trail") or cloned
+        if trailComponent and trailComponent:IsA("Trail") then
+            local att0 = hrp:FindFirstChild("MoroTrailAtt0") or Instance.new("Attachment", hrp)
+            att0.Name = "MoroTrailAtt0"
+            att0.Position = Vector3.new(0, 1, 0)
+            
+            local att1 = hrp:FindFirstChild("MoroTrailAtt1") or Instance.new("Attachment", hrp)
+            att1.Name = "MoroTrailAtt1"
+            att1.Position = Vector3.new(0, -1, 0)
+            
+            trailComponent.Attachment0 = att0
+            trailComponent.Attachment1 = att1
+        end
+    end
+    
+    -- Устанавливаем атрибут на персонаже (чтобы другие скрипты знали)
+    pcall(function()
+        char:SetAttribute("Equipped" .. category, itemName)
+    end)
+    
+    print("[MoroLumina]: Экипирован " .. itemName .. " (" .. category .. ")")
+    return true
+end
+
+-- ============================================================
+-- [[ МОНИТОРИНГ: восстанавливаем косметику, если её удалили ]] --
 -- ============================================================
 task.spawn(function()
     while true do
-        task.wait(0.5) -- Проверяем чаще, если hook недоступен
+        task.wait(0.5)
         
-        if fakeTrailEnabled and LocalPlayer.Character then
-            -- Если трейл был установлен, но его больше нет — пересоздаём
-            if trailInstalled and (not currentFakeTrail or not currentFakeTrail.Parent) then
-                print("[MoroLumina]: Игра удалила трейл, возвращаем...")
-                equipFakeTrail(LocalPlayer.Character)
-            end
-            
-            -- Дополнительная защита: если hook недоступен, проверяем видимость
-            if not hookAvailable and currentFakeTrail and currentFakeTrail.Parent then
-                -- Убеждаемся, что все части трейла видимы
-                for _, descendant in ipairs(currentFakeTrail:GetDescendants()) do
-                    if descendant:IsA("Trail") or descendant:IsA("ParticleEmitter") then
-                        descendant.Enabled = true
+        if fakeCosmeticEnabled and LocalPlayer.Character then
+            for category, installed in pairs(cosmeticsInstalled) do
+                if installed then
+                    local instance = currentFakeCosmetics[category]
+                    if not instance or not instance.Parent then
+                        -- Косметика исчезла — восстанавливаем
+                        print("[MoroLumina]: Восстанавливаем " .. category .. "...")
+                        -- Берем последний выбранный предмет из UI (хранится в selectedCosmeticModel)
+                        if selectedCosmeticCategory == category then
+                            equipCosmeticVisual(category, selectedCosmeticModel)
+                        end
+                    else
+                        -- Если hook недоступен, убеждаемся что всё работает
+                        if not hookAvailable then
+                            for _, descendant in ipairs(instance:GetDescendants()) do
+                                if descendant:IsA("Trail") or descendant:IsA("ParticleEmitter") then
+                                    pcall(function() descendant.Enabled = true end)
+                                end
+                            end
+                        end
                     end
                 end
             end
@@ -147,23 +285,32 @@ end)
 -- ============================================================
 -- [[ ХУКАЕМ СПАВН ПЕРСОНАЖА ]] --
 -- ============================================================
+-- Хранилище последней экипировки для каждой категории
+local lastEquipped = {} -- category -> itemName
+
 LocalPlayer.CharacterAdded:Connect(function(character)
-    trailInstalled = false
-    task.wait(1.5) -- Даём игре время настроить свои эффекты
-    equipFakeTrail(character)
+    cosmeticsInstalled = {}
+    currentFakeCosmetics = {}
+    task.wait(1.5)
+    
+    -- Восстанавливаем экипированную косметику
+    for category, itemName in pairs(lastEquipped) do
+        equipCosmeticVisual(category, itemName)
+    end
 end)
 
 if LocalPlayer.Character then
     task.defer(function()
         task.wait(1.5)
-        equipFakeTrail(LocalPlayer.Character)
+        for category, itemName in pairs(lastEquipped) do
+            equipCosmeticVisual(category, itemName)
+        end
     end)
 end
 
 -- ============================================================
 -- [[ VISUALIZER RING (Кольцо на земле) ]] --
 -- ============================================================
--- Создаём кольцо из двух цилиндров (внешний и внутренний)
 local killAuraRingOuter = Instance.new("Part")
 killAuraRingOuter.Name = "MoroKillAuraRingOuter"
 killAuraRingOuter.Shape = Enum.PartType.Cylinder
@@ -261,29 +408,12 @@ local function applyAllBoosts()
 end
 
 -- ============================================================
--- [[ AUTO-TAG (KILL AURA) ]] --
+-- [[ AUTO-TAG (KILL AURA) - БЕЗ ПРОВЕРКИ НА СТЕНЫ ]] --
 -- ============================================================
 local IGNORED_ROLES = {
     ["Bomb"] = true, ["PatientZero"] = true, ["Infected"] = true,
     ["Tagger"] = true, ["HotBomb"] = true, ["Chiller"] = true, ["OOF"] = true
 }
-
-local losRayParams = RaycastParams.new()
-losRayParams.FilterType = Enum.RaycastFilterType.Exclude
-
-local function hasLineOfSight(fromPos, toPos, myChar, targetChar)
-    losRayParams.FilterDescendantsInstances = {myChar, targetChar}
-    
-    local direction = toPos - fromPos
-    local distance = direction.Magnitude
-    
-    local ray = workspace:Raycast(fromPos, direction, losRayParams)
-
-    if not ray then return true end
-    if ray.Distance >= distance - 0.5 then return true end
-    
-    return false
-end
 
 local function autoTagLoop()
     if not _G.AutoTagEnabled then return end
@@ -313,17 +443,9 @@ local function autoTagLoop()
             local targetHRP = char.HumanoidRootPart
             local dist = (targetHRP.Position - hrp.Position).Magnitude
             
-            -- Проверка дистанции
             if dist < closestDist then
-                -- НОВАЯ ПРОВЕРКА: видимость сквозь стены
-                -- Стреляем луч от глаз (HRP + 1.5 по Y) к HRP цели
-                local eyePos = hrp.Position + Vector3.new(0, 1.5, 0)
-                local targetPos = targetHRP.Position
-                
-                if hasLineOfSight(eyePos, targetPos, myChar, char) then
-                    closestDist = dist
-                    closestTarget = char
-                end
+                closestDist = dist
+                closestTarget = char
             end
         end
     end
@@ -385,11 +507,16 @@ end
 -- ============================================================
 -- [[ AUTO DODGE (LEGIT) ]] --
 -- ============================================================
-local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-
 local dodgeCooldown = 0.5
 local lastDodgeTime = 0
+
+local TAGGER_ROLES = {
+    "Tagger", "Infected", "PatientZero", "FastInfected", "BabyInfected",
+    "JumpingInfected", "BigInfected", "CloakInfected", "InfectedRunner",
+    "Slasher", "HiddenSlasher", "Haunter", "FFATagger", "SlapFFATagger",
+    "Seeker", "Overseer", "Assassin", "Eliminator", "Juggernaut", "Hunter",
+    "Freezer", "Chiller", "Arsonist", "Toxic", "RunnerTagger"
+}
 
 local function isTagger(player)
     local roleObj = player:FindFirstChild("PlayerRole")
@@ -403,7 +530,7 @@ local function isLookingAtMe(taggerHrp, myHrp)
     local lookVector = taggerHrp.CFrame.LookVector
     local direction = (myHrp.Position - taggerHrp.Position).Unit
     local dot = lookVector:Dot(direction)
-    return dot > 0.7 -- Угол < 45°
+    return dot > 0.7
 end
 
 local function checkObstacle(myHrp, direction)
@@ -417,7 +544,7 @@ local function checkObstacle(myHrp, direction)
         rayParams
     )
     
-    return ray ~= nil -- Есть препятствие
+    return ray ~= nil
 end
 
 local function performDodge(taggerHrp, myHrp)
@@ -425,41 +552,33 @@ local function performDodge(taggerHrp, myHrp)
     local hum = char and char:FindFirstChild("Humanoid")
     if not hum then return end
     
-    -- Определяем направление для strafe (перпендикулярно к тэггеру)
     local toTagger = (taggerHrp.Position - myHrp.Position).Unit
     local strafeDir = Vector3.new(-toTagger.Z, 0, toTagger.X)
     
-    -- Случайный выбор: влево или вправо
     if math.random() > 0.5 then
         strafeDir = -strafeDir
     end
     
-    -- Проверяем препятствия в обоих направлениях
     if checkObstacle(myHrp, strafeDir) then
-        strafeDir = -strafeDir -- Меняем направление
+        strafeDir = -strafeDir
         if checkObstacle(myHrp, strafeDir) then
-            return -- Оба направления заблокированы, не уклоняемся
+            return
         end
     end
     
-    -- Прыжок (если на земле)
     if hum.FloorMaterial ~= Enum.Material.Air then
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
     
-    -- Симуляция движения в зависимости от метода ввода
     if _G.DodgeInputMethod == "Keyboard" then
-        -- Клавиатура: используем VirtualInputManager
         local moveX = strafeDir.X > 0 and 1 or -1
         local moveZ = strafeDir.Z > 0 and 1 or -1
         
-        -- Симулируем нажатие клавиш A/D и W/S
         task.spawn(function()
             local duration = 0.3
             local startTime = tick()
             
             while tick() - startTime < duration do
-                -- Симулируем движение через клавиши
                 if moveX ~= 0 then
                     local key = moveX > 0 and Enum.KeyCode.D or Enum.KeyCode.A
                     VirtualInputManager:SendKeyEvent(true, key, false, game)
@@ -476,23 +595,18 @@ local function performDodge(taggerHrp, myHrp)
             end
         end)
     else
-        -- Джойстик: используем ContextActionService или прямое управление
         task.spawn(function()
             local duration = 0.3
             local startTime = tick()
             local cameraCF = Camera.CFrame
             local relativeDir = cameraCF:VectorToObjectSpace(strafeDir)
             
-            -- Нормализуем для контроллера
             local moveX = math.clamp(relativeDir.X, -1, 1)
             local moveZ = math.clamp(-relativeDir.Z, -1, 1)
             
             while tick() - startTime < duration do
-                -- Симулируем движение через джойстик
-                -- Используем Thumbstick1 для движения
                 local thumbstickValue = Vector3.new(moveX, 0, moveZ)
                 
-                -- Симулируем ввод джойстика
                 pcall(function()
                     VirtualInputManager:SendGamepadEvent(
                         Enum.UserInputType.Gamepad1,
@@ -505,7 +619,6 @@ local function performDodge(taggerHrp, myHrp)
                 task.wait(0.05)
             end
             
-            -- Возвращаем джойстик в центр
             pcall(function()
                 VirtualInputManager:SendGamepadEvent(
                     Enum.UserInputType.Gamepad1,
@@ -525,21 +638,15 @@ local function autoDodgeLoop()
     local myHrp = char and char:FindFirstChild("HumanoidRootPart")
     if not myHrp then return end
     
-    -- Проверяем, что мы выживший (не таггер)
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     if isTagger(LocalPlayer) then return end
     
-    -- Кулдаун
     if tick() - lastDodgeTime < dodgeCooldown then return end
     
-    -- Ищем ближайшую угрозу
     local closestTagger, closestDist = nil, _G.DodgeRadius
     
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and isTagger(player) then
-            -- Не уклоняемся от тиммейтов
-            if isMyTeam(player) then continue end
-            
             local taggerHrp = player.Character:FindFirstChild("HumanoidRootPart")
             if taggerHrp then
                 local dist = (taggerHrp.Position - myHrp.Position).Magnitude
@@ -552,7 +659,6 @@ local function autoDodgeLoop()
         end
     end
     
-    -- Если нашли угрозу, которая смотрит на нас
     if closestTagger then
         performDodge(closestTagger, myHrp)
         lastDodgeTime = tick()
@@ -609,11 +715,7 @@ Players.PlayerRemoving:Connect(function(player)
     clearTracerCache(player.Name)
 end)
 
--- ============================================================
--- ФУНКЦИИ КАТЕГОРИЙ (правильный порядок!)
--- ============================================================
-
--- 1. Сначала isOOF и isFrozen (их вызывают другие функции)
+-- Функции категорий
 local function isOOF(player)
     local char = player.Character
     if not char then return false end
@@ -631,32 +733,22 @@ local function isFrozen(player)
            char:GetAttribute("Ice") == true
 end
 
--- 2. Потом isEnemy и isMyTeam (они вызывают isOOF/isFrozen)
 local function isEnemy(player)
-    -- OOF и Frozen — это отдельные категории, не враги
     if isOOF(player) or isFrozen(player) then return false end
-    
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
     if not myRole or not theirRole then return false end
-    
-    -- Враг = роль другая ИЛИ я в FFA-режиме (Alone)
     return myRole ~= theirRole or myRole == "Alone"
 end
 
 local function isMyTeam(player)
-    -- OOF и Frozen — это отдельные категории
     if isOOF(player) or isFrozen(player) then return false end
-    
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
     if not myRole or not theirRole then return false end
-    
-    -- Моя команда = та же роль, но НЕ Alone и НЕ OOF
     return myRole == theirRole and myRole ~= "Alone" and myRole ~= "OOF"
 end
 
--- 3. Таблица цветов и функция getRoleColor
 local roleColors = {
     ["Crown"] = Color3.fromRGB(255, 215, 0),
     ["Monarch"] = Color3.fromRGB(255, 215, 0),
@@ -932,6 +1024,145 @@ lookSec:AddButton({
 -- ===================== COSMETICS TAB =====================
 local cosmeticsTab = Window:CreateTab({ Name = "Cosmetics", Icon = "shirt" })
 
+-- Списки предметов для каждой категории
+local ITEMS_BY_CATEGORY = {
+    Trails = {
+        "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
+        "Whirlpool", "Gradient", "LightGradient", "DarkGradient", "Error", "Tron",
+        "Tron2", "Vantablack", "ZFight", "Snarp", "AwesomeHumanTrail", "Visualizer",
+        "Freedom", "Solid", "Sparkletime", "BitWave", "Kinetic", "Cloudy", "Arithmetic",
+        "Arrow", "Subspace", "cape", "Encrypted", "Stinky", "DraculaWalker", "StarTrail",
+        "ghostrider", "HomingMissile", "SpeedCoilTrail", "StringLights", "Bonsai",
+        "Snowflakes", "Lovestruck", "Driftin", "CherryBlossom", "JetTrail", "StarRoot",
+        "IceSkates", "Tachophobia", "Ablaze", "Decorated Tree", "Snowflake Power",
+        "Knight", "TankKnight", "Boombox", "MeteorFists", "PersonalSun", "PentagonTrail",
+        "Spellbook", "NorthStarTrail", "CelestialHead", "YinYang", "Condiments",
+        "OverfilledBriefcase", "ACUnit", "HeartTrail", "RadioHead", "SaltNPepper",
+        "LovePower", "SecretSanta", "Circle", "Triangle", "StarBeam", "IdeaTrail",
+        "frostbite", "Sparklinghands", "Segmented", "Illusions", "GuppyTrail", "TESTING"
+    },
+    Emotes = {"Wave", "Dance", "Laugh", "Cheer", "Salute", "Flex"},
+    TagEffects = {"Fire", "Ice", "Lightning", "Sparkle", "Shadow", "Rainbow"},
+    Banners = {"Default", "Victory", "Champion", "Elite", "Legendary"},
+    Outfits = {"Classic", "Warrior", "Mage", "Assassin", "Knight"},
+    Stickers = {"Smile", "Heart", "Star", "Fire", "Lightning"},
+}
+
+local CATEGORY_KEYS = {"Trails", "Emotes", "TagEffects", "Banners", "Outfits", "Stickers"}
+
+local selectedCategoryKey = "Trails"
+local selectedItemName = "Box"
+
+cosmeticsTab:Column("left")
+local equipSec = cosmeticsTab:CreateSection({ Name = "Equip Cosmetic", Icon = "shirt" })
+
+-- Dropdown категории
+local cosmeticCategoryDrop = equipSec:AddDropdown({
+    Name = "Category",
+    Icon = "layers",
+    Options = CATEGORY_KEYS,
+    Default = "Trails",
+    Callback = function(val)
+        selectedCategoryKey = val
+        -- Обновляем опции в dropdown предметов
+        local newItems = ITEMS_BY_CATEGORY[val] or {}
+        if itemDrop then
+            itemDrop.Refresh(newItems, true)
+            -- Устанавливаем первый предмет как выбранный
+            if newItems[1] then
+                selectedItemName = newItems[1]
+            end
+        end
+    end,
+})
+
+-- Dropdown предметов (динамически обновляется)
+itemDrop = equipSec:AddDropdown({
+    Name = "Item",
+    Icon = "box",
+    Options = ITEMS_BY_CATEGORY["Trails"],
+    Default = "Box",
+    Callback = function(val)
+        selectedItemName = val
+    end,
+})
+
+-- Кнопка Equip
+equipSec:AddButton({
+    Name = "Equip Selected",
+    Primary = true,
+    Icon = "check",
+    Callback = function()
+        if not selectedItemName or not selectedCategoryKey then
+            Window:Notify({ Title = "Cosmetics", Content = "Select category and item", Type = "Warning" })
+            return
+        end
+        
+        local success = equipCosmeticVisual(selectedCategoryKey, selectedItemName)
+        if success then
+            lastEquipped[selectedCategoryKey] = selectedItemName
+            Window:Notify({
+                Title = "Cosmetics",
+                Content = "Equipped " .. selectedItemName .. " (" .. selectedCategoryKey .. ")",
+                Type = "Success",
+                Duration = 3
+            })
+        else
+            Window:Notify({
+                Title = "Cosmetics",
+                Content = "Failed to equip. Model not found in game files.",
+                Type = "Error",
+                Duration = 4
+            })
+        end
+    end,
+})
+
+-- Кнопка UNEQUIP
+equipSec:AddButton({
+    Name = "Unequip Selected Category",
+    Icon = "x",
+    Callback = function()
+        if not selectedCategoryKey then return end
+        unequipCosmetic(selectedCategoryKey)
+        lastEquipped[selectedCategoryKey] = nil
+        Window:Notify({
+            Title = "Cosmetics",
+            Content = "Unequipped " .. selectedCategoryKey,
+            Type = "Info",
+            Duration = 2
+        })
+    end,
+})
+
+-- Кнопка UNEQUIP ALL
+equipSec:AddButton({
+    Name = "Unequip ALL Cosmetics",
+    Icon = "trash",
+    Callback = function()
+        for category, _ in pairs(currentFakeCosmetics) do
+            unequipCosmetic(category)
+        end
+        lastEquipped = {}
+        Window:Notify({
+            Title = "Cosmetics",
+            Content = "All cosmetics unequipped",
+            Type = "Info",
+            Duration = 2
+        })
+    end,
+})
+
+-- Инфо
+equipSec:AddLabel("Currently equipped:")
+for _, cat in ipairs(CATEGORY_KEYS) do
+    equipSec:AddLabel("  • " .. cat .. ": " .. tostring(lastEquipped[cat] or "None"))
+end
+
+-- ===================== ПРАВАЯ КОЛОНКА: Inventory =====================
+cosmeticsTab:Column("right")
+local invSec = cosmeticsTab:CreateSection({ Name = "Inventory Management", Icon = "box" })
+
 -- Функция для работы с инвентарём
 local function getInventory()
     local inv = LocalPlayer:FindFirstChild("Inventory")
@@ -951,14 +1182,11 @@ local function setInventory(data)
     return success
 end
 
--- Добавляет косметику в Owned
--- Добавляет косметику в Owned
 local function addCosmetic(category, itemName)
     local data = getInventory()
     if not data or not data.Owned then return false end
     if not data.Owned[category] then data.Owned[category] = {} end
     
-    -- Проверяем, есть ли уже
     for _, item in ipairs(data.Owned[category]) do
         if item == itemName then return true end
     end
@@ -967,296 +1195,17 @@ local function addCosmetic(category, itemName)
     return setInventory(data)
 end
 
--- Экипирует косметику — пробует несколько способов
-local function equipCosmetic(category, itemName)
-    -- 1. Сначала добавляем в Owned (если ещё нет)
-    addCosmetic(category, itemName)
-    
-    local char = LocalPlayer.Character
-    local success = false
-    
-    -- СПОСОБ 1: Атрибут на персонаже (самый вероятный)
-    if char then
-        local attrName = "Equipped" .. category  -- например "EquippedTrails"
-        pcall(function()
-            char:SetAttribute(attrName, itemName)
-        end)
-        
-        -- Проверяем, установилось ли
-        local check = char:GetAttribute(attrName)
-        if check == itemName then
-            success = true
-        end
-    end
-    
-    -- СПОСОБ 2: ValueObject в LocalPlayer (например "EquippedTrail")
-    if not success then
-        local possibleNames = {
-            "Equipped" .. category,           -- EquippedTrails
-            "Equipped" .. category:sub(1, -1), -- EquippedTrail (без s)
-            "Current" .. category,
-            "Active" .. category,
-        }
-        
-        for _, name in ipairs(possibleNames) do
-            local obj = LocalPlayer:FindFirstChild(name)
-            if obj and obj:IsA("ValueBase") then
-                pcall(function() obj.Value = itemName end)
-                success = true
-                break
-            end
-        end
-    end
-    
-    -- СПОСОБ 3: Поле в JSON инвентаря (маловероятно, но попробуем)
-    if not success then
-        local data = getInventory()
-        if data then
-            if not data.Equipped then data.Equipped = {} end
-            data.Equipped[category] = itemName
-            setInventory(data)
-        end
-    end
-    
-    -- СПОСОБ 4: Ищем любой ValueObject/Attribute с текущим трейлом и перезаписываем
-    if not success and char then
-        -- Перебираем все атрибуты персонажа
-        for _, attr in ipairs(char:GetAttributes() and (function() 
-            local t = {}
-            for k, v in pairs(char:GetAttributes()) do table.insert(t, k) end
-            return t
-        end)() or {}) do
-            if type(attr) == "string" and (attr:lower():find("trail") or attr:lower():find("equipped")) then
-                pcall(function() char:SetAttribute(attr, itemName) end)
-            end
-        end
-    end
-    
-    return true  -- Возвращаем true, т.к. хотя бы в Owned добавили
-end
-
--- Получает текущий экипированный предмет
-local function getEquipped(category)
-    local char = LocalPlayer.Character
-    
-    -- Проверяем атрибут
-    if char then
-        local attrName = "Equipped" .. category
-        local val = char:GetAttribute(attrName)
-        if val then return val end
-    end
-    
-    -- Проверяем ValueObject
-    local possibleNames = {
-        "Equipped" .. category,
-        "Equipped" .. category:sub(1, -1),
-        "Current" .. category,
-        "Active" .. category,
-    }
-    for _, name in ipairs(possibleNames) do
-        local obj = LocalPlayer:FindFirstChild(name)
-        if obj and obj:IsA("ValueBase") then
-            return obj.Value
-        end
-    end
-    
-    -- Проверяем JSON
-    local data = getInventory()
-    if data and data.Equipped then
-        return data.Equipped[category]
-    end
-    
-    return nil
-end
--- Список всех трейлов из cosmetic.txt
-local TRAILS_LIST = {
-    "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
-    "Whirlpool", "Gradient", "LightGradient", "DarkGradient", "Error", "Tron",
-    "Tron2", "Vantablack", "ZFight", "Snarp", "AwesomeHumanTrail", "Visualizer",
-    "Freedom", "Solid", "Sparkletime", "BitWave", "Kinetic", "Cloudy", "Arithmetic",
-    "Arrow", "Subspace", "cape", "Encrypted", "Stinky", "DraculaWalker", "StarTrail",
-    "ghostrider", "HomingMissile", "SpeedCoilTrail", "StringLights", "Bonsai",
-    "Snowflakes", "Lovestruck", "Driftin", "CherryBlossom", "JetTrail", "StarRoot",
-    "IceSkates", "Tachophobia", "Ablaze", "Decorated Tree", "Snowflake Power",
-    "Knight", "TankKnight", "Boombox", "MeteorFists", "PersonalSun", "PentagonTrail",
-    "Spellbook", "NorthStarTrail", "CelestialHead", "YinYang", "Condiments",
-    "OverfilledBriefcase", "ACUnit", "HeartTrail", "RadioHead", "SaltNPepper",
-    "LovePower", "SecretSanta", "Circle", "Triangle", "StarBeam", "IdeaTrail",
-    "frostbite", "Sparklinghands", "Segmented", "Illusions", "GuppyTrail", "TESTING"
-}
-
--- Категории косметики
-local CATEGORIES = {
-    { Name = "Trails", Key = "Trails", Items = TRAILS_LIST },
-    { Name = "Emotes", Key = "Emotes", Items = {} },
-    { Name = "Tag Effects", Key = "TagEffects", Items = {} },
-    { Name = "Banners", Key = "Banners", Items = {} },
-    { Name = "Outfits", Key = "Outfits", Items = {} },
-    { Name = "Stickers", Key = "Stickers", Items = {} },
-}
-
-local selectedCategory = CATEGORIES[1]
-local selectedItem = nil
-
--- Секция: Добавить косметику
-cosmeticsTab:Column("left")
-local addSec = cosmeticsTab:CreateSection({ Name = "Add to Inventory", Icon = "plus" })
-
-local categoryDrop = addSec:AddDropdown({
-    Name = "Category",
-    Icon = "layers",
-    Options = (function()
-        local names = {}
-        for _, cat in ipairs(CATEGORIES) do table.insert(names, cat.Name) end
-        return names
-    end)(),
-    Default = "Trails",
-    Callback = function(val)
-        for _, cat in ipairs(CATEGORIES) do
-            if cat.Name == val then selectedCategory = cat break end
-        end
-    end,
-})
-
-local itemDrop = addSec:AddDropdown({
-    Name = "Item",
-    Icon = "box",
-    Options = TRAILS_LIST,
-    Default = TRAILS_LIST[1],
-    Callback = function(val) selectedItem = val end,
-})
-
-addSec:AddButton({
-    Name = "Add to Inventory",
-    Primary = true,
-    Icon = "plus",
-    Callback = function()
-        if not selectedItem then
-            Window:Notify({ Title = "Cosmetics", Content = "Select an item first", Type = "Warning" })
-            return
-        end
-        
-        if addCosmetic(selectedCategory.Key, selectedItem) then
-            Window:Notify({ 
-                Title = "Cosmetics", 
-                Content = "Added " .. selectedItem .. " to " .. selectedCategory.Name,
-                Type = "Success",
-                Duration = 3
-            })
-        else
-            Window:Notify({ Title = "Cosmetics", Content = "Failed to add item", Type = "Error" })
-        end
-    end,
-})
-
-addSec:AddButton({
-    Name = "Equip Item",
-    Icon = "check",
-    Callback = function()
-        if not selectedItem then
-            Window:Notify({ Title = "Cosmetics", Content = "Select an item first", Type = "Warning" })
-            return
-        end
-        
-        if equipCosmetic(selectedCategory.Key, selectedItem) then
-            Window:Notify({ 
-                Title = "Cosmetics", 
-                Content = "Equipped " .. selectedItem,
-                Type = "Success",
-                Duration = 3
-            })
-        else
-            Window:Notify({ Title = "Cosmetics", Content = "Failed to equip", Type = "Error" })
-        end
-    end,
-})
-addSec:AddLabel("Currently equipped: " .. tostring(getEquipped("Trails") or "None"))
--- Секция: Кастомный ввод
-cosmeticsTab:Column("right")
-local customSec = cosmeticsTab:CreateSection({ Name = "Custom Item", Icon = "edit" })
-
-local customCategoryDrop = customSec:AddDropdown({
-    Name = "Category",
-    Icon = "layers",
-    Options = (function()
-        local names = {}
-        for _, cat in ipairs(CATEGORIES) do table.insert(names, cat.Name) end
-        return names
-    end)(),
-    Default = "Trails",
-    Callback = function(val)
-        for _, cat in ipairs(CATEGORIES) do
-            if cat.Name == val then selectedCategory = cat break end
-        end
-    end,
-})
-
-local customNameBox = customSec:AddTextbox({
-    Name = "Item Name",
-    Placeholder = "Enter custom name",
-})
-
-customSec:AddButton({
-    Name = "Add Custom Item",
-    Primary = true,
-    Icon = "plus",
-    Callback = function()
-        local name = customNameBox.Get()
-        if not name or name == "" then
-            Window:Notify({ Title = "Cosmetics", Content = "Enter item name", Type = "Warning" })
-            return
-        end
-        
-        if addCosmetic(selectedCategory.Key, name) then
-            Window:Notify({ 
-                Title = "Cosmetics", 
-                Content = "Added " .. name .. " to " .. selectedCategory.Name,
-                Type = "Success",
-                Duration = 3
-            })
-        else
-            Window:Notify({ Title = "Cosmetics", Content = "Failed to add", Type = "Error" })
-        end
-    end,
-})
-
-customSec:AddButton({
-    Name = "Equip Custom",
-    Icon = "check",
-    Callback = function()
-        local name = customNameBox.Get()
-        if not name or name == "" then
-            Window:Notify({ Title = "Cosmetics", Content = "Enter item name", Type = "Warning" })
-            return
-        end
-        
-        if equipCosmetic(selectedCategory.Key, name) then
-            Window:Notify({ 
-                Title = "Cosmetics", 
-                Content = "Equipped " .. name,
-                Type = "Success",
-                Duration = 3
-            })
-        else
-            Window:Notify({ Title = "Cosmetics", Content = "Failed to equip", Type = "Error" })
-        end
-    end,
-})
-
--- Секция: Быстрые действия
-local quickSec = cosmeticsTab:CreateSection({ Name = "Quick Actions", Icon = "zap" })
-
-quickSec:AddButton({
-    Name = "Add ALL Trails",
+invSec:AddButton({
+    Name = "Add ALL Trails to Inventory",
     Primary = true,
     Icon = "zap",
     Callback = function()
         local count = 0
-        for _, trail in ipairs(TRAILS_LIST) do
+        for _, trail in ipairs(ITEMS_BY_CATEGORY.Trails) do
             if addCosmetic("Trails", trail) then count = count + 1 end
         end
-        Window:Notify({ 
-            Title = "Cosmetics", 
+        Window:Notify({
+            Title = "Inventory",
             Content = "Added " .. count .. " trails",
             Type = "Success",
             Duration = 4
@@ -1264,7 +1213,7 @@ quickSec:AddButton({
     end,
 })
 
-quickSec:AddButton({
+invSec:AddButton({
     Name = "Clear Inventory",
     Icon = "trash",
     Callback = function()
@@ -1274,64 +1223,80 @@ quickSec:AddButton({
                 data.Owned[cat] = {}
             end
             setInventory(data)
-            Window:Notify({ Title = "Cosmetics", Content = "Inventory cleared", Type = "Info" })
+            Window:Notify({ Title = "Inventory", Content = "Inventory cleared", Type = "Info" })
         end
     end,
 })
 
-quickSec:AddButton({
-    Name = "Detect Equipped Trail",
-    Icon = "search",
+-- Быстрая экипировка по имени
+local quickNameBox = invSec:AddTextbox({
+    Name = "Quick Equip Name",
+    Placeholder = "Enter exact model name",
+})
+
+invSec:AddButton({
+    Name = "Quick Equip (by name)",
+    Icon = "zap",
     Callback = function()
-        local char = LocalPlayer.Character
-        if not char then
-            Window:Notify({ Title = "Detect", Content = "No character", Type = "Warning" })
+        local name = quickNameBox.Get()
+        if not name or name == "" then
+            Window:Notify({ Title = "Cosmetics", Content = "Enter a name", Type = "Warning" })
             return
         end
         
-        -- Сканируем все атрибуты персонажа
-        local found = {}
-        for attrName, attrVal in pairs(char:GetAttributes()) do
-            if type(attrVal) == "string" and attrVal ~= "" then
-                table.insert(found, attrName .. " = " .. tostring(attrVal))
-            end
-        end
-        
-        -- Сканируем ValueObjects в LocalPlayer
-        for _, obj in pairs(LocalPlayer:GetChildren()) do
-            if obj:IsA("ValueBase") then
-                table.insert(found, "[Player] " .. obj.Name .. " = " .. tostring(obj.Value))
-            end
-        end
-        
-        -- Сканируем JSON инвентаря
-        local data = getInventory()
-        if data then
-            for key, val in pairs(data) do
-                if type(val) ~= "table" then
-                    table.insert(found, "[JSON] " .. key .. " = " .. tostring(val))
-                end
-            end
-        end
-        
-        if #found == 0 then
-            Window:Notify({ Title = "Detect", Content = "Nothing found", Type = "Info" })
+        local success = equipCosmeticVisual(selectedCategoryKey, name)
+        if success then
+            lastEquipped[selectedCategoryKey] = name
+            Window:Notify({
+                Title = "Cosmetics",
+                Content = "Equipped " .. name,
+                Type = "Success"
+            })
         else
-            for _, info in ipairs(found) do
-                print("[MoroDetect] " .. info)
-            end
-            Window:Notify({ 
-                Title = "Detect", 
-                Content = "Found " .. #found .. " items. Check console (F9)",
-                Type = "Success",
-                Duration = 5
+            Window:Notify({
+                Title = "Cosmetics",
+                Content = "Model '" .. name .. "' not found",
+                Type = "Error"
             })
         end
     end,
 })
 
+invSec:AddButton({
+    Name = "Detect Available Models",
+    Icon = "search",
+    Callback = function()
+        local found = {}
+        for _, cat in ipairs(CATEGORY_KEYS) do
+            local folder = getModelsFolder(cat)
+            if folder then
+                local models = {}
+                for _, child in ipairs(folder:GetChildren()) do
+                    table.insert(models, child.Name)
+                end
+                table.insert(found, cat .. ": " .. #models .. " models")
+                print("[MoroDetect] " .. cat .. " folder: " .. folder:GetFullName())
+                for _, m in ipairs(models) do
+                    print("  - " .. m)
+                end
+            else
+                table.insert(found, cat .. ": NOT FOUND")
+            end
+        end
+        
+        local msg = table.concat(found, "\n")
+        print("[MoroDetect] Summary:\n" .. msg)
+        Window:Notify({
+            Title = "Detect",
+            Content = "Check console (F9) for detailed info",
+            Type = "Info",
+            Duration = 5
+        })
+    end,
+})
+
 -- ============================================================
--- [[ SETTINGS TAB (в самом низу сайдбара) ]] --
+-- [[ SETTINGS TAB ]] --
 -- ============================================================
 Window:AddSettingsTab()
 
@@ -1349,7 +1314,6 @@ RunService.RenderStepped:Connect(function()
     lookAtLoop()
     updateRing()
     
-    -- Трейсеры рендер
     if tracersEnabled then
         for _, player in pairs(Players:GetPlayers()) do
             if player == LocalPlayer then continue end
@@ -1357,7 +1321,6 @@ RunService.RenderStepped:Connect(function()
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             
-            -- Определяем, нужно ли показывать
             local show = false
             if hrp then
                 for _, category in ipairs(selectedCategories) do
@@ -1368,7 +1331,6 @@ RunService.RenderStepped:Connect(function()
                 end
             end
             
-            -- Если не показываем — скрываем линию (если она есть)
             if not show then
                 if lines[player.Name] then
                     pcall(function() lines[player.Name].Visible = false end)
@@ -1376,7 +1338,6 @@ RunService.RenderStepped:Connect(function()
                 continue
             end
             
-            -- Создаём линию, если её нет
             if not lines[player.Name] then
                 local success, line = pcall(function()
                     local l = Drawing.new("Line")
@@ -1391,7 +1352,6 @@ RunService.RenderStepped:Connect(function()
                 end
             end
             
-            -- Обновляем позицию и цвет
             local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
             if onScreen then
                 local pRoleObj = player:FindFirstChild("PlayerRole")
