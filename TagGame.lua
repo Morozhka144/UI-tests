@@ -1,7 +1,6 @@
 -- [[ Services & Modules ]] --
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedFirst = game:GetService("ReplicatedFirst")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -18,6 +17,11 @@ local CIParryProjectileEvent = Utils.GetEvent("CIParryProjectile")
 local CIParryClientEvent = Utils.GetEvent("CIParryClient")
 local PlayerParryEvent = Utils.GetEvent("PlayerParry")
 
+-- Remotes для анимации и звука тага
+local SoundEvent = Utils.GetEvent("SoundEvent")
+local AnimateEvent = Utils.GetEvent("AnimateEvent")
+local TagSwing = Utils.GetEvent("TagSwing")
+
 -- [[ Global Settings for UI ]] --
 _G.AutoTagEnabled = false
 _G.AutoParryEnabled = false
@@ -31,7 +35,54 @@ local function getHRP()
 end
 
 -- ============================================================
--- [[ ATTRIBUTE BOOSTERS (Anti-Reset Logic) ]] --
+-- [[ VISUALIZER RINGS (Кольца на земле) ]] --
+-- ============================================================
+local function createRing(color)
+    local ring = Instance.new("MeshPart")
+    ring.Name = "MoroAuraRing"
+    ring.MeshId = "rbxassetid://132363353" -- Встроенный Torus (Бублик/Кольцо)
+    ring.Material = Enum.Material.Neon
+    ring.Color = color
+    ring.Transparency = 1 -- Скрыто по умолчанию
+    ring.CanCollide = false
+    ring.Anchored = true
+    ring.Parent = workspace
+    return ring
+end
+
+local killAuraRing = createRing(Color3.fromRGB(255, 0, 0))   -- Красное
+local parryRing = createRing(Color3.fromRGB(0, 255, 0))      -- Зеленое
+
+local function updateRings()
+    local hrp = getHRP()
+    if hrp then
+        -- Позиция чуть ниже ног персонажа
+        local pos = hrp.Position - Vector3.new(0, (hrp.Size.Y / 2) + 0.1, 0)
+        local cf = CFrame.new(pos) * CFrame.Angles(math.rad(90), 0, 0)
+        
+        if _G.AutoTagEnabled then
+            killAuraRing.CFrame = cf
+            killAuraRing.Size = Vector3.new(_G.KillAuraRange * 2, _G.KillAuraRange * 2, 0.3)
+            killAuraRing.Transparency = 0.5
+        else
+            killAuraRing.Transparency = 1
+        end
+        
+        if _G.AutoParryEnabled then
+            parryRing.CFrame = cf
+            parryRing.Size = Vector3.new(_G.AutoParryRange * 2, _G.AutoParryRange * 2, 0.3)
+            parryRing.Transparency = 0.5
+        else
+            parryRing.Transparency = 1
+        end
+    else
+        killAuraRing.Transparency = 1
+        parryRing.Transparency = 1
+    end
+end
+
+-- ============================================================
+-- [[ ATTRIBUTE BOOSTERS (Исправлен сброс) ]] --
 -- ============================================================
 local baseAttributes = {
     ["AccelerationMultiplier"] = 3, ["RunSpeedMultiplier"] = 1.01,
@@ -51,18 +102,16 @@ local function applyAllBoosts()
     if not roleObj then return end
     
     for attr, data in pairs(boosters) do
-        if data.enabled then
-            local targetVal = data.base * data.mult
-            -- Принудительно выставляем каждый кадр, чтобы игра не сбросила при смене роли
-            if roleObj:GetAttribute(attr) ~= targetVal then
-                roleObj:SetAttribute(attr, targetVal)
-            end
+        -- ИСПРАВЛЕНИЕ: Если выключено, возвращаем base. Если включено - base * mult
+        local targetVal = data.enabled and (data.base * data.mult) or data.base
+        if roleObj:GetAttribute(attr) ~= targetVal then
+            roleObj:SetAttribute(attr, targetVal)
         end
     end
 end
 
 -- ============================================================
--- [[ AUTO-TAG (KILL AURA) ]] --
+-- [[ AUTO-TAG (KILL AURA) + АНИМАЦИЯ ]] --
 -- ============================================================
 local function autoTagLoop()
     if not _G.AutoTagEnabled then return end
@@ -102,7 +151,17 @@ local function autoTagLoop()
                 buffer.writeu16(buf, 3, compress(a2))
                 buffer.writeu16(buf, 5, compress(a3))
                 
-                pcall(function() TagPlayerEvent:InvokeServer(buf) end)
+                local s, res = pcall(function() return TagPlayerEvent:InvokeServer(buf) end)
+                
+                -- Если сервер принял таг, проигрываем локальную анимацию и звук
+                if s and res then
+                    pcall(function() SoundEvent:Fire("Tag", hrp, 0.25, true) end)
+                    
+                    -- Рассчитываем скорость анимации на основе кулдауна
+                    local tagSpeed = 1 / (boosters.TagCooldown.enabled and (boosters.TagCooldown.base * boosters.TagCooldown.mult) or boosters.TagCooldown.base)
+                    pcall(function() AnimateEvent:Fire("Tag", 0.1, tagSpeed) end)
+                    pcall(function() TagSwing:Fire() end)
+                end
             end
         end
     end
@@ -143,7 +202,6 @@ local function lookAtLoop()
     local targetHrp = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not targetHrp then return end
     
-    -- Жесткий лок камеры на цель каждый кадр
     Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetHrp.Position)
 end
 
@@ -465,12 +523,13 @@ hitboxSec:AddToggle({
 RunService.Heartbeat:Connect(function()
     autoTagLoop()
     autoParryLoop()
-    applyAllBoosts() -- Гарантируем, что множители не сбросятся
+    applyAllBoosts() 
     updateHitboxes()
 end)
 
 RunService.RenderStepped:Connect(function()
     lookAtLoop()
+    updateRings() -- Обновляем позицию и прозрачность колец
     
     -- Tracers Render
     if tracersEnabled then
