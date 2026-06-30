@@ -97,15 +97,11 @@ local function updateRing()
         local pos = Vector3.new(hrp.Position.X, floorY, hrp.Position.Z)
         local radius = _G.KillAuraRange
         
-        -- ПОВОРАЧИВАЕМ цилиндр горизонтально (на 90° вокруг оси X)
-        local horizontalCFrame = CFrame.new(pos) * CFrame.Angles(math.rad(90), 0, 0)
-        
-        -- Размер для ГОРИЗОНТАЛЬНОГО цилиндра: (диаметр X, толщина Y, диаметр Z)
-        killAuraRingOuter.CFrame = horizontalCFrame
+        killAuraRingOuter.CFrame = CFrame.new(pos)
         killAuraRingOuter.Size = Vector3.new(radius * 2, 0.2, radius * 2)
         killAuraRingOuter.Transparency = 0.4
         
-        killAuraRingInner.CFrame = horizontalCFrame
+        killAuraRingInner.CFrame = CFrame.new(pos)
         killAuraRingInner.Size = Vector3.new((radius - 0.5) * 2, 0.3, (radius - 0.5) * 2)
     else
         killAuraRingOuter.Transparency = 1
@@ -149,6 +145,23 @@ local IGNORED_ROLES = {
     ["Tagger"] = true, ["HotBomb"] = true, ["Chiller"] = true, ["OOF"] = true
 }
 
+local losRayParams = RaycastParams.new()
+losRayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function hasLineOfSight(fromPos, toPos, myChar, targetChar)
+    losRayParams.FilterDescendantsInstances = {myChar, targetChar}
+    
+    local direction = toPos - fromPos
+    local distance = direction.Magnitude
+    
+    local ray = workspace:Raycast(fromPos, direction, losRayParams)
+
+    if not ray then return true end
+    if ray.Distance >= distance - 0.5 then return true end
+    
+    return false
+end
+
 local function autoTagLoop()
     if not _G.AutoTagEnabled then return end
     local hrp = getHRP()
@@ -157,24 +170,37 @@ local function autoTagLoop()
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     local closestTarget, closestDist = nil, _G.KillAuraRange
     
+    local myChar = LocalPlayer.Character
+    
     for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
-        if char ~= LocalPlayer.Character and char:FindFirstChild("HumanoidRootPart") then
+        if char ~= myChar and char:FindFirstChild("HumanoidRootPart") then
             local targetPlayer = Players:GetPlayerFromCharacter(char)
             local targetRole = targetPlayer and targetPlayer:FindFirstChild("PlayerRole") and targetPlayer.PlayerRole.Value
             
-            if targetRole and IGNORED_ROLES[targetRole] then continue end
-
             if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
             if myRole == "Chiller" and targetRole == "Frozen" then continue end
             if myRole == "Runner" and targetRole == "Chiller" then continue end
-            if myRole ~= "Alone" and myRole == targetRole then continue end
+            
+            if myRole ~= "Alone" then
+                if myRole and targetRole and myRole == targetRole then continue end
+            end
+            
             if targetRole and IGNORED_ROLES[targetRole] then continue end
             
             local targetHRP = char.HumanoidRootPart
             local dist = (targetHRP.Position - hrp.Position).Magnitude
+            
+            -- Проверка дистанции
             if dist < closestDist then
-                closestDist = dist
-                closestTarget = char
+                -- НОВАЯ ПРОВЕРКА: видимость сквозь стены
+                -- Стреляем луч от глаз (HRP + 1.5 по Y) к HRP цели
+                local eyePos = hrp.Position + Vector3.new(0, 1.5, 0)
+                local targetPos = targetHRP.Position
+                
+                if hasLineOfSight(eyePos, targetPos, myChar, char) then
+                    closestDist = dist
+                    closestTarget = char
+                end
             end
         end
     end
@@ -521,28 +547,28 @@ Players.PlayerRemoving:Connect(function(player)
     clearTracerCache(player.Name)
 end)
 
-local TAGGER_ROLES = {
-    "Tagger", "Infected", "PatientZero", "FastInfected", "BabyInfected",
-    "JumpingInfected", "BigInfected", "CloakInfected", "InfectedRunner",
-    "Slasher", "HiddenSlasher", "Haunter", "FFATagger", "SlapFFATagger",
-    "Seeker", "Overseer", "Assassin", "Eliminator", "Juggernaut", "Hunter",
-    "Freezer", "Chiller", "Arsonist", "Toxic", "RunnerTagger", "Frozen"
-}
-
 local function isEnemy(player)
-    -- OOF и Frozen игроки НЕ считаются врагами — у них свои категории
+    -- OOF и Frozen — это отдельные категории, не враги
     if isOOF(player) or isFrozen(player) then return false end
     
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
     local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
     if not myRole or not theirRole then return false end
     
-    -- Не считаем себя врагом
-    if player == LocalPlayer then return false end
+    -- Враг = роль другая ИЛИ я в FFA-режиме (Alone)
+    return myRole ~= theirRole or myRole == "Alone"
+end
+
+local function isMyTeam(player)
+    -- OOF и Frozen — это отдельные категории
+    if isOOF(player) or isFrozen(player) then return false end
     
-    local iAmTagger = table.find(TAGGER_ROLES, myRole) ~= nil
-    local theyAreTagger = table.find(TAGGER_ROLES, theirRole) ~= nil
-    return iAmTagger ~= theyAreTagger
+    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
+    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+    if not myRole or not theirRole then return false end
+    
+    -- Моя команда = та же роль, но НЕ Alone и НЕ OOF
+    return myRole == theirRole and myRole ~= "Alone" and myRole ~= "OOF"
 end
 
 local function isMyTeam(player)
@@ -794,7 +820,7 @@ autoTagSec:AddSlider({
     Callback = function(val) _G.KillAuraRange = val end,
 })
 autoTagSec:AddToggle({
-    Name = "Show Ring", Icon = "circle", Default = true,
+    Name = "Show Ring", Icon = "circle", Default = false,
     Callback = function(state) _G.ShowKillAuraRing = state end,
 })
 
@@ -884,14 +910,33 @@ RunService.RenderStepped:Connect(function()
             if player == LocalPlayer then continue end
             
             local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
             
-            -- Создаём линию заранее (даже если персонажа пока нет)
+            -- Определяем, нужно ли показывать
+            local show = false
+            if hrp then
+                for _, category in ipairs(selectedCategories) do
+                    if category == "Enemies" and isEnemy(player) then show = true break end
+                    if category == "My Team" and isMyTeam(player) then show = true break end
+                    if category == "OOF" and isOOF(player) then show = true break end
+                    if category == "Frozen" and isFrozen(player) then show = true break end
+                end
+            end
+            
+            -- Если не показываем — скрываем линию (если она есть)
+            if not show then
+                if lines[player.Name] then
+                    pcall(function() lines[player.Name].Visible = false end)
+                end
+                continue
+            end
+            
+            -- Создаём линию, если её нет
             if not lines[player.Name] then
                 local success, line = pcall(function()
                     local l = Drawing.new("Line")
                     l.Thickness = 1.5
                     l.Color = Color3.new(1, 1, 1)
-                    l.Visible = false
                     return l
                 end)
                 if success and line then
@@ -901,42 +946,18 @@ RunService.RenderStepped:Connect(function()
                 end
             end
             
-            -- Если персонажа нет или нет HRP — скрываем линию
-            if not char then
-                pcall(function() lines[player.Name].Visible = false end)
-                continue
-            end
-            
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if not hrp then
-                pcall(function() lines[player.Name].Visible = false end)
-                continue
-            end
-            
-            -- Проверяем категории
-            local show = false
-            for _, category in ipairs(selectedCategories) do
-                if category == "Enemies" and isEnemy(player) then show = true break end
-                if category == "My Team" and isMyTeam(player) then show = true break end
-                if category == "OOF" and isOOF(player) then show = true break end
-                if category == "Frozen" and isFrozen(player) then show = true break end
-            end
-            
-            if show then
-                local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-                if onScreen then
-                    local pRoleObj = player:FindFirstChild("PlayerRole")
-                    local pRole = pRoleObj and pRoleObj.Value
-                    
-                    pcall(function()
-                        lines[player.Name].From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
-                        lines[player.Name].To = Vector2.new(pos.X, pos.Y)
-                        lines[player.Name].Color = getRoleColor(pRole)
-                        lines[player.Name].Visible = true
-                    end)
-                else
-                    pcall(function() lines[player.Name].Visible = false end)
-                end
+            -- Обновляем позицию и цвет
+            local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+            if onScreen then
+                local pRoleObj = player:FindFirstChild("PlayerRole")
+                local pRole = pRoleObj and pRoleObj.Value
+                
+                pcall(function()
+                    lines[player.Name].From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                    lines[player.Name].To = Vector2.new(pos.X, pos.Y)
+                    lines[player.Name].Color = getRoleColor(pRole)
+                    lines[player.Name].Visible = true
+                end)
             else
                 pcall(function() lines[player.Name].Visible = false end)
             end
