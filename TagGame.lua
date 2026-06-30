@@ -17,7 +17,6 @@ local CIParryProjectileEvent = Utils.GetEvent("CIParryProjectile")
 local CIParryClientEvent = Utils.GetEvent("CIParryClient")
 local PlayerParryEvent = Utils.GetEvent("PlayerParry")
 
--- Remotes для анимации и звука тага
 local SoundEvent = Utils.GetEvent("SoundEvent")
 local AnimateEvent = Utils.GetEvent("AnimateEvent")
 local TagSwing = Utils.GetEvent("TagSwing")
@@ -35,55 +34,34 @@ local function getHRP()
 end
 
 -- ============================================================
--- [[ VISUALIZER RINGS (Кольца на земле) ]] --
+-- [[ VISUALIZER RING (только для Kill Aura) ]] --
 -- ============================================================
-local function createRing(color)
-    local ring = Instance.new("Part")
-    ring.Name = "MoroAuraRing"
-    ring.Shape = Enum.PartType.Cylinder
-    ring.Material = Enum.Material.Neon
-    ring.Color = color
-    ring.Transparency = 0.6
-    ring.CanCollide = false
-    ring.Anchored = true
-    ring.TopSurface = Enum.SurfaceType.Smooth
-    ring.BottomSurface = Enum.SurfaceType.Smooth
-    ring.Parent = workspace
-    return ring
-end
+local killAuraRing = Instance.new("Part")
+killAuraRing.Name = "MoroKillAuraRing"
+killAuraRing.Shape = Enum.PartType.Cylinder
+killAuraRing.Material = Enum.Material.Neon
+killAuraRing.Color = Color3.fromRGB(255, 0, 0)
+killAuraRing.Transparency = 1
+killAuraRing.CanCollide = false
+killAuraRing.Anchored = true
+killAuraRing.TopSurface = Enum.SurfaceType.Smooth
+killAuraRing.BottomSurface = Enum.SurfaceType.Smooth
+killAuraRing.Parent = workspace
 
-local killAuraRing = createRing(Color3.fromRGB(255, 0, 0))   -- Красное
-local parryRing = createRing(Color3.fromRGB(0, 255, 0))      -- Зеленое
-
-local function updateRings()
+local function updateRing()
     local hrp = getHRP()
-    if hrp then
-        -- Позиция чуть ниже ног персонажа
+    if hrp and _G.AutoTagEnabled then
         local pos = hrp.Position - Vector3.new(0, (hrp.Size.Y / 2) + 0.05, 0)
-        
-        if _G.AutoTagEnabled then
-            killAuraRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
-            killAuraRing.Size = Vector3.new(0.2, _G.KillAuraRange * 2, _G.KillAuraRange * 2)
-            killAuraRing.Transparency = 0.6
-        else
-            killAuraRing.Transparency = 1
-        end
-        
-        if _G.AutoParryEnabled then
-            parryRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
-            parryRing.Size = Vector3.new(0.2, _G.AutoParryRange * 2, _G.AutoParryRange * 2)
-            parryRing.Transparency = 0.6
-        else
-            parryRing.Transparency = 1
-        end
+        killAuraRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+        killAuraRing.Size = Vector3.new(0.2, _G.KillAuraRange * 2, _G.KillAuraRange * 2)
+        killAuraRing.Transparency = 0.6
     else
         killAuraRing.Transparency = 1
-        parryRing.Transparency = 1
     end
 end
 
 -- ============================================================
--- [[ ATTRIBUTE BOOSTERS (Исправлен сброс) ]] --
+-- [[ ATTRIBUTE BOOSTERS ]] --
 -- ============================================================
 local baseAttributes = {
     ["AccelerationMultiplier"] = 3, ["RunSpeedMultiplier"] = 1.01,
@@ -103,7 +81,6 @@ local function applyAllBoosts()
     if not roleObj then return end
     
     for attr, data in pairs(boosters) do
-        -- ИСПРАВЛЕНИЕ: Если выключено, возвращаем base. Если включено - base * mult
         local targetVal = data.enabled and (data.base * data.mult) or data.base
         if roleObj:GetAttribute(attr) ~= targetVal then
             roleObj:SetAttribute(attr, targetVal)
@@ -112,31 +89,29 @@ local function applyAllBoosts()
 end
 
 -- ============================================================
--- [[ AUTO-TAG (KILL AURA) + АНИМАЦИЯ ]] --
+-- [[ AUTO-TAG (KILL AURA) ]] --
 -- ============================================================
+local IGNORED_ROLES = {
+    ["Bomb"] = true, ["PatientZero"] = true, ["Infected"] = true,
+    ["Tagger"] = true, ["HotBomb"] = true, ["Chiller"] = true, ["OOF"] = true
+}
+
 local function autoTagLoop()
     if not _G.AutoTagEnabled then return end
     local hrp = getHRP()
     if not hrp then return end
     
-    local closestTarget, closestDist = nil, _G.KillAuraRange
     local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
-    local IGNORED_ROLES = {
-        ["Bomb"] = true, 
-        ["PatientZero"] = true, 
-        ["Infected"] = true, 
-        ["Tagger"] = true, 
-        ["HotBomb"] = true, 
-        ["Chiller"] = true, 
-        ["OOF"] = true
-    }
+    local closestTarget, closestDist = nil, _G.KillAuraRange
     
     for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
         if char ~= LocalPlayer.Character and char:FindFirstChild("HumanoidRootPart") then
             local targetPlayer = Players:GetPlayerFromCharacter(char)
             local targetRole = targetPlayer and targetPlayer:FindFirstChild("PlayerRole") and targetPlayer.PlayerRole.Value
+            
             if myRole and targetRole and myRole == targetRole then continue end
             if targetRole and IGNORED_ROLES[targetRole] then continue end
+            
             local targetHRP = char.HumanoidRootPart
             local dist = (targetHRP.Position - hrp.Position).Magnitude
             if dist < closestDist then
@@ -168,11 +143,8 @@ local function autoTagLoop()
                 
                 local s, res = pcall(function() return TagPlayerEvent:InvokeServer(buf) end)
                 
-                -- Если сервер принял таг, проигрываем локальную анимацию и звук
                 if s and res then
                     pcall(function() SoundEvent:Fire("Tag", hrp, 0.25, true) end)
-                    
-                    -- Рассчитываем скорость анимации на основе кулдауна
                     local tagSpeed = 1 / (boosters.TagCooldown.enabled and (boosters.TagCooldown.base * boosters.TagCooldown.mult) or boosters.TagCooldown.base)
                     pcall(function() AnimateEvent:Fire("Tag", 0.1, tagSpeed) end)
                     pcall(function() TagSwing:Fire() end)
@@ -195,7 +167,6 @@ local function autoParryLoop()
             local dist = (projectile.Position - hrp.Position).Magnitude
             if dist < _G.AutoParryRange then
                 local lookVector = CFrame.new(hrp.Position, projectile.Position).LookVector
-                
                 pcall(function() CIParryProjectileEvent:InvokeServer(projectile, lookVector) end)
                 pcall(function() CIParryClientEvent:Fire() end)
                 pcall(function() PlayerParryEvent:FireServer() end)
@@ -216,7 +187,6 @@ local function lookAtLoop()
     if not targetPlayer or not targetPlayer.Character then return end
     local targetHrp = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not targetHrp then return end
-    
     Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetHrp.Position)
 end
 
@@ -237,12 +207,10 @@ local function createHitboxPart(part, multiplier)
     hitbox.Anchored = false
     hitbox.Size = part.Size * multiplier
     hitbox.CFrame = part.CFrame
-    
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = part
     weld.Part1 = hitbox
     weld.Parent = hitbox
-    
     hitbox.Parent = part
     return hitbox
 end
@@ -257,7 +225,6 @@ local function updateHitboxes()
         hitboxCache = {}
         return
     end
-    
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local char = player.Character
@@ -285,11 +252,52 @@ local function updateHitboxes()
 end
 
 -- ============================================================
--- [[ TRACERS ]] --
+-- [[ TRACERS ]] — с категориями и цветными ролями
 -- ============================================================
 local tracersEnabled = false
-local selectedRoles = {}
+local selectedCategories = {}
 local lines = {}
+
+local TAGGER_ROLES = {
+    "Tagger", "Infected", "PatientZero", "FastInfected", "BabyInfected",
+    "JumpingInfected", "BigInfected", "CloakInfected", "InfectedRunner",
+    "Slasher", "HiddenSlasher", "Haunter", "FFATagger", "SlapFFATagger",
+    "Seeker", "Overseer", "Assassin", "Eliminator", "Juggernaut", "Hunter",
+    "Freezer", "Chiller", "Arsonist", "Toxic", "RunnerTagger"
+}
+
+local function isEnemy(player)
+    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
+    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+    if not myRole or not theirRole then return false end
+    local iAmTagger = table.find(TAGGER_ROLES, myRole) ~= nil
+    local theyAreTagger = table.find(TAGGER_ROLES, theirRole) ~= nil
+    return iAmTagger ~= theyAreTagger
+end
+
+local function isMyTeam(player)
+    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
+    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+    if not myRole or not theirRole then return false end
+    return myRole == theirRole
+end
+
+local function isOOF(player)
+    local char = player.Character
+    if not char then return false end
+    return char:GetAttribute("OOF") == true or
+           char:GetAttribute("Eliminated") == true or
+           char:GetAttribute("Dead") == true or
+           (char:FindFirstChild("Humanoid") and char.Humanoid.Health <= 0)
+end
+
+local function isFrozen(player)
+    local char = player.Character
+    if not char then return false end
+    return char:GetAttribute("Frozen") == true or
+           char:GetAttribute("Chilled") == true or
+           char:GetAttribute("Ice") == true
+end
 
 local roleColors = {
     ["Crown"] = Color3.fromRGB(255, 215, 0), ["Monarch"] = Color3.fromRGB(255, 215, 0),
@@ -306,7 +314,7 @@ local roleColors = {
 local function getRoleColor(role) return roleColors[role] or Color3.fromRGB(255, 255, 255) end
 
 -- ============================================================
--- [[ UI INITIALIZATION ]] --
+-- [[ UI ]] --
 -- ============================================================
 local Lumina = loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"))()
 local Window = Lumina:CreateWindow({ Title = "MoroLumina | Evade" })
@@ -405,33 +413,38 @@ headSec:AddSlider({
     Callback = function(v) boosters.HeadSizeMultiplier.mult = v; applyAllBoosts() end,
 })
 
+-- Правая колонка — ТРЕЙСЕРЫ ПО КАТЕГОРИЯМ
 visualsTab:Column("right")
 local tracerSec = visualsTab:CreateSection({ Name = "Tracers", Icon = "crosshair" })
 tracerSec:AddToggle({
     Name = "Enable Tracers", Icon = "crosshair", Default = false,
     Callback = function(state)
         tracersEnabled = state
-        if not state then for _, l in pairs(lines) do if l and l.Visible ~= nil then l.Visible = false end end end
+        if not state then
+            for _, l in pairs(lines) do
+                if l and l.Visible ~= nil then l.Visible = false end
+            end
+        end
     end,
 })
 
-local roleList = {
-    "Runner", "Tagger", "Infected", "PatientZero", "FastInfected", "BabyInfected",
-    "JumpingInfected", "BigInfected", "CloakInfected", "Medic", "InfectedRunner",
-    "pingus", "HiddenBeing", "Spectator", "Hider", "Seeker", "Overseer", "Bodyguard",
-    "Assassin", "Target", "Bomb", "AshyBomb", "Nuke", "HotBomb", "Slasher",
-    "HiddenSlasher", "Haunter", "FFATagger", "SlapFFATagger", "Crown", "Monarch",
-    "Peasant", "Baron", "Knight", "Eliminator", "Juggernaut", "Hunter", "Freezer",
-    "Chiller", "Arsonist", "Burning", "FunnyBomb", "SubspaceBomb", "RunnerTagger", "Toxic"
-}
-
-local roleDropdown = tracerSec:AddMultiDropdown({
-    Name = "Select Roles", Icon = "users", Options = roleList, Default = {},
-    Callback = function(values) selectedRoles = values end,
+-- НОВЫЙ MultiDropdown с категориями (вместо ролей)
+local categoryDropdown = tracerSec:AddMultiDropdown({
+    Name = "Select Categories",
+    Icon = "users",
+    Options = {"Enemies", "My Team", "OOF", "Frozen"},
+    Default = {},
+    Callback = function(values) selectedCategories = values end,
 })
 
-tracerSec:AddButton({ Name = "Select All", Icon = "check-square", Callback = function() roleDropdown.SelectAll() end })
-tracerSec:AddButton({ Name = "Clear All", Icon = "x-square", Callback = function() roleDropdown.ClearAll() end })
+tracerSec:AddButton({
+    Name = "Select All", Icon = "check-square",
+    Callback = function() categoryDropdown.SelectAll() end,
+})
+tracerSec:AddButton({
+    Name = "Clear All", Icon = "x-square",
+    Callback = function() categoryDropdown.ClearAll() end,
+})
 
 -- ===================== COMBAT TAB =====================
 local combatTab = Window:CreateTab({ Name = "Combat", Icon = "crosshair" })
@@ -472,7 +485,6 @@ tagKbSec:AddSlider({
 })
 
 combatTab:Column("right")
--- Auto Tag
 local autoTagSec = combatTab:CreateSection({ Name = "Auto Tag", Icon = "zap" })
 autoTagSec:AddToggle({
     Name = "Auto Tag (Kill Aura)", Icon = "zap", Default = false,
@@ -483,7 +495,6 @@ autoTagSec:AddSlider({
     Callback = function(val) _G.KillAuraRange = val end,
 })
 
--- Auto Parry
 local autoParrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
 autoParrySec:AddToggle({
     Name = "Auto Parry", Icon = "shield", Default = false,
@@ -494,18 +505,15 @@ autoParrySec:AddSlider({
     Callback = function(val) _G.AutoParryRange = val end,
 })
 
--- Look At Player
 local lookSec = combatTab:CreateSection({ Name = "Look At Player", Icon = "eye" })
 lookSec:AddToggle({
     Name = "Enable Look At", Icon = "eye", Default = false,
     Callback = function(state) lookAtEnabled = state end,
 })
-
 local targetDrop = lookSec:AddDropdown({
     Name = "Select Target", Icon = "user", Options = {},
     Callback = function(val) lookAtTarget = val end,
 })
-
 lookSec:AddButton({
     Name = "Refresh Players", Icon = "refresh-cw",
     Callback = function()
@@ -517,7 +525,6 @@ lookSec:AddButton({
     end,
 })
 
--- Hitbox Expander
 local hitboxSec = combatTab:CreateSection({ Name = "Hitbox Expander", Icon = "box" })
 hitboxSec:AddToggle({
     Name = "Enable Hitbox", Icon = "box", Default = false,
@@ -538,15 +545,15 @@ hitboxSec:AddToggle({
 RunService.Heartbeat:Connect(function()
     autoTagLoop()
     autoParryLoop()
-    applyAllBoosts() 
+    applyAllBoosts()
     updateHitboxes()
 end)
 
 RunService.RenderStepped:Connect(function()
     lookAtLoop()
-    updateRings() -- Обновляем позицию и прозрачность колец
+    updateRing()
     
-    -- Tracers Render
+    -- Трейсеры рендер
     if tracersEnabled then
         for _, player in pairs(Players:GetPlayers()) do
             if player == LocalPlayer or not player.Character then continue end
@@ -565,6 +572,7 @@ RunService.RenderStepped:Connect(function()
             local pRoleObj = player:FindFirstChild("PlayerRole")
             local pRole = pRoleObj and pRoleObj.Value
 
+            -- Проверяем категории
             local show = false
             if hrp then
                 for _, category in ipairs(selectedCategories) do
@@ -574,6 +582,7 @@ RunService.RenderStepped:Connect(function()
                     if category == "Frozen" and isFrozen(player) then show = true break end
                 end
             end
+
             if show then
                 local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
                 if onScreen then
