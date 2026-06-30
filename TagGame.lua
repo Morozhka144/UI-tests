@@ -38,14 +38,16 @@ end
 -- [[ VISUALIZER RINGS (Кольца на земле) ]] --
 -- ============================================================
 local function createRing(color)
-    local ring = Instance.new("MeshPart")
+    local ring = Instance.new("Part")
     ring.Name = "MoroAuraRing"
-    ring.MeshId = "rbxassetid://132363353" -- Встроенный Torus (Бублик/Кольцо)
+    ring.Shape = Enum.PartType.Cylinder
     ring.Material = Enum.Material.Neon
     ring.Color = color
-    ring.Transparency = 1 -- Скрыто по умолчанию
+    ring.Transparency = 0.6
     ring.CanCollide = false
     ring.Anchored = true
+    ring.TopSurface = Enum.SurfaceType.Smooth
+    ring.BottomSurface = Enum.SurfaceType.Smooth
     ring.Parent = workspace
     return ring
 end
@@ -57,21 +59,20 @@ local function updateRings()
     local hrp = getHRP()
     if hrp then
         -- Позиция чуть ниже ног персонажа
-        local pos = hrp.Position - Vector3.new(0, (hrp.Size.Y / 2) + 0.1, 0)
-        local cf = CFrame.new(pos) * CFrame.Angles(math.rad(90), 0, 0)
+        local pos = hrp.Position - Vector3.new(0, (hrp.Size.Y / 2) + 0.05, 0)
         
         if _G.AutoTagEnabled then
-            killAuraRing.CFrame = cf
-            killAuraRing.Size = Vector3.new(_G.KillAuraRange * 2, _G.KillAuraRange * 2, 0.3)
-            killAuraRing.Transparency = 0.5
+            killAuraRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+            killAuraRing.Size = Vector3.new(0.2, _G.KillAuraRange * 2, _G.KillAuraRange * 2)
+            killAuraRing.Transparency = 0.6
         else
             killAuraRing.Transparency = 1
         end
         
         if _G.AutoParryEnabled then
-            parryRing.CFrame = cf
-            parryRing.Size = Vector3.new(_G.AutoParryRange * 2, _G.AutoParryRange * 2, 0.3)
-            parryRing.Transparency = 0.5
+            parryRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+            parryRing.Size = Vector3.new(0.2, _G.AutoParryRange * 2, _G.AutoParryRange * 2)
+            parryRing.Transparency = 0.6
         else
             parryRing.Transparency = 1
         end
@@ -119,9 +120,23 @@ local function autoTagLoop()
     if not hrp then return end
     
     local closestTarget, closestDist = nil, _G.KillAuraRange
+    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
+    local IGNORED_ROLES = {
+        ["Bomb"] = true, 
+        ["PatientZero"] = true, 
+        ["Infected"] = true, 
+        ["Tagger"] = true, 
+        ["HotBomb"] = true, 
+        ["Chiller"] = true, 
+        ["OOF"] = true
+    }
     
     for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
         if char ~= LocalPlayer.Character and char:FindFirstChild("HumanoidRootPart") then
+            local targetPlayer = Players:GetPlayerFromCharacter(char)
+            local targetRole = targetPlayer and targetPlayer:FindFirstChild("PlayerRole") and targetPlayer.PlayerRole.Value
+            if myRole and targetRole and myRole == targetRole then continue end
+            if targetRole and IGNORED_ROLES[targetRole] then continue end
             local targetHRP = char.HumanoidRootPart
             local dist = (targetHRP.Position - hrp.Position).Magnitude
             if dist < closestDist then
