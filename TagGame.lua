@@ -40,374 +40,22 @@ local function getHRP()
 end
 
 -- ============================================================
--- [[ ПЕРЕМЕННЫЕ КОСМЕТИКИ (динамические) ]] --
--- ============================================================
-local fakeCosmeticEnabled = true
-local selectedCosmeticCategory = "Trails"
-local selectedCosmeticModel = "Box"
-local currentFakeCosmetics = currentFakeCosmetics or {} -- category -> model instance
-local cosmeticsInstalled = cosmeticsInstalled or {}     -- category -> bool
-local lastEquipped = lastEquipped or {}                 -- category -> itemName
-
--- ============================================================
--- [[ ЗАЩИТА КОСМЕТИКИ ОТ УДАЛЕНИЯ ИГРОЙ ]] --
--- ============================================================
-local hookAvailable = (hookmetamethods ~= nil and getnamecallmethod ~= nil)
-
-if hookAvailable then
-    local oldNamecall
-    oldNamecall = hookmetamethods(game, "__namecall", function(self, ...)
-        local method = getnamecallmethod()
-        
-        if method == "Destroy" or method == "Remove" or method == "remove" then
-            for cat, instance in pairs(currentFakeCosmetics) do
-                if instance and (self == instance or (self.Parent and self:IsDescendantOf(instance))) then
-                    return nil
-                end
-            end
-        end
-        
-        return oldNamecall(self, ...)
-    end)
-    print("[MoroLumina]: Hook защита косметики активирована")
-else
-    print("[MoroLumina]: hookmetamethods недоступен, используем мониторинг")
-end
-
--- ============================================================
--- [[ МАППИНГ ИМЕН ПРЕДМЕТОВ К ИМЕНАМ МОДЕЛЕЙ В ИГРЕ ]] --
--- ============================================================
--- Списки предметов (Trails - полный список, Outfits - динамически)
-local ITEMS_BY_CATEGORY = {
-    Trails = {
-        "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
-        "Whirlpool", "Gradient", "LightGradient", "DarkGradient", "Error", "Tron",
-        "Tron2", "Vantablack", "ZFight", "Snarp", "AwesomeHumanTrail", "Visualizer",
-        "Freedom", "Solid", "Sparkletime", "BitWave", "Kinetic", "Cloudy", "Arithmetic",
-        "Arrow", "Subspace", "cape", "Encrypted", "Stinky", "DraculaWalker", "StarTrail",
-        "ghostrider", "HomingMissile", "SpeedCoilTrail", "StringLights", "Bonsai",
-        "Snowflakes", "Lovestruck", "Driftin", "CherryBlossom", "JetTrail", "StarRoot",
-        "IceSkates", "Tachophobia", "Ablaze", "Decorated Tree", "Snowflake Power",
-        "Knight", "TankKnight", "Boombox", "MeteorFists", "PersonalSun", "PentagonTrail",
-        "Spellbook", "NorthStarTrail", "CelestialHead", "YinYang", "Condiments",
-        "OverfilledBriefcase", "ACUnit", "HeartTrail", "RadioHead", "SaltNPepper",
-        "LovePower", "SecretSanta", "Circle", "Triangle", "StarBeam", "IdeaTrail",
-        "frostbite", "Sparklinghands", "Segmented", "Illusions", "GuppyTrail", "TESTING"
-    },
-    Outfits = {}, -- Будет заполнено динамически
-}
-
-local CATEGORY_KEYS = {"Trails", "Outfits"}
-
--- Функция для сканирования доступных аутфитов
-local function scanOutfits()
-    local outfits = {}
-    
-    -- Пробуем разные варианты папок
-    local possibleFolders = {
-        "Outfits", "Outfit", "outfits", "outfit",
-        "CharacterOutfits", "PlayerOutfits"
-    }
-    
-    for _, folderName in ipairs(possibleFolders) do
-        local folder = ReplicatedStorage:FindFirstChild(folderName)
-        if folder then
-            for _, child in ipairs(folder:GetChildren()) do
-                table.insert(outfits, child.Name)
-            end
-            break
-        end
-    end
-    
-    -- Если не нашли в ReplicatedStorage, пробуем ReplicatedFirst.content
-    if #outfits == 0 then
-        local content = ReplicatedFirst:FindFirstChild("content")
-        if content then
-            for _, folderName in ipairs(possibleFolders) do
-                local folder = content:FindFirstChild(folderName)
-                if folder then
-                    for _, child in ipairs(folder:GetChildren()) do
-                        table.insert(outfits, child.Name)
-                    end
-                    break
-                end
-            end
-        end
-    end
-    
-    return outfits
-end
-
--- Заполняем Outfits при старте
-ITEMS_BY_CATEGORY.Outfits = scanOutfits()
-
--- Возвращает имя модели для предмета в заданной категории
-local function getModelName(category, itemName)
-    local map = MODEL_NAME_MAP[category]
-    if map and map[itemName] then
-        return map[itemName]
-    end
-    -- Если нет в маппинге — пробуем имя как есть
-    return itemName
-end
-
--- Ищет папку с моделями для категории в ReplicatedStorage
-local function getModelsFolder(category)
-    -- Пробуем разные варианты названий папок
-    local possibleNames = {
-        category,                              -- "Trails"
-        category:sub(1, -2),                   -- "Trail" (без s)
-        category .. "Folder",                  -- "TrailsFolder"
-        category:lower(),                      -- "trails"
-    }
-    
-    for _, name in ipairs(possibleNames) do
-        local folder = ReplicatedStorage:FindFirstChild(name)
-        if folder then return folder end
-    end
-    
-    -- Если нет в ReplicatedStorage, пробуем ReplicatedFirst.content
-    local content = ReplicatedFirst:FindFirstChild("content")
-    if content then
-        for _, name in ipairs(possibleNames) do
-            local folder = content:FindFirstChild(name)
-            if folder then return folder end
-        end
-    end
-    
-    return nil
-end
-
--- ============================================================
--- [[ ФУНКЦИИ ЭКИПИРОВКИ/СНЯТИЯ КОСМЕТИКИ ]] --
--- ============================================================
-local function unequipCosmetic(category)
-    local instance = currentFakeCosmetics[category]
-    if instance then
-        pcall(function() instance:Destroy() end)
-        currentFakeCosmetics[category] = nil
-        cosmeticsInstalled[category] = false
-    end
-    
-    -- Удаляем атрибут с персонажа
-    local char = LocalPlayer.Character
-    if char then
-        local attrName = "Equipped" .. category
-        pcall(function() char:SetAttribute(attrName, nil) end)
-    end
-    
-    print("[MoroLumina]: Снята косметика категории " .. category)
-end
-
-local function equipCosmeticVisual(category, itemName)
-    local char = LocalPlayer.Character
-    if not char then return false end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    
-    -- Снимаем старую косметику этой категории
-    unequipCosmetic(category)
-    
-    if not fakeCosmeticEnabled then return false end
-    
-    local folder = getModelsFolder(category)
-    if not folder then
-        warn("[MoroLumina]: Папка для категории " .. category .. " не найдена")
-        return false
-    end
-    
-    local modelName = getModelName(category, itemName)
-    local originalModel = folder:FindFirstChild(modelName)
-    
-    if not originalModel then
-        -- Пробуем найти по другим вариантам
-        for _, child in ipairs(folder:GetChildren()) do
-            if child.Name:lower() == modelName:lower() then
-                originalModel = child
-                break
-            end
-        end
-    end
-    
-    if not originalModel then
-        warn("[MoroLumina]: Модель '" .. modelName .. "' не найдена в папке " .. category)
-        return false
-    end
-    
-    -- Клонируем модель
-    local cloned = originalModel:Clone()
-    cloned.Parent = char
-    currentFakeCosmetics[category] = cloned
-    cosmeticsInstalled[category] = true
-    
-    -- Специальная логика для трейлов: настраиваем Attachment'ы
-    if category == "Trails" then
-        local trailComponent = cloned:FindFirstChildOfClass("Trail") or cloned
-        if trailComponent and trailComponent:IsA("Trail") then
-            local att0 = hrp:FindFirstChild("MoroTrailAtt0") or Instance.new("Attachment", hrp)
-            att0.Name = "MoroTrailAtt0"
-            att0.Position = Vector3.new(0, 1, 0)
-            
-            local att1 = hrp:FindFirstChild("MoroTrailAtt1") or Instance.new("Attachment", hrp)
-            att1.Name = "MoroTrailAtt1"
-            att1.Position = Vector3.new(0, -1, 0)
-            
-            trailComponent.Attachment0 = att0
-            trailComponent.Attachment1 = att1
-        end
-    end
-    
-    -- Устанавливаем атрибут на персонаже (чтобы другие скрипты знали)
-    pcall(function()
-        char:SetAttribute("Equipped" .. category, itemName)
-    end)
-    
-    print("[MoroLumina]: Экипирован " .. itemName .. " (" .. category .. ")")
-    return true
-end
-
--- ============================================================
--- [[ ПОСТОЯННАЯ ПРОВЕРКА: если игра удалила косметику — возвращаем ]] --
--- ============================================================
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        
-        if fakeCosmeticEnabled and LocalPlayer.Character then
-            -- Проверяем каждую категорию, которая была экипирована
-            if lastEquipped and type(lastEquipped) == "table" then
-                for category, itemName in pairs(lastEquipped) do
-                    local instance = currentFakeCosmetics and currentFakeCosmetics[category]
-                    
-                    -- Если экипировка пропала — восстанавливаем именно то, что было экипировано
-                    if not instance or not instance.Parent then
-                        print("[MoroLumina]: Восстанавливаем " .. tostring(category) .. " -> " .. tostring(itemName))
-                        if equipCosmeticVisual then
-                            pcall(equipCosmeticVisual, category, itemName)
-                        end
-                    elseif not hookAvailable then
-                        -- Дополнительная защита: если hook недоступен, проверяем видимость
-                        pcall(function()
-                            for _, descendant in ipairs(instance:GetDescendants()) do
-                                if descendant:IsA("Trail") or descendant:IsA("ParticleEmitter") then
-                                    descendant.Enabled = true
-                                end
-                            end
-                        end)
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- ============================================================
--- [[ ХУКАЕМ СПАВН ПЕРСОНАЖА ]] --
--- ============================================================
-LocalPlayer.CharacterAdded:Connect(function(character)
-    cosmeticsInstalled = {}
-    currentFakeCosmetics = {}
-    task.wait(1.5)
-    
-    -- Восстанавливаем экипированную косметику
-    if lastEquipped and type(lastEquipped) == "table" then
-        for category, itemName in pairs(lastEquipped) do
-            if equipCosmeticVisual then
-                pcall(equipCosmeticVisual, category, itemName)
-            end
-        end
-    end
-end)
-
-if LocalPlayer.Character then
-    task.defer(function()
-        task.wait(1.5)
-        for category, itemName in pairs(lastEquipped) do
-            equipCosmeticVisual(category, itemName)
-        end
-    end)
-end
-
--- ============================================================
--- [[ VISUALIZER RING (Кольцо на земле) ]] --
--- ============================================================
-local killAuraRingOuter = Instance.new("Part")
-killAuraRingOuter.Name = "MoroKillAuraRingOuter"
-killAuraRingOuter.Shape = Enum.PartType.Cylinder
-killAuraRingOuter.Size = Vector3.new(0.2, 30, 30)
-killAuraRingOuter.Material = Enum.Material.Neon
-killAuraRingOuter.Color = Color3.fromRGB(255, 0, 0)
-killAuraRingOuter.Transparency = 0.6
-killAuraRingOuter.CanCollide = false
-killAuraRingOuter.CanTouch = false
-killAuraRingOuter.CanQuery = false
-killAuraRingOuter.Massless = true
-killAuraRingOuter.Anchored = true
-killAuraRingOuter.TopSurface = Enum.SurfaceType.Smooth
-killAuraRingOuter.BottomSurface = Enum.SurfaceType.Smooth
-killAuraRingOuter.Parent = workspace
-
-local killAuraRingInner = Instance.new("Part")
-killAuraRingInner.Name = "MoroKillAuraRingInner"
-killAuraRingInner.Shape = Enum.PartType.Cylinder
-killAuraRingInner.Size = Vector3.new(0.3, 28, 28)
-killAuraRingInner.Material = Enum.Material.Neon
-killAuraRingInner.Color = Color3.fromRGB(0, 0, 0)
-killAuraRingInner.Transparency = 1
-killAuraRingInner.CanCollide = false
-killAuraRingInner.CanTouch = false
-killAuraRingInner.CanQuery = false
-killAuraRingInner.Massless = true
-killAuraRingInner.Anchored = true
-killAuraRingInner.TopSurface = Enum.SurfaceType.Smooth
-killAuraRingInner.BottomSurface = Enum.SurfaceType.Smooth
-killAuraRingInner.Parent = workspace
-
-local floorRayParams = RaycastParams.new()
-floorRayParams.FilterType = Enum.RaycastFilterType.Exclude
-floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-
-local function updateRing()
-    local hrp = getHRP()
-    if hrp and _G.AutoTagEnabled and _G.ShowKillAuraRing then
-        floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-        local ray = workspace:Raycast(
-            hrp.Position + Vector3.new(0, 2, 0),
-            Vector3.new(0, -50, 0),
-            floorRayParams
-        )
-        
-        local floorY
-        if ray then
-            floorY = ray.Position.Y + 0.05
-        else
-            floorY = hrp.Position.Y - (hrp.Size.Y / 2) - 2
-        end
-
-        local pos = Vector3.new(hrp.Position.X, floorY, hrp.Position.Z)
-        local radius = _G.KillAuraRange
-        
-        killAuraRingOuter.CFrame = CFrame.new(pos)
-        killAuraRingOuter.Size = Vector3.new(radius * 2, 0.2, radius * 2)
-        killAuraRingOuter.Transparency = 0.4
-        
-        killAuraRingInner.CFrame = CFrame.new(pos)
-        killAuraRingInner.Size = Vector3.new((radius - 0.5) * 2, 0.3, (radius - 0.5) * 2)
-    else
-        killAuraRingOuter.Transparency = 1
-        killAuraRingInner.Transparency = 1
-    end
-end
-
--- ============================================================
 -- [[ ATTRIBUTE BOOSTERS ]] --
 -- ============================================================
 local baseAttributes = {
-    ["AccelerationMultiplier"] = 3, ["RunSpeedMultiplier"] = 1.01,
-    ["JumpPowerMultiplier"] = 1.25, ["SizeMultiplier"] = 1.15,
-    ["HeadSizeMultiplier"] = 1, ["TagCooldown"] = 0.666,
+    ["AccelerationMultiplier"] = 3,
+    ["RunSpeedMultiplier"] = 1.01,
+    ["JumpPowerMultiplier"] = 1.25,
+    ["SizeMultiplier"] = 1.15,
+    ["HeadSizeMultiplier"] = 1,
+    ["TagCooldown"] = 0.666,
     ["TagPlayerKnockback"] = 0.75,
+    ["RangeMultiplier"] = 1,
+    ["MomentumMultiplier"] = 1,
+    ["MomentumDecayMultiplier"] = 1,
+    ["FrictionDecayMultiplier"] = 1,
+    ["WindowSmashMultiplier"] = 1,
+    ["RollBoostMultiplier"] = 1,
 }
 
 local boosters = {}
@@ -429,7 +77,7 @@ local function applyAllBoosts()
 end
 
 -- ============================================================
--- [[ AUTO-TAG (KILL AURA) - БЕЗ ПРОВЕРКИ НА СТЕНЫ ]] --
+-- [[ AUTO-TAG (KILL AURA) ]] --
 -- ============================================================
 local IGNORED_ROLES = {
     ["Bomb"] = true, ["PatientZero"] = true, ["Infected"] = true,
@@ -528,9 +176,6 @@ end
 -- ============================================================
 -- [[ AUTO DODGE (LEGIT) ]] --
 -- ============================================================
-local dodgeCooldown = 0.5
-local lastDodgeTime = 0
-
 local TAGGER_ROLES = {
     "Tagger", "Infected", "PatientZero", "FastInfected", "BabyInfected",
     "JumpingInfected", "BigInfected", "CloakInfected", "InfectedRunner",
@@ -545,6 +190,39 @@ local function isTagger(player)
         return table.find(TAGGER_ROLES, roleObj.Value) ~= nil
     end
     return false
+end
+
+local function isOOF(player)
+    local char = player.Character
+    if not char then return false end
+    return char:GetAttribute("OOF") == true or
+           char:GetAttribute("Eliminated") == true or
+           char:GetAttribute("Dead") == true or
+           (char:FindFirstChild("Humanoid") and char.Humanoid.Health <= 0)
+end
+
+local function isFrozen(player)
+    local char = player.Character
+    if not char then return false end
+    return char:GetAttribute("Frozen") == true or
+           char:GetAttribute("Chilled") == true or
+           char:GetAttribute("Ice") == true
+end
+
+local function isEnemy(player)
+    if isOOF(player) or isFrozen(player) then return false end
+    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
+    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+    if not myRole or not theirRole then return false end
+    return myRole ~= theirRole or myRole == "Alone"
+end
+
+local function isMyTeam(player)
+    if isOOF(player) or isFrozen(player) then return false end
+    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
+    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+    if not myRole or not theirRole then return false end
+    return myRole == theirRole and myRole ~= "Alone" and myRole ~= "OOF"
 end
 
 local function isLookingAtMe(taggerHrp, myHrp)
@@ -652,6 +330,9 @@ local function performDodge(taggerHrp, myHrp)
     end
 end
 
+local dodgeCooldown = 0.5
+local lastDodgeTime = 0
+
 local function autoDodgeLoop()
     if not _G.AutoDodgeEnabled then return end
     
@@ -702,10 +383,71 @@ local function lookAtLoop()
 end
 
 -- ============================================================
--- [[ TRACERS ]] — с категориями и цветными ролями
+-- [[ HITBOX EXPANDER ]] --
+-- ============================================================
+local hitboxEnabled = false
+local hitboxMultiplier = 1.5
+local hitboxVisualize = false
+local hitboxCache = {}
+
+local function createHitboxPart(part, multiplier)
+    local hitbox = Instance.new("Part")
+    hitbox.Name = "MoroHitbox"
+    hitbox.Transparency = hitboxVisualize and 0.7 or 1
+    hitbox.Color = Color3.fromRGB(255, 0, 0)
+    hitbox.CanCollide = false
+    hitbox.Anchored = false
+    hitbox.Size = part.Size * multiplier
+    hitbox.CFrame = part.CFrame
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0 = part
+    weld.Part1 = hitbox
+    weld.Parent = hitbox
+    hitbox.Parent = part
+    return hitbox
+end
+
+local function updateHitboxes()
+    if not hitboxEnabled then
+        for char, parts in pairs(hitboxCache) do
+            for _, hitbox in pairs(parts) do
+                if hitbox.Parent then hitbox:Destroy() end
+            end
+        end
+        hitboxCache = {}
+        return
+    end
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local char = player.Character
+            if not hitboxCache[char] then
+                hitboxCache[char] = {}
+                local partsToExpand = {
+                    "Head", "UpperTorso", "LowerTorso",
+                    "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
+                    "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
+                }
+                for _, partName in ipairs(partsToExpand) do
+                    local part = char:FindFirstChild(partName)
+                    if part then hitboxCache[char][part] = createHitboxPart(part, hitboxMultiplier) end
+                end
+            else
+                for part, hitbox in pairs(hitboxCache[char]) do
+                    if hitbox.Parent then
+                        hitbox.Size = part.Size * hitboxMultiplier
+                        hitbox.Transparency = hitboxVisualize and 0.7 or 1
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- [[ TRACERS ]] --
 -- ============================================================
 local tracersEnabled = false
-local selectedCategories = {"Enemies"}
+local selectedCategories = {}
 local lines = {}
 
 local function clearTracerCache(playerName)
@@ -735,59 +477,6 @@ end)
 Players.PlayerRemoving:Connect(function(player)
     clearTracerCache(player.Name)
 end)
-
--- Получить роль игрока
-local function getRole(player)
-    local roleObj = player:FindFirstChild("PlayerRole")
-    return roleObj and roleObj.Value
-end
-
--- OOF: роль == "OOF"
-local function isOOF(player)
-    local role = getRole(player)
-    return role == "OOF"
-end
-
-local function isAshen(player)
-    local role = getRole(player)
-    return role == "Ashen"
-end
-
--- Frozen: роль == "Frozen"
-local function isFrozen(player)
-    local role = getRole(player)
-    return role == "Frozen"
-end
-
--- Enemy: роль НЕ Frozen, НЕ OOF, НЕ Alone, И отличается от моей
-local function isEnemy(player)
-    local myRole = getRole(LocalPlayer)
-    local theirRole = getRole(player)
-    if not myRole or not theirRole then return false end
-
-    -- Исключаем спец-роли
-    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" theirRole == "Ashen" then
-        return false
-    end
-
-    -- Враг = роль отличается от моей
-    return theirRole ~= myRole
-end
-
--- My Team: роль КАК у меня, и НЕ Frozen/OOF/Alone
-local function isMyTeam(player)
-    local myRole = getRole(LocalPlayer)
-    local theirRole = getRole(player)
-    if not myRole or not theirRole then return false end
-
-    -- Исключаем спец-роли
-    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" then
-        return false
-    end
-
-    -- Команда = такая же роль, как у меня
-    return theirRole == myRole
-end
 
 local roleColors = {
     ["Crown"] = Color3.fromRGB(255, 215, 0),
@@ -839,6 +528,254 @@ local roleColors = {
 }
 
 local function getRoleColor(role) return roleColors[role] or Color3.fromRGB(255, 255, 255) end
+
+-- ============================================================
+-- [[ VISUALIZER RING ]] --
+-- ============================================================
+local killAuraRingOuter = Instance.new("Part")
+killAuraRingOuter.Name = "MoroKillAuraRingOuter"
+killAuraRingOuter.Shape = Enum.PartType.Cylinder
+killAuraRingOuter.Size = Vector3.new(0.2, 30, 30)
+killAuraRingOuter.Material = Enum.Material.Neon
+killAuraRingOuter.Color = Color3.fromRGB(255, 0, 0)
+killAuraRingOuter.Transparency = 0.6
+killAuraRingOuter.CanCollide = false
+killAuraRingOuter.CanTouch = false
+killAuraRingOuter.CanQuery = false
+killAuraRingOuter.Massless = true
+killAuraRingOuter.Anchored = true
+killAuraRingOuter.TopSurface = Enum.SurfaceType.Smooth
+killAuraRingOuter.BottomSurface = Enum.SurfaceType.Smooth
+killAuraRingOuter.Parent = workspace
+
+local killAuraRingInner = Instance.new("Part")
+killAuraRingInner.Name = "MoroKillAuraRingInner"
+killAuraRingInner.Shape = Enum.PartType.Cylinder
+killAuraRingInner.Size = Vector3.new(0.3, 28, 28)
+killAuraRingInner.Material = Enum.Material.Neon
+killAuraRingInner.Color = Color3.fromRGB(0, 0, 0)
+killAuraRingInner.Transparency = 1
+killAuraRingInner.CanCollide = false
+killAuraRingInner.CanTouch = false
+killAuraRingInner.CanQuery = false
+killAuraRingInner.Massless = true
+killAuraRingInner.Anchored = true
+killAuraRingInner.TopSurface = Enum.SurfaceType.Smooth
+killAuraRingInner.BottomSurface = Enum.SurfaceType.Smooth
+killAuraRingInner.Parent = workspace
+
+local floorRayParams = RaycastParams.new()
+floorRayParams.FilterType = Enum.RaycastFilterType.Exclude
+floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+
+local function updateRing()
+    local hrp = getHRP()
+    if hrp and _G.AutoTagEnabled and _G.ShowKillAuraRing then
+        floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+        local ray = workspace:Raycast(
+            hrp.Position + Vector3.new(0, 2, 0),
+            Vector3.new(0, -50, 0),
+            floorRayParams
+        )
+        
+        local floorY
+        if ray then
+            floorY = ray.Position.Y + 0.05
+        else
+            floorY = hrp.Position.Y - (hrp.Size.Y / 2) - 2
+        end
+
+        local pos = Vector3.new(hrp.Position.X, floorY, hrp.Position.Z)
+        local radius = _G.KillAuraRange
+        
+        killAuraRingOuter.CFrame = CFrame.new(pos)
+        killAuraRingOuter.Size = Vector3.new(radius * 2, 0.2, radius * 2)
+        killAuraRingOuter.Transparency = 0.4
+        
+        killAuraRingInner.CFrame = CFrame.new(pos)
+        killAuraRingInner.Size = Vector3.new((radius - 0.5) * 2, 0.3, (radius - 0.5) * 2)
+    else
+        killAuraRingOuter.Transparency = 1
+        killAuraRingInner.Transparency = 1
+    end
+end
+
+-- ============================================================
+-- [[ COSMETICS ]] --
+-- ============================================================
+local currentTrail = nil
+local currentOutfit = nil
+
+local TRAILS_DATA = {
+    {display = "basic", model = "Basic"},
+    {display = "+", model = "+"},
+    {display = "V", model = "V"},
+    {display = "T", model = "T"},
+    {display = "X", model = "X"},
+    {display = "real PNG", model = "RealPNG"},
+    {display = "box", model = "Box"},
+    {display = "comet", model = "Comet"},
+    {display = "rainbow comet", model = "RainbowComet"},
+    {display = "whirlpool", model = "WhirlPool"},
+    {display = "gradient", model = "Gradient"},
+    {display = "light gradient", model = "LightGradient"},
+    {display = "dark gradient", model = "DarkGradient"},
+    {display = "error", model = "Error"},
+    {display = "tron", model = "Tron"},
+    {display = "tron 2", model = "Tron2"},
+    {display = "vantablack", model = "Vantablack"},
+    {display = "zfight", model = "ZFight"},
+    {display = "snarp", model = "snarp"},
+    {display = "awesome human trail", model = "AwesomeHumanTrail"},
+    {display = "visualizer", model = "Visualizer"},
+    {display = "freedom", model = "Freedom"},
+    {display = "solid", model = "Solid"},
+    {display = "sparkletime", model = "Sparkletime"},
+    {display = "bitwave", model = "BitWaves"},
+    {display = "kinetic", model = "Kinetic"},
+    {display = "cloudy", model = "Cloudy"},
+    {display = "arithmetic", model = "Arithmetic"},
+    {display = "arrow", model = "Arrow"},
+    {display = "subspace", model = "Subspace"},
+    {display = "cape", model = "Cape"},
+    {display = "encrypted", model = "Encrypted"},
+    {display = "stinky", model = "Stinky"},
+    {display = "dracula walker", model = "draculawalker"},
+    {display = "star", model = "StarTrail"},
+    {display = "flaming skull", model = "ghostrider"},
+    {display = "homing missile", model = "homingmissle"},
+    {display = "speedcoil", model = "SpeedCoilTrail"},
+    {display = "string lights", model = "StringLights"},
+    {display = "bonsai", model = "Bonsai"},
+    {display = "snowflakes", model = "Snowflakes"},
+    {display = "lovestruck", model = "Lovestruck"},
+    {display = "driftin", model = "Driftin"},
+    {display = "cherry blossom", model = "CherryBlossom"},
+    {display = "jet", model = "JetTrail"},
+    {display = "star power", model = "StarRoot"},
+    {display = "ice skating", model = "IceSkates"},
+    {display = "tachophobia", model = "Tachophobia"},
+    {display = "ablaze", model = "Ablaze"},
+    {display = "decorated tree", model = "Decorated Tree"},
+    {display = "snowflake power", model = "Snowflake Power"},
+    {display = "knight", model = "Knight"},
+    {display = "tank knight", model = "TankKnight"},
+    {display = "boombox", model = "Boombox"},
+    {display = "meteor fists", model = "MeteorFists"},
+    {display = "personal sun", model = "PersonalSun"},
+    {display = "pentagon", model = "PentagonTrail"},
+    {display = "spellbook", model = "Spellbook"},
+    {display = "polaris", model = "NorthStarTrail"},
+    {display = "celestial head", model = "CelestialHead"},
+    {display = "yinyang", model = "YinYang"},
+    {display = "condiments", model = "Condiments"},
+    {display = "overfilled briefcase", model = "OverfilledBriefcase"},
+    {display = "ac unit", model = "ACUnit"},
+    {display = "chocolate box", model = "HeartTrail"},
+    {display = "radio head", model = "RadioHead"},
+    {display = "salt n' pepper", model = "SaltNPepper"},
+    {display = "love power", model = "LovePower"},
+    {display = "secret santa", model = "SecretSanta"},
+    {display = "circle", model = "Circle"},
+    {display = "triangle", model = "Triangle"},
+    {display = "star beam", model = "StarTrail2"},
+    {display = "idea", model = "IdeaTrail"},
+    {display = "frostbite", model = "frostbite"},
+    {display = "sparkling hands", model = "Sparklinghands"},
+    {display = "segmented", model = "Segmented"},
+    {display = "illusions", model = "Illusions"},
+    {display = "the trail", model = "GuppyTrail"},
+    {display = "trail test", model = "GuppyTrail"},
+    {display = "pride", model = "Pride"},
+}
+
+table.sort(TRAILS_DATA, function(a, b) return a.display:lower() < b.display:lower() end)
+
+local TRAIL_NAMES = {}
+for _, trail in ipairs(TRAILS_DATA) do
+    table.insert(TRAIL_NAMES, trail.display)
+end
+
+local function getTrailModel(displayName)
+    for _, trail in ipairs(TRAILS_DATA) do
+        if trail.display == displayName then
+            return trail.model
+        end
+    end
+    return displayName
+end
+
+local function equipTrail(displayName)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    if currentTrail and currentTrail.Parent then
+        pcall(function() currentTrail:Destroy() end)
+    end
+    
+    local trailsFolder = ReplicatedStorage:FindFirstChild("Trails")
+    if not trailsFolder then return false end
+    
+    local modelName = getTrailModel(displayName)
+    local model = trailsFolder:FindFirstChild(modelName)
+    if not model then return false end
+    
+    currentTrail = model:Clone()
+    currentTrail.Parent = char
+    
+    local trailObj = currentTrail:FindFirstChildOfClass("Trail")
+    if trailObj then
+        local att0 = hrp:FindFirstChild("TrailAttachment0") or Instance.new("Attachment", hrp)
+        att0.Name = "TrailAttachment0"
+        att0.Position = Vector3.new(0, 1, 0)
+        
+        local att1 = hrp:FindFirstChild("TrailAttachment1") or Instance.new("Attachment", hrp)
+        att1.Name = "TrailAttachment1"
+        att1.Position = Vector3.new(0, -1, 0)
+        
+        trailObj.Attachment0 = att0
+        trailObj.Attachment1 = att1
+    end
+    
+    return true
+end
+
+local function unequipTrail()
+    if currentTrail and currentTrail.Parent then
+        pcall(function() currentTrail:Destroy() end)
+        currentTrail = nil
+    end
+end
+
+local function equipOutfit(outfitName)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    
+    if currentOutfit and currentOutfit.Parent then
+        pcall(function() currentOutfit:Destroy() end)
+    end
+    
+    local outfitsFolder = ReplicatedStorage:FindFirstChild("Outfits")
+    if not outfitsFolder then return false end
+    
+    local model = outfitsFolder:FindFirstChild(outfitName)
+    if not model then return false end
+    
+    currentOutfit = model:Clone()
+    currentOutfit.Parent = char
+    
+    return true
+end
+
+local function unequipOutfit()
+    if currentOutfit and currentOutfit.Parent then
+        pcall(function() currentOutfit:Destroy() end)
+        currentOutfit = nil
+    end
+end
 
 -- ============================================================
 -- [[ UI ]] --
@@ -919,7 +856,7 @@ sizeSec:AddToggle({
     end,
 })
 sizeSec:AddSlider({
-    Name = "Size Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2,
+    Name: "Size Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2,
     Callback = function(v) boosters.SizeMultiplier.mult = v; applyAllBoosts() end,
 })
 
@@ -959,10 +896,9 @@ local categoryDropdown = tracerSec:AddMultiDropdown({
     Icon = "users",
     Options = {"Enemies", "My Team", "OOF", "Frozen"},
     Default = {"Enemies"},
-    Callback = function(values)
-        selectedCategories = values or {}
-    end,
+    Callback = function(values) selectedCategories = values end,
 })
+
 -- ===================== COMBAT TAB =====================
 local combatTab = Window:CreateTab({ Name = "Combat", Icon = "crosshair" })
 
@@ -999,6 +935,23 @@ tagKbSec:AddToggle({
 tagKbSec:AddSlider({
     Name = "Knockback Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2,
     Callback = function(v) boosters.TagPlayerKnockback.mult = v; applyAllBoosts() end,
+})
+
+local rangeSec = combatTab:CreateSection({ Name = "Tag Range", Icon = "maximize" })
+rangeSec:AddToggle({
+    Name = "Range Booster", Icon = "maximize", Default = false,
+    Callback = function(state)
+        boosters.RangeMultiplier.enabled = state
+        if state then
+            local roleObj = LocalPlayer:FindFirstChild("Modifiers") and LocalPlayer.Modifiers:FindFirstChild("Role")
+            if roleObj then boosters.RangeMultiplier.base = roleObj:GetAttribute("RangeMultiplier") or 1 end
+        end
+        applyAllBoosts()
+    end,
+})
+rangeSec:AddSlider({
+    Name = "Range Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2,
+    Callback = function(v) boosters.RangeMultiplier.mult = v; applyAllBoosts() end,
 })
 
 combatTab:Column("right")
@@ -1062,311 +1015,329 @@ lookSec:AddButton({
     end,
 })
 
+local hitboxSec = combatTab:CreateSection({ Name = "Hitbox Expander", Icon = "box" })
+hitboxSec:AddToggle({
+    Name = "Enable Hitbox", Icon = "box", Default = false,
+    Callback = function(state) hitboxEnabled = state end,
+})
+hitboxSec:AddSlider({
+    Name = "Hitbox Size", Icon = "maximize", Min = 1.0, Max = 10.0, Default = 1.5, Decimals = 1,
+    Callback = function(val) hitboxMultiplier = val end,
+})
+hitboxSec:AddToggle({
+    Name = "Visualize Hitboxes", Icon = "eye", Default = false,
+    Callback = function(state) hitboxVisualize = state end,
+})
+
+-- ===================== ADVANCED TAB =====================
+local advancedTab = Window:CreateTab({ Name = "Advanced", Icon = "settings" })
+
+advancedTab:Column("left")
+local momentumSec = advancedTab:CreateSection({ Name = "Momentum", Icon = "activity" })
+momentumSec:AddToggle({
+    Name = "Momentum Booster", Icon = "activity", Default = false,
+    Callback = function(state)
+        boosters.MomentumMultiplier.enabled = state
+        if state then
+            local roleObj = LocalPlayer:FindFirstChild("Modifiers") and LocalPlayer.Modifiers:FindFirstChild("Role")
+            if roleObj then boosters.MomentumMultiplier.base = roleObj:GetAttribute("MomentumMultiplier") or 1 end
+        end
+        applyAllBoosts()
+    end,
+})
+momentumSec:AddSlider({
+    Name = "Momentum Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2,
+    Callback = function(v) boosters.MomentumMultiplier.mult = v; applyAllBoosts() end,
+})
+
+momentumSec:AddToggle({
+    Name = "Momentum Decay Booster", Icon = "trending-down", Default = false,
+    Callback = function(state)
+        boosters.MomentumDecayMultiplier.enabled = state
+        if state then
+            local roleObj = LocalPlayer:FindFirstChild("Modifiers") and LocalPlayer.Modifiers:FindFirstChild("Role")
+            if roleObj then boosters.MomentumDecayMultiplier.base = roleObj:GetAttribute("MomentumDecayMultiplier") or 1 end
+        end
+        applyAllBoosts()
+    end,
+})
+momentumSec:AddSlider({
+    Name = "Decay Multiplier", Icon = "trending-down", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2,
+    Callback = function(v) boosters.MomentumDecayMultiplier.mult = v; applyAllBoosts() end,
+})
+
+local frictionSec = advancedTab:CreateSection({ Name = "Friction", Icon = "wind" })
+frictionSec:AddToggle({
+    Name = "Friction Decay Booster", Icon = "wind", Default = false,
+    Callback = function(state)
+        boosters.FrictionDecayMultiplier.enabled = state
+        if state then
+            local roleObj = LocalPlayer:FindFirstChild("Modifiers") and LocalPlayer.Modifiers:FindFirstChild("Role")
+            if roleObj then boosters.FrictionDecayMultiplier.base = roleObj:GetAttribute("FrictionDecayMultiplier") or 1 end
+        end
+        applyAllBoosts()
+    end,
+})
+frictionSec:AddSlider({
+    Name = "Friction Multiplier", Icon = "wind", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2,
+    Callback = function(v) boosters.FrictionDecayMultiplier.mult = v; applyAllBoosts() end,
+})
+
+advancedTab:Column("right")
+local specialSec = advancedTab:CreateSection({ Name = "Special", Icon = "zap" })
+specialSec:AddToggle({
+    Name = "Window Smash Booster", Icon = "box", Default = false,
+    Callback = function(state)
+        boosters.WindowSmashMultiplier.enabled = state
+        if state then
+            local roleObj = LocalPlayer:FindFirstChild("Modifiers") and LocalPlayer.Modifiers:FindFirstChild("Role")
+            if roleObj then boosters.WindowSmashMultiplier.base = roleObj:GetAttribute("WindowSmashMultiplier") or 1 end
+        end
+        applyAllBoosts()
+    end,
+})
+specialSec:AddSlider({
+    Name = "Window Multiplier", Icon = "box", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2,
+    Callback = function(v) boosters.WindowSmashMultiplier.mult = v; applyAllBoosts() end,
+})
+
+specialSec:AddToggle({
+    Name = "Roll Boost Booster", Icon = "rotate-cw", Default = false,
+    Callback = function(state)
+        boosters.RollBoostMultiplier.enabled = state
+        if state then
+            local roleObj = LocalPlayer:FindFirstChild("Modifiers") and LocalPlayer.Modifiers:FindFirstChild("Role")
+            if roleObj then boosters.RollBoostMultiplier.base = roleObj:GetAttribute("RollBoostMultiplier") or 1 end
+        end
+        applyAllBoosts()
+    end,
+})
+specialSec:AddSlider({
+    Name = "Roll Multiplier", Icon = "rotate-cw", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2,
+    Callback = function(v) boosters.RollBoostMultiplier.mult = v; applyAllBoosts() end,
+})
+
 -- ===================== COSMETICS TAB =====================
 local cosmeticsTab = Window:CreateTab({ Name = "Cosmetics", Icon = "shirt" })
 
--- Только Trails и Outfits
-local ITEMS_BY_CATEGORY = {
-    Trails = {
-        "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
-        "Whirlpool", "Gradient", "LightGradient", "DarkGradient", "Error", "Tron",
-        "Tron2", "Vantablack", "ZFight", "Snarp", "AwesomeHumanTrail", "Visualizer",
-        "Freedom", "Solid", "Sparkletime", "BitWave", "Kinetic", "Cloudy", "Arithmetic",
-        "Arrow", "Subspace", "cape", "Encrypted", "Stinky", "DraculaWalker", "StarTrail",
-        "ghostrider", "HomingMissile", "SpeedCoilTrail", "StringLights", "Bonsai",
-        "Snowflakes", "Lovestruck", "Driftin", "CherryBlossom", "JetTrail", "StarRoot",
-        "IceSkates", "Tachophobia", "Ablaze", "Decorated Tree", "Snowflake Power",
-        "Knight", "TankKnight", "Boombox", "MeteorFists", "PersonalSun", "PentagonTrail",
-        "Spellbook", "NorthStarTrail", "CelestialHead", "YinYang", "Condiments",
-        "OverfilledBriefcase", "ACUnit", "HeartTrail", "RadioHead", "SaltNPepper",
-        "LovePower", "SecretSanta", "Circle", "Triangle", "StarBeam", "IdeaTrail",
-        "frostbite", "Sparklinghands", "Segmented", "Illusions", "GuppyTrail", "TESTING"
-    },
-    Outfits = {"Classic", "Warrior", "Mage", "Assassin", "Knight"},
-}
-
-local CATEGORY_KEYS = {"Trails", "Outfits"}
-
--- Переменные для отслеживания выбора
-local selectedCategoryKey = "Trails"
-local selectedItemName = "Box"
-
 cosmeticsTab:Column("left")
-local equipSec = cosmeticsTab:CreateSection({ Name = "Equip Cosmetic", Icon = "shirt" })
+local trailsSec = cosmeticsTab:CreateSection({ Name = "Trails", Icon = "zap" })
 
--- Dropdown категории
-local cosmeticCategoryDrop = equipSec:AddDropdown({
-    Name = "Category",
+local trailDrop = trailsSec:AddDropdown({
+    Name = "Select Trail",
     Icon = "layers",
-    Options = CATEGORY_KEYS,
-    Default = "Trails",
-    Callback = function(val)
-        selectedCategoryKey = val
-        -- Обновляем опции в dropdown предметов
-        local newItems = ITEMS_BY_CATEGORY[val] or {}
-        if itemDrop then
-            itemDrop.Refresh(newItems, false) -- false = не сохранять выбор
-            -- Устанавливаем первый предмет как выбранный
-            if newItems[1] then
-                selectedItemName = newItems[1]
-            end
-        end
-    end,
+    Options = TRAIL_NAMES,
+    Default = TRAIL_NAMES[1],
 })
 
--- Dropdown предметов (динамически обновляется)
-local itemDrop = equipSec:AddDropdown({
-    Name = "Item",
-    Icon = "box",
-    Options = ITEMS_BY_CATEGORY["Trails"],
-    Default = "Box",
-    Callback = function(val)
-        selectedItemName = val  -- ВАЖНО: обновляем при выборе
-    end,
-})
-
--- Кнопка Equip
-equipSec:AddButton({
-    Name = "Equip Selected",
+trailsSec:AddButton({
+    Name = "Equip Trail",
     Primary = true,
     Icon = "check",
     Callback = function()
-        if not selectedItemName or not selectedCategoryKey then
-            Window:Notify({ Title = "Cosmetics", Content = "Select category and item", Type = "Warning" })
-            return
-        end
-        
-        -- ВАЖНО: передаем именно selectedItemName, а не hardcoded значение
-        local success = equipCosmeticVisual(selectedCategoryKey, selectedItemName)
-        if success then
-            lastEquipped[selectedCategoryKey] = selectedItemName
+        local selected = trailDrop.Get()
+        if equipTrail(selected) then
             Window:Notify({
-                Title = "Cosmetics",
-                Content = "Equipped " .. selectedItemName .. " (" .. selectedCategoryKey .. ")",
+                Title = "Trail",
+                Content = "Equipped: " .. selected,
                 Type = "Success",
-                Duration = 3
+                Duration = 2
             })
         else
             Window:Notify({
-                Title = "Cosmetics",
-                Content = "Failed to equip. Model not found in game files.",
+                Title = "Trail",
+                Content = "Failed to equip",
                 Type = "Error",
-                Duration = 4
+                Duration = 2
             })
         end
     end,
 })
 
--- Кнопка UNEQUIP
-equipSec:AddButton({
-    Name = "Unequip Selected Category",
+trailsSec:AddButton({
+    Name = "Unequip Trail",
     Icon = "x",
     Callback = function()
-        if not selectedCategoryKey then return end
-        unequipCosmetic(selectedCategoryKey)
-        lastEquipped[selectedCategoryKey] = nil
+        unequipTrail()
         Window:Notify({
-            Title = "Cosmetics",
-            Content = "Unequipped " .. selectedCategoryKey,
+            Title = "Trail",
+            Content = "Trail removed",
             Type = "Info",
             Duration = 2
         })
     end,
 })
 
--- Кнопка UNEQUIP ALL
-equipSec:AddButton({
-    Name = "Unequip ALL Cosmetics",
-    Icon = "trash",
-    Callback = function()
-        for category, _ in pairs(currentFakeCosmetics) do
-            unequipCosmetic(category)
-        end
-        lastEquipped = {}
-        Window:Notify({
-            Title = "Cosmetics",
-            Content = "All cosmetics unequipped",
-            Type = "Info",
-            Duration = 2
-        })
-    end,
+local trailNameBox = trailsSec:AddTextbox({
+    Name = "Trail Name (exact)",
+    Placeholder = "Enter model name",
 })
 
--- Инфо
-equipSec:AddLabel("Currently equipped:")
-for _, cat in ipairs(CATEGORY_KEYS) do
-    equipSec:AddLabel("  • " .. cat .. ": " .. tostring(lastEquipped[cat] or "None"))
-end
-
--- ===================== ПРАВАЯ КОЛОНКА: Inventory =====================
-cosmeticsTab:Column("right")
-local invSec = cosmeticsTab:CreateSection({ Name = "Inventory Management", Icon = "box" })
-
--- Функция для работы с инвентарём
-local function getInventory()
-    local inv = LocalPlayer:FindFirstChild("Inventory")
-    if not inv then return nil end
-    local success, data = pcall(function()
-        return game:GetService("HttpService"):JSONDecode(inv.Value)
-    end)
-    return success and data or nil
-end
-
-local function setInventory(data)
-    local inv = LocalPlayer:FindFirstChild("Inventory")
-    if not inv then return false end
-    local success = pcall(function()
-        inv.Value = game:GetService("HttpService"):JSONEncode(data)
-    end)
-    return success
-end
-
-local function addCosmetic(category, itemName)
-    local data = getInventory()
-    if not data or not data.Owned then return false end
-    if not data.Owned[category] then data.Owned[category] = {} end
-    
-    for _, item in ipairs(data.Owned[category]) do
-        if item == itemName then return true end
-    end
-    
-    table.insert(data.Owned[category], itemName)
-    return setInventory(data)
-end
-
-invSec:AddButton({
-    Name = "Add ALL Trails to Inventory",
-    Primary = true,
-    Icon = "zap",
+trailsSec:AddButton({
+    Name = "Equip by Name",
+    Icon = "edit",
     Callback = function()
-        local count = 0
-        for _, trail in ipairs(ITEMS_BY_CATEGORY.Trails) do
-            if addCosmetic("Trails", trail) then count = count + 1 end
-        end
-        Window:Notify({
-            Title = "Inventory",
-            Content = "Added " .. count .. " trails",
-            Type = "Success",
-            Duration = 4
-        })
-    end,
-})
-
-invSec:AddButton({
-    Name = "Clear Inventory",
-    Icon = "trash",
-    Callback = function()
-        local data = getInventory()
-        if data and data.Owned then
-            for cat, _ in pairs(data.Owned) do
-                data.Owned[cat] = {}
-            end
-            setInventory(data)
-            Window:Notify({ Title = "Inventory", Content = "Inventory cleared", Type = "Info" })
-        end
-    end,
-})
-
--- Быстрая экипировка по имени
-local quickNameBox = invSec:AddTextbox({
-    Name = "Quick Equip Name",
-    Placeholder = "Enter exact model name",
-})
-
-invSec:AddButton({
-    Name = "Quick Equip (by name)",
-    Icon = "zap",
-    Callback = function()
-        local name = quickNameBox.Get()
-        if not name or name == "" then
-            Window:Notify({ Title = "Cosmetics", Content = "Enter a name", Type = "Warning" })
+        local name = trailNameBox.Get()
+        if name == "" then
+            Window:Notify({
+                Title = "Trail",
+                Content = "Enter a name",
+                Type = "Warning",
+                Duration = 2
+            })
             return
         end
         
-        local success = equipCosmeticVisual(selectedCategoryKey, name)
-        if success then
-            lastEquipped[selectedCategoryKey] = name
-            Window:Notify({
-                Title = "Cosmetics",
-                Content = "Equipped " .. name,
-                Type = "Success"
-            })
-        else
-            Window:Notify({
-                Title = "Cosmetics",
-                Content = "Model '" .. name .. "' not found",
-                Type = "Error"
-            })
-        end
-    end,
-})
-
-invSec:AddButton({
-    Name = "Detect Available Models",
-    Icon = "search",
-    Callback = function()
-        local found = {}
-        for _, cat in ipairs(CATEGORY_KEYS) do
-            local folder = getModelsFolder(cat)
-            if folder then
-                local models = {}
-                for _, child in ipairs(folder:GetChildren()) do
-                    table.insert(models, child.Name)
-                end
-                table.insert(found, cat .. ": " .. #models .. " models")
-                print("[MoroDetect] " .. cat .. " folder: " .. folder:GetFullName())
-                for _, m in ipairs(models) do
-                    print("  - " .. m)
-                end
-            else
-                table.insert(found, cat .. ": NOT FOUND")
-            end
+        local char = LocalPlayer.Character
+        if not char then return end
+        
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        
+        if currentTrail and currentTrail.Parent then
+            pcall(function() currentTrail:Destroy() end)
         end
         
-        local msg = table.concat(found, "\n")
-        print("[MoroDetect] Summary:\n" .. msg)
-        Window:Notify({
-            Title = "Detect",
-            Content = "Check console (F9) for detailed info",
-            Type = "Info",
-            Duration = 5
-        })
-    end,
-})
-
-invSec:AddButton({
-    Name = "Rescan Outfits",
-    Icon = "refresh-cw",
-    Callback = function()
-        local newOutfits = scanOutfits()
-        ITEMS_BY_CATEGORY.Outfits = newOutfits
+        local trailsFolder = ReplicatedStorage:FindFirstChild("Trails")
+        if not trailsFolder then return end
         
-        -- Обновляем dropdown предметов, если выбрана категория Outfits
-        if selectedCategoryKey == "Outfits" and itemDrop then
-            itemDrop.Refresh(newOutfits, false)
-            if newOutfits[1] then
-                selectedItemName = newOutfits[1]
-            end
+        local model = trailsFolder:FindFirstChild(name)
+        if not model then
+            Window:Notify({
+                Title = "Trail",
+                Content = "Model not found: " .. name,
+                Type = "Error",
+                Duration = 2
+            })
+            return
+        end
+        
+        currentTrail = model:Clone()
+        currentTrail.Parent = char
+        
+        local trailObj = currentTrail:FindFirstChildOfClass("Trail")
+        if trailObj then
+            local att0 = hrp:FindFirstChild("TrailAttachment0") or Instance.new("Attachment", hrp)
+            att0.Name = "TrailAttachment0"
+            att0.Position = Vector3.new(0, 1, 0)
+            
+            local att1 = hrp:FindFirstChild("TrailAttachment1") or Instance.new("Attachment", hrp)
+            att1.Name = "TrailAttachment1"
+            att1.Position = Vector3.new(0, -1, 0)
+            
+            trailObj.Attachment0 = att0
+            trailObj.Attachment1 = att1
         end
         
         Window:Notify({
-            Title = "Outfits",
-            Content = "Found " .. #newOutfits .. " outfits",
+            Title = "Trail",
+            Content = "Equipped: " .. name,
             Type = "Success",
-            Duration = 3
+            Duration = 2
         })
-        
-        -- Выводим в консоль для отладки
-        print("[MoroLumina] Available outfits:")
-        for _, outfit in ipairs(newOutfits) do
-            print("  - " .. outfit)
-        end
     end,
 })
 
--- ============================================================
--- [[ SETTINGS TAB ]] --
--- ============================================================
+cosmeticsTab:Column("right")
+local outfitsSec = cosmeticsTab:CreateSection({ Name = "Outfits", Icon = "shirt" })
+
+local OUTFIT_NAMES = {}
+local outfitsFolder = ReplicatedStorage:FindFirstChild("Outfits")
+if outfitsFolder then
+    for _, outfit in ipairs(outfitsFolder:GetChildren()) do
+        table.insert(OUTFIT_NAMES, outfit.Name)
+    end
+    table.sort(OUTFIT_NAMES)
+end
+
+if #OUTFIT_NAMES == 0 then
+    outfitsSec:AddLabel("No outfits found")
+else
+    local outfitDrop = outfitsSec:AddDropdown({
+        Name = "Select Outfit",
+        Icon = "layers",
+        Options = OUTFIT_NAMES,
+        Default = OUTFIT_NAMES[1],
+    })
+    
+    outfitsSec:AddButton({
+        Name = "Equip Outfit",
+        Primary = true,
+        Icon = "check",
+        Callback = function()
+            local selected = outfitDrop.Get()
+            if equipOutfit(selected) then
+                Window:Notify({
+                    Title = "Outfit",
+                    Content = "Equipped: " .. selected,
+                    Type = "Success",
+                    Duration = 2
+                })
+            else
+                Window:Notify({
+                    Title = "Outfit",
+                    Content = "Failed to equip",
+                    Type = "Error",
+                    Duration = 2
+                })
+            end
+        end,
+    })
+    
+    outfitsSec:AddButton({
+        Name = "Unequip Outfit",
+        Icon = "x",
+        Callback = function()
+            unequipOutfit()
+            Window:Notify({
+                Title = "Outfit",
+                Content = "Outfit removed",
+                Type = "Info",
+                Duration = 2
+            })
+        end,
+    })
+    
+    local outfitNameBox = outfitsSec:AddTextbox({
+        Name = "Outfit Name (exact)",
+        Placeholder = "Enter outfit name",
+    })
+    
+    outfitsSec:AddButton({
+        Name = "Equip by Name",
+        Icon = "edit",
+        Callback = function()
+            local name = outfitNameBox.Get()
+            if name == "" then
+                Window:Notify({
+                    Title = "Outfit",
+                    Content = "Enter a name",
+                    Type = "Warning",
+                    Duration = 2
+                })
+                return
+            end
+            
+            if equipOutfit(name) then
+                Window:Notify({
+                    Title = "Outfit",
+                    Content = "Equipped: " .. name,
+                    Type = "Success",
+                    Duration = 2
+                })
+            else
+                Window:Notify({
+                    Title = "Outfit",
+                    Content = "Outfit not found: " .. name,
+                    Type = "Error",
+                    Duration = 2
+                })
+            end
+        end,
+    })
+end
+
+-- ===================== SETTINGS TAB =====================
 Window:AddSettingsTab()
 
 -- ============================================================
@@ -1377,46 +1348,41 @@ RunService.Heartbeat:Connect(function()
     autoParryLoop()
     autoDodgeLoop()
     applyAllBoosts()
+    updateHitboxes()
 end)
 
 RunService.RenderStepped:Connect(function()
     lookAtLoop()
     updateRing()
     
-        if tracersEnabled then
+    if tracersEnabled then
         for _, player in pairs(Players:GetPlayers()) do
             if player == LocalPlayer then continue end
-
+            
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
+            
             local show = false
             if hrp then
-                -- Если категории не выбраны — показываем всех (фолбэк)
-                if #selectedCategories == 0 then
-                    show = false
-                else
-                    for _, category in ipairs(selectedCategories) do
-                        if category == "Enemies" and isEnemy(player) then show = true break end
-                        if category == "My Team" and isMyTeam(player) then show = true break end
-                        if category == "OOF" and (isOOF(player) or isAshen(player)) then show = true break end
-                        if category == "Frozen" and isFrozen(player) then show = true break end
-                    end
+                for _, category in ipairs(selectedCategories) do
+                    if category == "Enemies" and isEnemy(player) then show = true break end
+                    if category == "My Team" and isMyTeam(player) then show = true break end
+                    if category == "OOF" and isOOF(player) then show = true break end
+                    if category == "Frozen" and isFrozen(player) then show = true break end
                 end
             end
-
+            
             if not show then
                 if lines[player.Name] then
                     pcall(function() lines[player.Name].Visible = false end)
                 end
                 continue
             end
-
+            
             if not lines[player.Name] then
                 local success, line = pcall(function()
                     local l = Drawing.new("Line")
                     l.Thickness = 1.5
-                    l.Transparency = 1
                     l.Color = Color3.new(1, 1, 1)
                     return l
                 end)
@@ -1426,12 +1392,12 @@ RunService.RenderStepped:Connect(function()
                     continue
                 end
             end
-
+            
             local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
             if onScreen then
                 local pRoleObj = player:FindFirstChild("PlayerRole")
                 local pRole = pRoleObj and pRoleObj.Value
-
+                
                 pcall(function()
                     lines[player.Name].From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
                     lines[player.Name].To = Vector2.new(pos.X, pos.Y)
