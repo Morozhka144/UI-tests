@@ -26,6 +26,7 @@ _G.AutoTagEnabled = false
 _G.AutoParryEnabled = false
 _G.KillAuraRange = 15
 _G.AutoParryRange = 12
+_G.ShowKillAuraRing = true
 
 -- [[ Helpers ]] --
 local function getHRP()
@@ -43,14 +44,21 @@ killAuraRing.Material = Enum.Material.Neon
 killAuraRing.Color = Color3.fromRGB(255, 0, 0)
 killAuraRing.Transparency = 1
 killAuraRing.CanCollide = false
+killAuraRing.CanTouch = false
+killAuraRing.CanQuery = false
+killAuraRing.Massless = true
 killAuraRing.Anchored = true
 killAuraRing.TopSurface = Enum.SurfaceType.Smooth
 killAuraRing.BottomSurface = Enum.SurfaceType.Smooth
 killAuraRing.Parent = workspace
 
+local floorRayParams = RaycastParams.new()
+floorRayParams.FilterType = Enum.RaycastFilterType.Exclude
+floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+
 local function updateRing()
     local hrp = getHRP()
-    if hrp and _G.AutoTagEnabled then
+    if hrp and _G.AutoTagEnabled and _G.ShowKillAuraRing then
         local pos = hrp.Position - Vector3.new(0, (hrp.Size.Y / 2) + 0.05, 0)
         killAuraRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
         killAuraRing.Size = Vector3.new(0.2, _G.KillAuraRange * 2, _G.KillAuraRange * 2)
@@ -493,6 +501,10 @@ autoTagSec:AddToggle({
 autoTagSec:AddSlider({
     Name = "Tag Radius", Icon = "maximize", Min = 5, Max = 30, Default = 15, Decimals = 0,
     Callback = function(val) _G.KillAuraRange = val end,
+})
+autoTagSec:AddToggle({
+    Name = "Show Ring", Icon = "circle", Default = true,
+    Callback = function(state) _G.ShowKillAuraRing = state end,
 })
 
 local autoParrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
