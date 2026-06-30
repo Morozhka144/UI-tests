@@ -452,67 +452,6 @@ local function lookAtLoop()
 end
 
 -- ============================================================
--- [[ HITBOX EXPANDER ]] --
--- ============================================================
-local hitboxEnabled = false
-local hitboxMultiplier = 1.5
-local hitboxVisualize = false
-local hitboxCache = {}
-
-local function createHitboxPart(part, multiplier)
-    local hitbox = Instance.new("Part")
-    hitbox.Name = "MoroHitbox"
-    hitbox.Transparency = hitboxVisualize and 0.7 or 1
-    hitbox.Color = Color3.fromRGB(255, 0, 0)
-    hitbox.CanCollide = false
-    hitbox.Anchored = false
-    hitbox.Size = part.Size * multiplier
-    hitbox.CFrame = part.CFrame
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = part
-    weld.Part1 = hitbox
-    weld.Parent = hitbox
-    hitbox.Parent = part
-    return hitbox
-end
-
-local function updateHitboxes()
-    if not hitboxEnabled then
-        for char, parts in pairs(hitboxCache) do
-            for _, hitbox in pairs(parts) do
-                if hitbox.Parent then hitbox:Destroy() end
-            end
-        end
-        hitboxCache = {}
-        return
-    end
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local char = player.Character
-            if not hitboxCache[char] then
-                hitboxCache[char] = {}
-                local partsToExpand = {
-                    "Head", "UpperTorso", "LowerTorso",
-                    "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
-                    "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
-                }
-                for _, partName in ipairs(partsToExpand) do
-                    local part = char:FindFirstChild(partName)
-                    if part then hitboxCache[char][part] = createHitboxPart(part, hitboxMultiplier) end
-                end
-            else
-                for part, hitbox in pairs(hitboxCache[char]) do
-                    if hitbox.Parent then
-                        hitbox.Size = part.Size * hitboxMultiplier
-                        hitbox.Transparency = hitboxVisualize and 0.7 or 1
-                    end
-                end
-            end
-        end
-    end
-end
-
--- ============================================================
 -- [[ TRACERS ]] — с категориями и цветными ролями
 -- ============================================================
 local tracersEnabled = false
@@ -547,6 +486,29 @@ Players.PlayerRemoving:Connect(function(player)
     clearTracerCache(player.Name)
 end)
 
+-- ============================================================
+-- ФУНКЦИИ КАТЕГОРИЙ (правильный порядок!)
+-- ============================================================
+
+-- 1. Сначала isOOF и isFrozen (их вызывают другие функции)
+local function isOOF(player)
+    local char = player.Character
+    if not char then return false end
+    return char:GetAttribute("OOF") == true or
+           char:GetAttribute("Eliminated") == true or
+           char:GetAttribute("Dead") == true or
+           (char:FindFirstChild("Humanoid") and char.Humanoid.Health <= 0)
+end
+
+local function isFrozen(player)
+    local char = player.Character
+    if not char then return false end
+    return char:GetAttribute("Frozen") == true or
+           char:GetAttribute("Chilled") == true or
+           char:GetAttribute("Ice") == true
+end
+
+-- 2. Потом isEnemy и isMyTeam (они вызывают isOOF/isFrozen)
 local function isEnemy(player)
     -- OOF и Frozen — это отдельные категории, не враги
     if isOOF(player) or isFrozen(player) then return false end
@@ -571,34 +533,7 @@ local function isMyTeam(player)
     return myRole == theirRole and myRole ~= "Alone" and myRole ~= "OOF"
 end
 
-local function isMyTeam(player)
-    -- OOF и Frozen игроки НЕ считаются тиммейтами
-    if isOOF(player) or isFrozen(player) then return false end
-    
-    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
-    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
-    if not myRole or not theirRole then return false end
-    
-    return myRole == theirRole
-end
-
-local function isOOF(player)
-    local char = player.Character
-    if not char then return false end
-    return char:GetAttribute("OOF") == true or
-           char:GetAttribute("Eliminated") == true or
-           char:GetAttribute("Dead") == true or
-           (char:FindFirstChild("Humanoid") and char.Humanoid.Health <= 0)
-end
-
-local function isFrozen(player)
-    local char = player.Character
-    if not char then return false end
-    return char:GetAttribute("Frozen") == true or
-           char:GetAttribute("Chilled") == true or
-           char:GetAttribute("Ice") == true
-end
-
+-- 3. Таблица цветов и функция getRoleColor
 local roleColors = {
     ["Crown"] = Color3.fromRGB(255, 215, 0),
     ["Monarch"] = Color3.fromRGB(255, 215, 0),
@@ -647,6 +582,7 @@ local roleColors = {
     ["Spectator"] = Color3.fromRGB(128, 128, 128),
     ["pingus"] = Color3.fromRGB(128, 128, 128),
 }
+
 local function getRoleColor(role) return roleColors[role] or Color3.fromRGB(255, 255, 255) end
 
 -- ============================================================
@@ -868,20 +804,6 @@ lookSec:AddButton({
         end
         targetDrop.Refresh(names, true)
     end,
-})
-
-local hitboxSec = combatTab:CreateSection({ Name = "Hitbox Expander", Icon = "box" })
-hitboxSec:AddToggle({
-    Name = "Enable Hitbox", Icon = "box", Default = false,
-    Callback = function(state) hitboxEnabled = state end,
-})
-hitboxSec:AddSlider({
-    Name = "Hitbox Size", Icon = "maximize", Min = 1.0, Max = 10.0, Default = 1.5, Decimals = 1,
-    Callback = function(val) hitboxMultiplier = val end,
-})
-hitboxSec:AddToggle({
-    Name = "Visualize Hitboxes", Icon = "eye", Default = false,
-    Callback = function(state) hitboxVisualize = state end,
 })
 
 -- ===================== COSMETICS TAB =====================
