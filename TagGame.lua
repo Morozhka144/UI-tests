@@ -829,6 +829,7 @@ local function setInventory(data)
 end
 
 -- Добавляет косметику в Owned
+-- Добавляет косметику в Owned
 local function addCosmetic(category, itemName)
     local data = getInventory()
     if not data or not data.Owned then return false end
@@ -843,22 +844,107 @@ local function addCosmetic(category, itemName)
     return setInventory(data)
 end
 
--- Экипирует косметику (если игра поддерживает Equipped)
+-- Экипирует косметику — пробует несколько способов
 local function equipCosmetic(category, itemName)
-    local data = getInventory()
-    if not data then return false end
+    -- 1. Сначала добавляем в Owned (если ещё нет)
+    addCosmetic(category, itemName)
     
-    -- Пробуем разные варианты хранения экипировки
-    if not data.Equipped then data.Equipped = {} end
-    if not data.Equipped[category] then data.Equipped[category] = {} end
+    local char = LocalPlayer.Character
+    local success = false
     
-    -- Очищаем текущую экипировку этой категории
-    data.Equipped[category] = {}
-    table.insert(data.Equipped[category], itemName)
+    -- СПОСОБ 1: Атрибут на персонаже (самый вероятный)
+    if char then
+        local attrName = "Equipped" .. category  -- например "EquippedTrails"
+        pcall(function()
+            char:SetAttribute(attrName, itemName)
+        end)
+        
+        -- Проверяем, установилось ли
+        local check = char:GetAttribute(attrName)
+        if check == itemName then
+            success = true
+        end
+    end
     
-    return setInventory(data)
+    -- СПОСОБ 2: ValueObject в LocalPlayer (например "EquippedTrail")
+    if not success then
+        local possibleNames = {
+            "Equipped" .. category,           -- EquippedTrails
+            "Equipped" .. category:sub(1, -1), -- EquippedTrail (без s)
+            "Current" .. category,
+            "Active" .. category,
+        }
+        
+        for _, name in ipairs(possibleNames) do
+            local obj = LocalPlayer:FindFirstChild(name)
+            if obj and obj:IsA("ValueBase") then
+                pcall(function() obj.Value = itemName end)
+                success = true
+                break
+            end
+        end
+    end
+    
+    -- СПОСОБ 3: Поле в JSON инвентаря (маловероятно, но попробуем)
+    if not success then
+        local data = getInventory()
+        if data then
+            if not data.Equipped then data.Equipped = {} end
+            data.Equipped[category] = itemName
+            setInventory(data)
+        end
+    end
+    
+    -- СПОСОБ 4: Ищем любой ValueObject/Attribute с текущим трейлом и перезаписываем
+    if not success and char then
+        -- Перебираем все атрибуты персонажа
+        for _, attr in ipairs(char:GetAttributes() and (function() 
+            local t = {}
+            for k, v in pairs(char:GetAttributes()) do table.insert(t, k) end
+            return t
+        end)() or {}) do
+            if type(attr) == "string" and (attr:lower():find("trail") or attr:lower():find("equipped")) then
+                pcall(function() char:SetAttribute(attr, itemName) end)
+            end
+        end
+    end
+    
+    return true  -- Возвращаем true, т.к. хотя бы в Owned добавили
 end
 
+-- Получает текущий экипированный предмет
+local function getEquipped(category)
+    local char = LocalPlayer.Character
+    
+    -- Проверяем атрибут
+    if char then
+        local attrName = "Equipped" .. category
+        local val = char:GetAttribute(attrName)
+        if val then return val end
+    end
+    
+    -- Проверяем ValueObject
+    local possibleNames = {
+        "Equipped" .. category,
+        "Equipped" .. category:sub(1, -1),
+        "Current" .. category,
+        "Active" .. category,
+    }
+    for _, name in ipairs(possibleNames) do
+        local obj = LocalPlayer:FindFirstChild(name)
+        if obj and obj:IsA("ValueBase") then
+            return obj.Value
+        end
+    end
+    
+    -- Проверяем JSON
+    local data = getInventory()
+    if data and data.Equipped then
+        return data.Equipped[category]
+    end
+    
+    return nil
+end
 -- Список всех трейлов из cosmetic.txt
 local TRAILS_LIST = {
     "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
@@ -958,6 +1044,58 @@ addSec:AddButton({
             })
         else
             Window:Notify({ Title = "Cosmetics", Content = "Failed to equip", Type = "Error" })
+        end
+    end,
+})
+
+addSec:AddLabel("Currently equipped: " .. tostring(getEquipped("Trails") or "None"))
+quickSec:AddButton({
+    Name = "Detect Equipped Trail",
+    Icon = "search",
+    Callback = function()
+        local char = LocalPlayer.Character
+        if not char then
+            Window:Notify({ Title = "Detect", Content = "No character", Type = "Warning" })
+            return
+        end
+        
+        -- Сканируем все атрибуты персонажа
+        local found = {}
+        for attrName, attrVal in pairs(char:GetAttributes()) do
+            if type(attrVal) == "string" and attrVal ~= "" then
+                table.insert(found, attrName .. " = " .. tostring(attrVal))
+            end
+        end
+        
+        -- Сканируем ValueObjects в LocalPlayer
+        for _, obj in pairs(LocalPlayer:GetChildren()) do
+            if obj:IsA("ValueBase") then
+                table.insert(found, "[Player] " .. obj.Name .. " = " .. tostring(obj.Value))
+            end
+        end
+        
+        -- Сканируем JSON инвентаря
+        local data = getInventory()
+        if data then
+            for key, val in pairs(data) do
+                if type(val) ~= "table" then
+                    table.insert(found, "[JSON] " .. key .. " = " .. tostring(val))
+                end
+            end
+        end
+        
+        if #found == 0 then
+            Window:Notify({ Title = "Detect", Content = "Nothing found", Type = "Info" })
+        else
+            for _, info in ipairs(found) do
+                print("[MoroDetect] " .. info)
+            end
+            Window:Notify({ 
+                Title = "Detect", 
+                Content = "Found " .. #found .. " items. Check console (F9)",
+                Type = "Success",
+                Duration = 5
+            })
         end
     end,
 })
