@@ -565,7 +565,15 @@ RunService.RenderStepped:Connect(function()
             local pRoleObj = player:FindFirstChild("PlayerRole")
             local pRole = pRoleObj and pRoleObj.Value
 
-            local show = hrp and table.find(selectedRoles, pRole)
+            local show = false
+            if hrp then
+                for _, category in ipairs(selectedCategories) do
+                    if category == "Enemies" and isEnemy(player) then show = true break end
+                    if category == "My Team" and isMyTeam(player) then show = true break end
+                    if category == "OOF" and isOOF(player) then show = true break end
+                    if category == "Frozen" and isFrozen(player) then show = true break end
+                end
+            end
             if show then
                 local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
                 if onScreen then
