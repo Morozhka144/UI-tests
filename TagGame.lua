@@ -291,7 +291,7 @@ local lastEquipped = {} -- category -> itemName
 LocalPlayer.CharacterAdded:Connect(function(character)
     cosmeticsInstalled = {}
     currentFakeCosmetics = {}
-    task.wait(1.5)
+    task.wait(3)
     
     -- Восстанавливаем экипированную косметику
     for category, itemName in pairs(lastEquipped) do
