@@ -1047,59 +1047,7 @@ addSec:AddButton({
         end
     end,
 })
-
 addSec:AddLabel("Currently equipped: " .. tostring(getEquipped("Trails") or "None"))
-quickSec:AddButton({
-    Name = "Detect Equipped Trail",
-    Icon = "search",
-    Callback = function()
-        local char = LocalPlayer.Character
-        if not char then
-            Window:Notify({ Title = "Detect", Content = "No character", Type = "Warning" })
-            return
-        end
-        
-        -- Сканируем все атрибуты персонажа
-        local found = {}
-        for attrName, attrVal in pairs(char:GetAttributes()) do
-            if type(attrVal) == "string" and attrVal ~= "" then
-                table.insert(found, attrName .. " = " .. tostring(attrVal))
-            end
-        end
-        
-        -- Сканируем ValueObjects в LocalPlayer
-        for _, obj in pairs(LocalPlayer:GetChildren()) do
-            if obj:IsA("ValueBase") then
-                table.insert(found, "[Player] " .. obj.Name .. " = " .. tostring(obj.Value))
-            end
-        end
-        
-        -- Сканируем JSON инвентаря
-        local data = getInventory()
-        if data then
-            for key, val in pairs(data) do
-                if type(val) ~= "table" then
-                    table.insert(found, "[JSON] " .. key .. " = " .. tostring(val))
-                end
-            end
-        end
-        
-        if #found == 0 then
-            Window:Notify({ Title = "Detect", Content = "Nothing found", Type = "Info" })
-        else
-            for _, info in ipairs(found) do
-                print("[MoroDetect] " .. info)
-            end
-            Window:Notify({ 
-                Title = "Detect", 
-                Content = "Found " .. #found .. " items. Check console (F9)",
-                Type = "Success",
-                Duration = 5
-            })
-        end
-    end,
-})
-
 -- Секция: Кастомный ввод
 cosmeticsTab:Column("right")
 local customSec = cosmeticsTab:CreateSection({ Name = "Custom Item", Icon = "edit" })
@@ -1204,6 +1152,57 @@ quickSec:AddButton({
             end
             setInventory(data)
             Window:Notify({ Title = "Cosmetics", Content = "Inventory cleared", Type = "Info" })
+        end
+    end,
+})
+
+quickSec:AddButton({
+    Name = "Detect Equipped Trail",
+    Icon = "search",
+    Callback = function()
+        local char = LocalPlayer.Character
+        if not char then
+            Window:Notify({ Title = "Detect", Content = "No character", Type = "Warning" })
+            return
+        end
+        
+        -- Сканируем все атрибуты персонажа
+        local found = {}
+        for attrName, attrVal in pairs(char:GetAttributes()) do
+            if type(attrVal) == "string" and attrVal ~= "" then
+                table.insert(found, attrName .. " = " .. tostring(attrVal))
+            end
+        end
+        
+        -- Сканируем ValueObjects в LocalPlayer
+        for _, obj in pairs(LocalPlayer:GetChildren()) do
+            if obj:IsA("ValueBase") then
+                table.insert(found, "[Player] " .. obj.Name .. " = " .. tostring(obj.Value))
+            end
+        end
+        
+        -- Сканируем JSON инвентаря
+        local data = getInventory()
+        if data then
+            for key, val in pairs(data) do
+                if type(val) ~= "table" then
+                    table.insert(found, "[JSON] " .. key .. " = " .. tostring(val))
+                end
+            end
+        end
+        
+        if #found == 0 then
+            Window:Notify({ Title = "Detect", Content = "Nothing found", Type = "Info" })
+        else
+            for _, info in ipairs(found) do
+                print("[MoroDetect] " .. info)
+            end
+            Window:Notify({ 
+                Title = "Detect", 
+                Content = "Found " .. #found .. " items. Check console (F9)",
+                Type = "Success",
+                Duration = 5
+            })
         end
     end,
 })
