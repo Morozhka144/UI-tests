@@ -705,7 +705,7 @@ end
 -- [[ TRACERS ]] — с категориями и цветными ролями
 -- ============================================================
 local tracersEnabled = false
-local selectedCategories = {}
+local selectedCategories = {"Enemies"}
 local lines = {}
 
 local function clearTracerCache(playerName)
@@ -940,9 +940,10 @@ local categoryDropdown = tracerSec:AddMultiDropdown({
     Icon = "users",
     Options = {"Enemies", "My Team", "OOF", "Frozen"},
     Default = {"Enemies"},
-    Callback = function(values) selectedCategories = values end,
+    Callback = function(values)
+        selectedCategories = values or {}
+    end,
 })
-
 -- ===================== COMBAT TAB =====================
 local combatTab = Window:CreateTab({ Name = "Combat", Icon = "crosshair" })
 
@@ -1363,34 +1364,40 @@ RunService.RenderStepped:Connect(function()
     lookAtLoop()
     updateRing()
     
-    if tracersEnabled then
+        if tracersEnabled then
         for _, player in pairs(Players:GetPlayers()) do
             if player == LocalPlayer then continue end
-            
+
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            
+
             local show = false
             if hrp then
-                for _, category in ipairs(selectedCategories) do
-                    if category == "Enemies" and isEnemy(player) then show = true break end
-                    if category == "My Team" and isMyTeam(player) then show = true break end
-                    if category == "OOF" and isOOF(player) then show = true break end
-                    if category == "Frozen" and isFrozen(player) then show = true break end
+                -- Если категории не выбраны — показываем всех (фолбэк)
+                if #selectedCategories == 0 then
+                    show = false
+                else
+                    for _, category in ipairs(selectedCategories) do
+                        if category == "Enemies" and isEnemy(player) then show = true break end
+                        if category == "My Team" and isMyTeam(player) then show = true break end
+                        if category == "OOF" and isOOF(player) then show = true break end
+                        if category == "Frozen" and isFrozen(player) then show = true break end
+                    end
                 end
             end
-            
+
             if not show then
                 if lines[player.Name] then
                     pcall(function() lines[player.Name].Visible = false end)
                 end
                 continue
             end
-            
+
             if not lines[player.Name] then
                 local success, line = pcall(function()
                     local l = Drawing.new("Line")
                     l.Thickness = 1.5
+                    l.Transparency = 1
                     l.Color = Color3.new(1, 1, 1)
                     return l
                 end)
@@ -1400,12 +1407,12 @@ RunService.RenderStepped:Connect(function()
                     continue
                 end
             end
-            
+
             local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
             if onScreen then
                 local pRoleObj = player:FindFirstChild("PlayerRole")
                 local pRole = pRoleObj and pRoleObj.Value
-                
+
                 pcall(function()
                     lines[player.Name].From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
                     lines[player.Name].To = Vector2.new(pos.X, pos.Y)
