@@ -445,15 +445,6 @@ local categoryDropdown = tracerSec:AddMultiDropdown({
     Callback = function(values) selectedCategories = values end,
 })
 
-tracerSec:AddButton({
-    Name = "Select All", Icon = "check-square",
-    Callback = function() categoryDropdown.SelectAll() end,
-})
-tracerSec:AddButton({
-    Name = "Clear All", Icon = "x-square",
-    Callback = function() categoryDropdown.ClearAll() end,
-})
-
 -- ===================== COMBAT TAB =====================
 local combatTab = Window:CreateTab({ Name = "Combat", Icon = "crosshair" })
 
