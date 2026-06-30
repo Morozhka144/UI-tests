@@ -40,26 +40,38 @@ end
 -- ============================================================
 -- [[ VISUALIZER RING (Кольцо на земле) ]] --
 -- ============================================================
-local killAuraRing = Instance.new("Part")
-killAuraRing.Name = "MoroKillAuraRing"
-killAuraRing.Shape = Enum.PartType.Ball
-killAuraRing.Size = Vector3.new(1, 1, 1)
-killAuraRing.Material = Enum.Material.Neon
-killAuraRing.Color = Color3.fromRGB(255, 0, 0)
-killAuraRing.Transparency = 1
-killAuraRing.CanCollide = false
-killAuraRing.CanTouch = false
-killAuraRing.CanQuery = false
-killAuraRing.Massless = true
-killAuraRing.Anchored = true
-killAuraRing.Parent = workspace
+-- Создаём кольцо из двух цилиндров (внешний и внутренний)
+local killAuraRingOuter = Instance.new("Part")
+killAuraRingOuter.Name = "MoroKillAuraRingOuter"
+killAuraRingOuter.Shape = Enum.PartType.Cylinder
+killAuraRingOuter.Size = Vector3.new(0.2, 30, 30)
+killAuraRingOuter.Material = Enum.Material.Neon
+killAuraRingOuter.Color = Color3.fromRGB(255, 0, 0)
+killAuraRingOuter.Transparency = 0.6
+killAuraRingOuter.CanCollide = false
+killAuraRingOuter.CanTouch = false
+killAuraRingOuter.CanQuery = false
+killAuraRingOuter.Massless = true
+killAuraRingOuter.Anchored = true
+killAuraRingOuter.TopSurface = Enum.SurfaceType.Smooth
+killAuraRingOuter.BottomSurface = Enum.SurfaceType.Smooth
+killAuraRingOuter.Parent = workspace
 
-local ringMesh = Instance.new("SpecialMesh")
-ringMesh.MeshType = Enum.MeshType.FileMesh
-ringMesh.MeshId = "rbxassetid://292863596" -- Torus mesh
-ringMesh.TextureId = ""
-ringMesh.Scale = Vector3.new(1, 1, 0.1)
-ringMesh.Parent = killAuraRing
+local killAuraRingInner = Instance.new("Part")
+killAuraRingInner.Name = "MoroKillAuraRingInner"
+killAuraRingInner.Shape = Enum.PartType.Cylinder
+killAuraRingInner.Size = Vector3.new(0.3, 28, 28)
+killAuraRingInner.Material = Enum.Material.Neon
+killAuraRingInner.Color = Color3.fromRGB(0, 0, 0)
+killAuraRingInner.Transparency = 1
+killAuraRingInner.CanCollide = false
+killAuraRingInner.CanTouch = false
+killAuraRingInner.CanQuery = false
+killAuraRingInner.Massless = true
+killAuraRingInner.Anchored = true
+killAuraRingInner.TopSurface = Enum.SurfaceType.Smooth
+killAuraRingInner.BottomSurface = Enum.SurfaceType.Smooth
+killAuraRingInner.Parent = workspace
 
 local floorRayParams = RaycastParams.new()
 floorRayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -67,7 +79,7 @@ floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
 
 local function updateRing()
     local hrp = getHRP()
-    if hrp and _G.AutoTagEnabled then
+    if hrp and _G.AutoTagEnabled and _G.ShowKillAuraRing then
         floorRayParams.FilterDescendantsInstances = {LocalPlayer.Character}
         local ray = workspace:Raycast(
             hrp.Position + Vector3.new(0, 2, 0),
@@ -83,13 +95,17 @@ local function updateRing()
         end
 
         local pos = Vector3.new(hrp.Position.X, floorY, hrp.Position.Z)
-        killAuraRing.CFrame = CFrame.new(pos)
         local radius = _G.KillAuraRange
-        ringMesh.Scale = Vector3.new(radius * 2, radius * 2, 0.15)
         
-        killAuraRing.Transparency = 0.4
+        killAuraRingOuter.CFrame = CFrame.new(pos)
+        killAuraRingOuter.Size = Vector3.new(0.2, radius * 2, radius * 2)
+        killAuraRingOuter.Transparency = 0.4
+        
+        killAuraRingInner.CFrame = CFrame.new(pos)
+        killAuraRingInner.Size = Vector3.new(0.3, (radius - 0.5) * 2, (radius - 0.5) * 2)
     else
-        killAuraRing.Transparency = 1
+        killAuraRingOuter.Transparency = 1
+        killAuraRingInner.Transparency = 1
     end
 end
 
@@ -475,6 +491,34 @@ local tracersEnabled = false
 local selectedCategories = {}
 local lines = {}
 
+local function clearTracerCache(playerName)
+    if lines[playerName] then
+        pcall(function()
+            lines[playerName].Visible = false
+            lines[playerName]:Remove()
+        end)
+        lines[playerName] = nil
+    end
+end
+
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        player.CharacterAdded:Connect(function()
+            clearTracerCache(player.Name)
+        end)
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        clearTracerCache(player.Name)
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    clearTracerCache(player.Name)
+end)
+
 local TAGGER_ROLES = {
     "Tagger", "Infected", "PatientZero", "FastInfected", "BabyInfected",
     "JumpingInfected", "BigInfected", "CloakInfected", "InfectedRunner",
@@ -824,36 +868,55 @@ RunService.RenderStepped:Connect(function()
     -- Трейсеры рендер
     if tracersEnabled then
         for _, player in pairs(Players:GetPlayers()) do
-            if player == LocalPlayer or not player.Character then continue end
-
-            if not lines[player.Name] then
-                local success, line = pcall(function()
-                    local l = Drawing.new("Line")
-                    l.Thickness = 1.5
-                    l.Color = Color3.new(1, 1, 1)
-                    return l
-                end)
-                if success and line then lines[player.Name] = line else continue end
+            if player == LocalPlayer then continue end
+            
+            local char = player.Character
+            if not char then
+                -- Если персонажа нет, скрываем трейсер
+                if lines[player.Name] then
+                    pcall(function() lines[player.Name].Visible = false end)
+                end
+                continue
             end
 
-            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            local pRoleObj = player:FindFirstChild("PlayerRole")
-            local pRole = pRoleObj and pRoleObj.Value
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if not hrp then
+                if lines[player.Name] then
+                    pcall(function() lines[player.Name].Visible = false end)
+                end
+                continue
+            end
 
             -- Проверяем категории
             local show = false
-            if hrp then
-                for _, category in ipairs(selectedCategories) do
-                    if category == "Enemies" and isEnemy(player) then show = true break end
-                    if category == "My Team" and isMyTeam(player) then show = true break end
-                    if category == "OOF" and isOOF(player) then show = true break end
-                    if category == "Frozen" and isFrozen(player) then show = true break end
-                end
+            for _, category in ipairs(selectedCategories) do
+                if category == "Enemies" and isEnemy(player) then show = true break end
+                if category == "My Team" and isMyTeam(player) then show = true break end
+                if category == "OOF" and isOOF(player) then show = true break end
+                if category == "Frozen" and isFrozen(player) then show = true break end
             end
 
             if show then
+                -- Создаём линию, если её нет или она невалидна
+                if not lines[player.Name] then
+                    local success, line = pcall(function()
+                        local l = Drawing.new("Line")
+                        l.Thickness = 1.5
+                        l.Color = Color3.new(1, 1, 1)
+                        return l
+                    end)
+                    if success and line then
+                        lines[player.Name] = line
+                    else
+                        continue
+                    end
+                end
+
                 local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
                 if onScreen then
+                    local pRoleObj = player:FindFirstChild("PlayerRole")
+                    local pRole = pRoleObj and pRoleObj.Value
+                    
                     lines[player.Name].From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
                     lines[player.Name].To = Vector2.new(pos.X, pos.Y)
                     lines[player.Name].Color = getRoleColor(pRole)
@@ -862,7 +925,9 @@ RunService.RenderStepped:Connect(function()
                     lines[player.Name].Visible = false
                 end
             else
-                lines[player.Name].Visible = false
+                if lines[player.Name] then
+                    lines[player.Name].Visible = false
+                end
             end
         end
     end
