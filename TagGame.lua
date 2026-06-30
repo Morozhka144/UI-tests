@@ -77,51 +77,69 @@ end
 -- ============================================================
 -- [[ МАППИНГ ИМЕН ПРЕДМЕТОВ К ИМЕНАМ МОДЕЛЕЙ В ИГРЕ ]] --
 -- ============================================================
--- Имя предмета в UI -> имя модели в ReplicatedStorage
-local MODEL_NAME_MAP = {
+-- Списки предметов (Trails - полный список, Outfits - динамически)
+local ITEMS_BY_CATEGORY = {
     Trails = {
-        ["Basic"] = "Basic", ["Plus"] = "+", ["V"] = "V", ["T"] = "T", ["X"] = "X",
-        ["RealPNG"] = "RealPNG", ["Box"] = "Box", ["Comet"] = "Comet",
-        ["RainbowComet"] = "RainbowComet", ["Whirlpool"] = "Whirlpool",
-        ["Gradient"] = "Gradient", ["LightGradient"] = "LightGradient",
-        ["DarkGradient"] = "DarkGradient", ["Error"] = "Error", ["Tron"] = "Tron",
-        ["Tron2"] = "Tron2", ["Vantablack"] = "Vantablack", ["ZFight"] = "ZFight",
-        ["Snarp"] = "Snarp", ["AwesomeHumanTrail"] = "AwesomeHumanTrail",
-        ["Visualizer"] = "Visualizer", ["Freedom"] = "Freedom", ["Solid"] = "Solid",
-        ["Sparkletime"] = "Sparkletime", ["BitWave"] = "BitWave", ["Kinetic"] = "Kinetic",
-        ["Cloudy"] = "Cloudy", ["Arithmetic"] = "Arithmetic", ["Arrow"] = "Arrow",
-        ["Subspace"] = "Subspace", ["cape"] = "cape", ["Encrypted"] = "Encrypted",
-        ["Stinky"] = "Stinky", ["DraculaWalker"] = "DraculaWalker",
-        ["StarTrail"] = "StarTrail", ["ghostrider"] = "ghostrider",
-        ["HomingMissile"] = "HomingMissile", ["SpeedCoilTrail"] = "SpeedCoilTrail",
-        ["StringLights"] = "StringLights", ["Bonsai"] = "Bonsai",
-        ["Snowflakes"] = "Snowflakes", ["Lovestruck"] = "Lovestruck",
-        ["Driftin"] = "Driftin", ["CherryBlossom"] = "CherryBlossom",
-        ["JetTrail"] = "JetTrail", ["StarRoot"] = "StarRoot",
-        ["IceSkates"] = "IceSkates", ["Tachophobia"] = "Tachophobia",
-        ["Ablaze"] = "Ablaze", ["Decorated Tree"] = "Decorated Tree",
-        ["Snowflake Power"] = "Snowflake Power", ["Knight"] = "Knight",
-        ["TankKnight"] = "TankKnight", ["Boombox"] = "Boombox",
-        ["MeteorFists"] = "MeteorFists", ["PersonalSun"] = "PersonalSun",
-        ["PentagonTrail"] = "PentagonTrail", ["Spellbook"] = "Spellbook",
-        ["NorthStarTrail"] = "NorthStarTrail", ["CelestialHead"] = "CelestialHead",
-        ["YinYang"] = "YinYang", ["Condiments"] = "Condiments",
-        ["OverfilledBriefcase"] = "OverfilledBriefcase", ["ACUnit"] = "ACUnit",
-        ["HeartTrail"] = "HeartTrail", ["RadioHead"] = "RadioHead",
-        ["SaltNPepper"] = "SaltNPepper", ["LovePower"] = "LovePower",
-        ["SecretSanta"] = "SecretSanta", ["Circle"] = "Circle",
-        ["Triangle"] = "Triangle", ["StarBeam"] = "StarBeam",
-        ["IdeaTrail"] = "IdeaTrail", ["frostbite"] = "frostbite",
-        ["Sparklinghands"] = "Sparklinghands", ["Segmented"] = "Segmented",
-        ["Illusions"] = "Illusions", ["GuppyTrail"] = "GuppyTrail",
-        ["TESTING"] = "TESTING"
+        "Basic", "Plus", "V", "T", "X", "RealPNG", "Box", "Comet", "RainbowComet",
+        "Whirlpool", "Gradient", "LightGradient", "DarkGradient", "Error", "Tron",
+        "Tron2", "Vantablack", "ZFight", "Snarp", "AwesomeHumanTrail", "Visualizer",
+        "Freedom", "Solid", "Sparkletime", "BitWave", "Kinetic", "Cloudy", "Arithmetic",
+        "Arrow", "Subspace", "cape", "Encrypted", "Stinky", "DraculaWalker", "StarTrail",
+        "ghostrider", "HomingMissile", "SpeedCoilTrail", "StringLights", "Bonsai",
+        "Snowflakes", "Lovestruck", "Driftin", "CherryBlossom", "JetTrail", "StarRoot",
+        "IceSkates", "Tachophobia", "Ablaze", "Decorated Tree", "Snowflake Power",
+        "Knight", "TankKnight", "Boombox", "MeteorFists", "PersonalSun", "PentagonTrail",
+        "Spellbook", "NorthStarTrail", "CelestialHead", "YinYang", "Condiments",
+        "OverfilledBriefcase", "ACUnit", "HeartTrail", "RadioHead", "SaltNPepper",
+        "LovePower", "SecretSanta", "Circle", "Triangle", "StarBeam", "IdeaTrail",
+        "frostbite", "Sparklinghands", "Segmented", "Illusions", "GuppyTrail", "TESTING"
     },
-    Emotes = {},
-    TagEffects = {},
-    Banners = {},
-    Outfits = {},
-    Stickers = {},
+    Outfits = {}, -- Будет заполнено динамически
 }
+
+local CATEGORY_KEYS = {"Trails", "Outfits"}
+
+-- Функция для сканирования доступных аутфитов
+local function scanOutfits()
+    local outfits = {}
+    
+    -- Пробуем разные варианты папок
+    local possibleFolders = {
+        "Outfits", "Outfit", "outfits", "outfit",
+        "CharacterOutfits", "PlayerOutfits"
+    }
+    
+    for _, folderName in ipairs(possibleFolders) do
+        local folder = ReplicatedStorage:FindFirstChild(folderName)
+        if folder then
+            for _, child in ipairs(folder:GetChildren()) do
+                table.insert(outfits, child.Name)
+            end
+            break
+        end
+    end
+    
+    -- Если не нашли в ReplicatedStorage, пробуем ReplicatedFirst.content
+    if #outfits == 0 then
+        local content = ReplicatedFirst:FindFirstChild("content")
+        if content then
+            for _, folderName in ipairs(possibleFolders) do
+                local folder = content:FindFirstChild(folderName)
+                if folder then
+                    for _, child in ipairs(folder:GetChildren()) do
+                        table.insert(outfits, child.Name)
+                    end
+                    break
+                end
+            end
+        end
+    end
+    
+    return outfits
+end
+
+-- Заполняем Outfits при старте
+ITEMS_BY_CATEGORY.Outfits = scanOutfits()
 
 -- Возвращает имя модели для предмета в заданной категории
 local function getModelName(category, itemName)
@@ -254,7 +272,7 @@ end
 -- ============================================================
 task.spawn(function()
     while true do
-        task.wait(0.5)
+        task.wait(0.1)
         
         if fakeCosmeticEnabled and LocalPlayer.Character then
             -- Проверяем каждую категорию, которая была экипирована
@@ -1295,6 +1313,37 @@ invSec:AddButton({
         })
     end,
 })
+
+invSec:AddButton({
+    Name = "Rescan Outfits",
+    Icon = "refresh-cw",
+    Callback = function()
+        local newOutfits = scanOutfits()
+        ITEMS_BY_CATEGORY.Outfits = newOutfits
+        
+        -- Обновляем dropdown предметов, если выбрана категория Outfits
+        if selectedCategoryKey == "Outfits" and itemDrop then
+            itemDrop.Refresh(newOutfits, false)
+            if newOutfits[1] then
+                selectedItemName = newOutfits[1]
+            end
+        end
+        
+        Window:Notify({
+            Title = "Outfits",
+            Content = "Found " .. #newOutfits .. " outfits",
+            Type = "Success",
+            Duration = 3
+        })
+        
+        -- Выводим в консоль для отладки
+        print("[MoroLumina] Available outfits:")
+        for _, outfit in ipairs(newOutfits) do
+            print("  - " .. outfit)
+        end
+    end,
+})
+
 -- ============================================================
 -- [[ SETTINGS TAB ]] --
 -- ============================================================
