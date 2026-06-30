@@ -748,6 +748,11 @@ local function isOOF(player)
     return role == "OOF"
 end
 
+local function isAshen(player)
+    local role = getRole(player)
+    return role == "Ashen"
+end
+
 -- Frozen: роль == "Frozen"
 local function isFrozen(player)
     local role = getRole(player)
@@ -761,7 +766,7 @@ local function isEnemy(player)
     if not myRole or not theirRole then return false end
 
     -- Исключаем спец-роли
-    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" then
+    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" theirRole == "Ashen" then
         return false
     end
 
@@ -1394,7 +1399,7 @@ RunService.RenderStepped:Connect(function()
                     for _, category in ipairs(selectedCategories) do
                         if category == "Enemies" and isEnemy(player) then show = true break end
                         if category == "My Team" and isMyTeam(player) then show = true break end
-                        if category == "OOF" and isOOF(player) then show = true break end
+                        if category == "OOF" and (isOOF(player) or isAshen(player)) then show = true break end
                         if category == "Frozen" and isFrozen(player) then show = true break end
                     end
                 end
