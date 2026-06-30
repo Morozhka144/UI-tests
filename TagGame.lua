@@ -736,38 +736,52 @@ Players.PlayerRemoving:Connect(function(player)
     clearTracerCache(player.Name)
 end)
 
--- Функции категорий
+-- Получить роль игрока
+local function getRole(player)
+    local roleObj = player:FindFirstChild("PlayerRole")
+    return roleObj and roleObj.Value
+end
+
+-- OOF: роль == "OOF"
 local function isOOF(player)
-    local char = player.Character
-    if not char then return false end
-    return char:GetAttribute("OOF") == true or
-           char:GetAttribute("Eliminated") == true or
-           char:GetAttribute("Dead") == true or
-           (char:FindFirstChild("Humanoid") and char.Humanoid.Health <= 0)
+    local role = getRole(player)
+    return role == "OOF"
 end
 
+-- Frozen: роль == "Frozen"
 local function isFrozen(player)
-    local char = player.Character
-    if not char then return false end
-    return char:GetAttribute("Frozen") == true or
-           char:GetAttribute("Chilled") == true or
-           char:GetAttribute("Ice") == true
+    local role = getRole(player)
+    return role == "Frozen"
 end
 
+-- Enemy: роль НЕ Frozen, НЕ OOF, НЕ Alone, И отличается от моей
 local function isEnemy(player)
-    if isOOF(player) or isFrozen(player) then return false end
-    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
-    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+    local myRole = getRole(LocalPlayer)
+    local theirRole = getRole(player)
     if not myRole or not theirRole then return false end
-    return myRole ~= theirRole or myRole == "Alone"
+
+    -- Исключаем спец-роли
+    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" then
+        return false
+    end
+
+    -- Враг = роль отличается от моей
+    return theirRole ~= myRole
 end
 
+-- My Team: роль КАК у меня, и НЕ Frozen/OOF/Alone
 local function isMyTeam(player)
-    if isOOF(player) or isFrozen(player) then return false end
-    local myRole = LocalPlayer:FindFirstChild("PlayerRole") and LocalPlayer.PlayerRole.Value
-    local theirRole = player:FindFirstChild("PlayerRole") and player.PlayerRole.Value
+    local myRole = getRole(LocalPlayer)
+    local theirRole = getRole(player)
     if not myRole or not theirRole then return false end
-    return myRole == theirRole and myRole ~= "Alone" and myRole ~= "OOF"
+
+    -- Исключаем спец-роли
+    if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" then
+        return false
+    end
+
+    -- Команда = такая же роль, как у меня
+    return theirRole == myRole
 end
 
 local roleColors = {
