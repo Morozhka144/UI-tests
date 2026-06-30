@@ -38,25 +38,38 @@ local function getHRP()
 end
 
 -- ============================================================
+-- [[ ПЕРЕМЕННЫЕ ТРЕЙЛА (объявляем ПЕРЕД использованием) ]] --
+-- ============================================================
+local fakeTrailEnabled = true
+local selectedTrailModelName = "Box" -- Имя модели из ReplicatedStorage.Trails
+local currentFakeTrail = nil
+local trailInstalled = false
+
+-- ============================================================
 -- [[ ЗАЩИТА ТРЕЙЛА ОТ УДАЛЕНИЯ ИГРОЙ ]] --
 -- ============================================================
-local oldNamecall
-oldNamecall = hookmetamethods(game, "__namecall", function(self, ...)
-    local method = getnamecallmethod()
-    
-    -- Если кто-то пытается удалить наш фейковый трейл — блокируем
-    if currentFakeTrail and (method == "Destroy" or method == "Remove" or method == "remove") then
-        if self == currentFakeTrail or (self.Parent and self:IsDescendantOf(currentFakeTrail)) then
-            -- Вместо удаления просто отключаем видимость (или игнорируем)
-            return nil
-        end
-    end
-    
-    return oldNamecall(self, ...)
-end)
+-- Проверяем, доступен ли hookmetamethods
+local hookAvailable = (hookmetamethods ~= nil and getnamecallmethod ~= nil)
 
--- Флаг, что трейл уже установлен (чтобы не спамить пересозданием)
-local trailInstalled = false
+if hookAvailable then
+    local oldNamecall
+    oldNamecall = hookmetamethods(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        
+        -- Если кто-то пытается удалить наш фейковый трейл — блокируем
+        if currentFakeTrail and (method == "Destroy" or method == "Remove" or method == "remove") then
+            if self == currentFakeTrail or (self.Parent and self:IsDescendantOf(currentFakeTrail)) then
+                return nil
+            end
+        end
+        
+        return oldNamecall(self, ...)
+    end)
+    print("[MoroLumina]: Hook защита трейла активирована")
+else
+    print("[MoroLumina]: hookmetamethods недоступен, используем мониторинг")
+end
+
 
 -- ============================================================
 -- [[ ФУНКЦИЯ ЭКИПИРОВКИ ЛОКАЛЬНОГО ТРЕЙЛА ]] --
@@ -109,13 +122,23 @@ end
 -- ============================================================
 task.spawn(function()
     while true do
-        task.wait(1) -- Проверяем раз в секунду
+        task.wait(0.5) -- Проверяем чаще, если hook недоступен
         
         if fakeTrailEnabled and LocalPlayer.Character then
             -- Если трейл был установлен, но его больше нет — пересоздаём
             if trailInstalled and (not currentFakeTrail or not currentFakeTrail.Parent) then
                 print("[MoroLumina]: Игра удалила трейл, возвращаем...")
                 equipFakeTrail(LocalPlayer.Character)
+            end
+            
+            -- Дополнительная защита: если hook недоступен, проверяем видимость
+            if not hookAvailable and currentFakeTrail and currentFakeTrail.Parent then
+                -- Убеждаемся, что все части трейла видимы
+                for _, descendant in ipairs(currentFakeTrail:GetDescendants()) do
+                    if descendant:IsA("Trail") or descendant:IsA("ParticleEmitter") then
+                        descendant.Enabled = true
+                    end
+                end
             end
         end
     end
