@@ -28,6 +28,10 @@ _G.KillAuraRange = 15
 _G.AutoParryRange = 12
 _G.ShowKillAuraRing = true
 
+_G.LegitTagEnabled = false
+_G.LegitTagRange = 12
+_G.LegitTagFOV = 0.6
+
 -- [[ Helpers ]] --
 local function getHRP()
     local char = LocalPlayer.Character
@@ -149,6 +153,88 @@ local function autoTagLoop()
                 if dist < closestDist then
                     closestDist = dist
                     closestTarget = char
+                end
+            end
+        end
+    end
+
+    if not closestTarget then return end
+
+    local targetPlayer = Players:GetPlayerFromCharacter(closestTarget)
+    if not targetPlayer then return end
+
+    local success, targetID = pcall(SerialisedData.getPlayer, targetPlayer)
+    if not (success and targetID) then return end
+
+    local targetHRP = closestTarget.HumanoidRootPart
+    local lookCFrame = CFrame.new(hrp.Position, targetHRP.Position)
+    local a1, a2, a3 = lookCFrame:ToEulerAnglesYXZ()
+
+    local function compress(angle)
+        return math.floor((angle + math.pi) / (math.pi * 2) * 65535 + 0.5)
+    end
+
+    local buf = buffer.create(7)
+    buffer.writeu8(buf, 0, targetID)
+    buffer.writeu16(buf, 1, compress(a1))
+    buffer.writeu16(buf, 3, compress(a2))
+    buffer.writeu16(buf, 5, compress(a3))
+
+    local s, res = pcall(function() return TagPlayerEvent:InvokeServer(buf) end)
+    if s and res then
+        pcall(function() SoundEvent:Fire("Tag", hrp, 0.25, true) end)
+        local cd = boosters.TagCooldown
+        local tagSpeed = 1 / (cd.enabled and (cd.base * cd.mult) or cd.base)
+        pcall(function() AnimateEvent:Fire("Tag", 0.1, tagSpeed) end)
+        pcall(function() TagSwing:Fire() end)
+    end
+end
+
+-- ============================================================
+-- [[ AUTO-TAG LEGIT (только цели перед тобой) ]] --
+-- ============================================================
+local function legitTagLoop()
+    if not _G.LegitTagEnabled then return end
+    local hrp = getHRP()
+    if not hrp then return end
+
+    local myRole = getRole(LocalPlayer)
+    local myChar = LocalPlayer.Character
+
+    -- Направление взгляда (камера)
+    local aimDir = Camera.CFrame.LookVector
+
+    local closestTarget, closestDist = nil, _G.LegitTagRange
+    local bestDot = _G.LegitTagFOV
+
+    for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
+        local targetHRP = char ~= myChar and char:FindFirstChild("HumanoidRootPart")
+        if targetHRP then
+            local targetPlayer = Players:GetPlayerFromCharacter(char)
+            local targetRole = targetPlayer and getRole(targetPlayer)
+            local skip = false
+
+            if FFA_ROLES[myRole] then
+                skip = targetRole and IGNORED_ROLES[targetRole]
+            else
+                if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then skip = true
+                elseif (myRole == "Chiller" or myRole == "Freezer") and targetRole == "Frozen" then skip = true
+                elseif myRole == "Runner" and targetRole == "Chiller" then skip = true
+                elseif myRole and targetRole and myRole == targetRole then skip = true
+                elseif targetRole and IGNORED_ROLES[targetRole] then skip = true
+                end
+            end
+
+            if not skip then
+                local delta = targetHRP.Position - hrp.Position
+                local dist = delta.Magnitude
+                if dist < closestDist and dist > 0 then
+                    -- Проверка: цель в конусе перед нами?
+                    local dot = aimDir:Dot(delta.Unit)
+                    if dot > bestDot then
+                        bestDot = dot
+                        closestTarget = char
+                    end
                 end
             end
         end
@@ -630,22 +716,6 @@ local rangeSec = combatTab:CreateSection({ Name = "Tag Range", Icon = "maximize"
 rangeSec:AddToggle({ Name = "Range Booster", Icon = "maximize", Default = false, Callback = makeBoostToggle("RangeMultiplier") })
 rangeSec:AddSlider({ Name = "Range Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("RangeMultiplier") })
 
-combatTab:Column("right")
-local autoTagSec = combatTab:CreateSection({ Name = "Auto Tag", Icon = "zap" })
-autoTagSec:AddToggle({ Name = "Auto Tag (Kill Aura)", Icon = "zap", Default = false, Callback = function(state) _G.AutoTagEnabled = state end })
-autoTagSec:AddSlider({ Name = "Tag Radius", Icon = "maximize", Min = 5, Max = 20, Default = 10, Decimals = 0, Callback = function(val) _G.KillAuraRange = val end })
-autoTagSec:AddToggle({ Name = "Show Ring", Icon = "circle", Default = false, Callback = function(state) _G.ShowKillAuraRing = state end })
-
-local autoParrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
-autoParrySec:AddToggle({
-    Name = "Auto Parry", Icon = "shield", Default = false,
-    Callback = function(state)
-        _G.AutoParryEnabled = state
-        applyAllBoosts() -- сразу выставит атрибут EnableParry
-    end,
-})
-autoParrySec:AddSlider({ Name = "Parry Radius", Icon = "maximize", Min = 5, Max = 20, Default = 12, Decimals = 0, Callback = function(val) _G.AutoParryRange = val end })
-
 local lookSec = combatTab:CreateSection({ Name = "Look At Player", Icon = "eye" })
 lookSec:AddToggle({ Name = "Enable Look At", Icon = "eye", Default = false, Callback = function(state) lookAtEnabled = state end })
 local targetDrop = lookSec:AddDropdown({ Name = "Select Target", Icon = "user", Options = {}, Callback = function(val) lookAtTarget = val end })
@@ -659,6 +729,27 @@ lookSec:AddButton({
         targetDrop.Refresh(names, true)
     end,
 })
+
+combatTab:Column("right")
+local autoTagSec = combatTab:CreateSection({ Name = "Auto Tag", Icon = "zap" })
+autoTagSec:AddToggle({ Name = "Auto Tag (Kill Aura)", Icon = "zap", Default = false, Callback = function(state) _G.AutoTagEnabled = state end })
+autoTagSec:AddSlider({ Name = "Tag Radius", Icon = "maximize", Min = 5, Max = 20, Default = 10, Decimals = 0, Callback = function(val) _G.KillAuraRange = val end })
+autoTagSec:AddToggle({ Name = "Show Ring", Icon = "circle", Default = false, Callback = function(state) _G.ShowKillAuraRing = state end })
+
+local legitTagSec = combatTab:CreateSection({ Name = "Auto Tag (Legit)", Icon = "target" })
+legitTagSec:AddToggle({ Name = "Auto Tag (Legit)", Icon = "target", Default = false, Callback = function(state) _G.LegitTagEnabled = state end })
+legitTagSec:AddSlider({ Name = "Legit Range", Icon = "maximize", Min = 5, Max = 20, Default = 12, Decimals = 0, Callback = function(val) _G.LegitTagRange = val end })
+legitTagSec:AddSlider({ Name = "Cone FOV", Icon = "triangle", Min = 0.1, Max = 0.95, Default = 0.6, Decimals = 2, Callback = function(val) _G.LegitTagFOV = val end })
+
+local autoParrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
+autoParrySec:AddToggle({
+    Name = "Auto Parry", Icon = "shield", Default = false,
+    Callback = function(state)
+        _G.AutoParryEnabled = state
+        applyAllBoosts() -- сразу выставит атрибут EnableParry
+    end,
+})
+autoParrySec:AddSlider({ Name = "Parry Radius", Icon = "maximize", Min = 5, Max = 20, Default = 12, Decimals = 0, Callback = function(val) _G.AutoParryRange = val end })
 
 -- ===================== ADVANCED TAB =====================
 local advancedTab = Window:CreateTab({ Name = "Advanced", Icon = "settings" })
@@ -797,6 +888,7 @@ Window:AddSettingsTab()
 -- ============================================================
 RunService.Heartbeat:Connect(function()
     autoTagLoop()
+    legitTagLoop()
     autoParryLoop()
     applyAllBoosts()
 end)
