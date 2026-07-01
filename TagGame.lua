@@ -105,7 +105,7 @@ local function autoTagLoop()
             else
                 -- Обычная логика для остальных ролей
                 if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
-                if myRole == "Chiller" and targetRole == "Frozen" then continue end
+                if (myRole == "Chiller" or myRole == "Freezer") and targetRole == "Frozen" then continue end
                 if myRole == "Runner" and targetRole == "Chiller" then continue end
                 
                 -- Не тагаю своих
@@ -415,13 +415,11 @@ local function isEnemy(player)
     local myRole = getRole(LocalPlayer)
     local theirRole = getRole(player)
     if not myRole or not theirRole then return false end
-    
-    -- Исключаем спец-роли
+
     if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" or theirRole == "Ashen" then
         return false
     end
     
-    -- Враг = роль отличается от моей
     return theirRole ~= myRole
 end
 
@@ -430,13 +428,14 @@ local function isMyTeam(player)
     local theirRole = getRole(player)
     if not myRole or not theirRole then return false end
     
+
     if theirRole == "Frozen" or theirRole == "OOF" or theirRole == "Alone" then
         return false
     end
     
+    -- Команда = такая же роль, как у меня
     return theirRole == myRole
 end
-
 local roleColors = {
     ["Crown"] = Color3.fromRGB(255, 215, 0),
     ["Monarch"] = Color3.fromRGB(255, 215, 0),
