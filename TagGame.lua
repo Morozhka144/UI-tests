@@ -50,6 +50,59 @@ local function getRole(player)
     return roleObj and roleObj.Value
 end
 
+-- === 7. ANTI AFK ===
+local xAFKx
+
+if xAFKx then
+    xAFKx:Disconnect()
+    xAFKx = nil
+end
+
+xAFKx = game:GetService("Players").LocalPlayer.Idled:Connect(function()
+    local vu = game:GetService("VirtualUser")
+    vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    task.wait(1)
+    vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+end)
+
+
+-- === 8. AUTO REJOIN ===
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local currentPlace = game.PlaceId
+local currentServer = game.JobId
+local TeleportService = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
+local Players = game:GetService("Players")
+
+local function reconnect()
+    local player = Players.LocalPlayer
+    if player then
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(currentPlace, currentServer, player)
+        end)
+        
+        task.wait(10)
+        pcall(function()
+            TeleportService:Teleport(currentPlace, player)
+        end)
+    end
+end
+
+pcall(function()
+    GuiService.ErrorMessageChanged:Connect(function()
+        local errorCode = GuiService:GetErrorCode()
+        local errorMsg = GuiService:GetErrorMessage()
+        
+        if errorMsg ~= "" then
+            task.wait(5)
+            reconnect()
+        end
+    end)
+end)
+
 -- ============================================================
 -- [[ ATTRIBUTE BOOSTERS ]] --
 -- ============================================================
