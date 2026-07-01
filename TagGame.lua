@@ -100,7 +100,7 @@ local function autoTagLoop()
             local targetRole = targetPlayer and targetPlayer:FindFirstChild("PlayerRole") and targetPlayer.PlayerRole.Value
             
             -- Если я Alone — тагаю ВСЕХ (кроме себя и IGNORED_ROLES)
-            if myRole == "Alone" then
+            if myRole == "Alone" or myRole == "FFATagger" then
                 if targetRole and IGNORED_ROLES[targetRole] then continue end
             else
                 -- Обычная логика для остальных ролей
@@ -404,6 +404,11 @@ end
 local function isAshen(player)
     local role = getRole(player)
     return role == "Ashen"
+end
+
+local function isDead(player)
+    local role = getRole(player)
+    return role == "Dead"
 end
 
 local function isFrozen(player)
@@ -1392,7 +1397,7 @@ RunService.RenderStepped:Connect(function()
                     for _, category in ipairs(selectedCategories) do
                         if category == "Enemies" and isEnemy(player) then show = true break end
                         if category == "My Team" and isMyTeam(player) then show = true break end
-                        if category == "OOF" and (isOOF(player) or isAshen(player)) then show = true break end
+                        if category == "OOF" and (isOOF(player) or isAshen(player) or isDead(player)) then show = true break end
                         if category == "Frozen" and isFrozen(player) then show = true break end
                     end
                 end
