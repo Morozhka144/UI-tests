@@ -99,15 +99,20 @@ local function autoTagLoop()
             local targetPlayer = Players:GetPlayerFromCharacter(char)
             local targetRole = targetPlayer and targetPlayer:FindFirstChild("PlayerRole") and targetPlayer.PlayerRole.Value
             
-            if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
-            if myRole == "Chiller" and targetRole == "Frozen" then continue end
-            if myRole == "Runner" and targetRole == "Chiller" then continue end
-            
-            if myRole ~= "Alone" then
+            -- Если я Alone — тагаю ВСЕХ (кроме себя и IGNORED_ROLES)
+            if myRole == "Alone" then
+                if targetRole and IGNORED_ROLES[targetRole] then continue end
+            else
+                -- Обычная логика для остальных ролей
+                if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then continue end
+                if myRole == "Chiller" and targetRole == "Frozen" then continue end
+                if myRole == "Runner" and targetRole == "Chiller" then continue end
+                
+                -- Не тагаю своих
                 if myRole and targetRole and myRole == targetRole then continue end
+                
+                if targetRole and IGNORED_ROLES[targetRole] then continue end
             end
-            
-            if targetRole and IGNORED_ROLES[targetRole] then continue end
             
             local targetHRP = char.HumanoidRootPart
             local dist = (targetHRP.Position - hrp.Position).Magnitude
