@@ -32,6 +32,8 @@ _G.LegitTagEnabled = false
 _G.LegitTagRange = 12
 _G.LegitTagFOV = 0.6
 
+_G.GodTagEnabled = false
+
 -- [[ Helpers ]] --
 local function getHRP()
     local char = LocalPlayer.Character
@@ -73,19 +75,30 @@ for attr, defaultBase in pairs(baseAttributes) do
 end
 
 local function applyAllBoosts()
-    local roleObj = getModifiersRole()
-    if not roleObj then return end
+    if not shared or not shared.multipliers then return end
+    local m = shared.multipliers
 
-    for attr, data in pairs(boosters) do
-        local targetVal = data.enabled and (data.base * data.mult) or data.base
-        if roleObj:GetAttribute(attr) ~= targetVal then
-            roleObj:SetAttribute(attr, targetVal)
-        end
+    -- разблокировать таг всегда
+    m.DisableTagging = false
+
+    -- Парринг
+    m.EnableParrying = _G.AutoParryEnabled and true or false
+
+    -- Кулдаун тага (base 0.666; мельче = быстрее)
+    if boosters.TagCooldown.enabled then
+        m.TagCooldown = 0.666 / boosters.TagCooldown.mult
+    else
+        m.TagCooldown = 0.666
     end
 
-    -- EnableParry атрибут управляется Auto Parry
-    if roleObj:GetAttribute("EnableParry") ~= _G.AutoParryEnabled then
-        roleObj:SetAttribute("EnableParry", _G.AutoParryEnabled)
+    -- Дальность
+    m.RangeMultiplier = boosters.RangeMultiplier.enabled and boosters.RangeMultiplier.mult or 1
+    -- GOD TAG
+    if _G.GodTagEnabled then
+        m.RangeMultiplier = math.max(m.RangeMultiplier, 12)
+        m.TagRayNumber = 40
+        m.TagRayRows = 4
+        m.TagRaySpread = 8
     end
 end
 
@@ -277,20 +290,17 @@ end
 -- ============================================================
 local function autoParryLoop()
     if not _G.AutoParryEnabled then return end
-    local hrp = getHRP()
-    if not hrp then return end
-
-    for _, projectile in ipairs(CollectionService:GetTagged("Parryable")) do
-        if projectile:GetAttribute("Sender") ~= LocalPlayer.Name then
-            local dist = (projectile.Position - hrp.Position).Magnitude
-            if dist < _G.AutoParryRange then
-                local lookVector = CFrame.new(hrp.Position, projectile.Position).LookVector
-                pcall(function() CIParryProjectileEvent:InvokeServer(projectile, lookVector) end)
-                pcall(function() CIParryClientEvent:Fire() end)
-                pcall(function() PlayerParryEvent:FireServer() end)
-            end
-        end
+    -- ставим флаг игры (на всякий) + напрямую фаерим
+    if shared.multipliers then
+        shared.multipliers.EnableParrying = true
     end
+    if Utils.InCooldown and Utils.InCooldown("Parry") then return end
+    pcall(function()
+        PlayerParryEvent:FireServer()
+        SoundEvent:Fire("Parry", getHRP(), 0.25, true)
+        AnimateEvent:Fire("Parry", 0.1)
+    end)
+    pcall(function() Utils.ApplyCooldown("Parry") end)
 end
 
 -- ============================================================
@@ -740,6 +750,9 @@ local legitTagSec = combatTab:CreateSection({ Name = "Auto Tag (Legit)", Icon = 
 legitTagSec:AddToggle({ Name = "Auto Tag (Legit)", Icon = "target", Default = false, Callback = function(state) _G.LegitTagEnabled = state end })
 legitTagSec:AddSlider({ Name = "Legit Range", Icon = "maximize", Min = 5, Max = 20, Default = 12, Decimals = 0, Callback = function(val) _G.LegitTagRange = val end })
 legitTagSec:AddSlider({ Name = "Cone FOV", Icon = "triangle", Min = 0.1, Max = 0.95, Default = 0.6, Decimals = 2, Callback = function(val) _G.LegitTagFOV = val end })
+
+local godTagSec = combatTab:CreateSection({ Name = "God Tag", Icon = "swords" })
+godTagSec:AddToggle({ Name = "God Tag (нативная аура)", Icon = "swords", Default = false, Callback = function(s) _G.GodTagEnabled = s end })
 
 local autoParrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
 autoParrySec:AddToggle({
