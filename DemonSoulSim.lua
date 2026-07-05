@@ -102,16 +102,23 @@ if Library then
         end
     end)
 
-    -- === 3. FAST ATTACK ===
+    -- === 3. FAST ATTACK (COMBO SPAM) ===
     task.spawn(function()
+        local comboIndex = 1
         while true do
             if states.attack then
                 if monsterNearby then
-                    -- Сбрасываем клиентские замки атаки
+                    -- Сбрасываем клиентские замки
                     _G.Attacking = false
                     _G.LastAttackTime = 0
                     
-                    attackRemote:FireServer(4)
+                    -- Шлём ПРАВИЛЬНУЮ комбо-последовательность (1, 2, 3, 4)
+                    attackRemote:FireServer(comboIndex)
+                    
+                    -- Переходим к следующему индексу
+                    comboIndex = comboIndex + 1
+                    if comboIndex > 4 then comboIndex = 1 end
+                    
                     if animCancel then
                         local hum = player.Character and player.Character:FindFirstChild("Humanoid")
                         if hum then
@@ -125,6 +132,7 @@ if Library then
                     task.wait(0.1)
                 end
             else
+                comboIndex = 1 -- Сбрасываем комбо когда выключаем
                 task.wait(0.5)
             end
         end
@@ -178,6 +186,20 @@ if Library then
         end
     end)
 
+    -- === AUTO LOCK TARGET (ОБЯЗАТЕЛЬНО ДЛЯ УРОНА) ===
+    task.spawn(function()
+        while task.wait(0.05) do
+            if states.attack or states.skill1 or states.skill2 or states.skill3 then
+                local char = player.Character
+                if char and char:FindFirstChild("LockedEnermy") and currentTarget then
+                    if char.LockedEnermy.Value ~= currentTarget then
+                        char.LockedEnermy.Value = currentTarget
+                    end
+                end
+            end
+        end
+    end)
+
     -- === 6. PAUSE FIX ===
     local CoreGui = game:GetService("CoreGui")
     local AntiGameplayPaused
@@ -206,6 +228,18 @@ if Library then
                 destroyNetworkPause()
             end
         end)
+    end)
+
+    -- Хук на клиентскую функцию атаки (обход проверки комбо на клиенте)
+    pcall(function()
+        local oldAttack = _G.Attack
+        _G.Attack = function(...)
+            -- Принудительно сбрасываем таймер, чтобы клиент всегда считал комбо активным
+            _G.LastAttackTime = tick()
+            _G.Attacking = false
+            return oldAttack(...)
+        end
+        print("Хук на _G.Attack установлен!")
     end)
 
     -- === 7. ANTI AFK ===
