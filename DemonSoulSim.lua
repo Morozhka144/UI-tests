@@ -9,7 +9,6 @@ end
 
 local Library = SafeLoad()
 
-
 if Library then
     local rs = game:GetService("ReplicatedStorage")
     local player = game:GetService("Players").LocalPlayer
@@ -43,17 +42,6 @@ if Library then
     local UpgradeTab = Win:CreateTab("Upgrade")
     local DispatchTab = Win:CreateTab("Dispatch")
     local SettingsTab = Win:CreateTab("Settings")
-
-      -- Хук для мгновенного снятия "пост-анимации" (КД на клиенте)
-    pcall(function()
-        local MathManager = require(game.ReplicatedStorage.Packages.MathManagerExtension)
-        if MathManager and MathManager.Expressions and MathManager.Expressions.GetDuration then
-            hookfunction(MathManager.Expressions.GetDuration, function(...)
-                return 0.01 -- Возвращаем минимальное время, клиент думает, что анимация завершена
-            end)
-            print("Хук на GetDuration установлен! КД анимаций отключено.")
-        end
-    end)
 
     -- === 1. A SINGLE OPTIMIZED TARGET SEARCH ===
     task.spawn(function()
@@ -102,22 +90,12 @@ if Library then
         end
     end)
 
-    -- === 3. FAST ATTACK (COMBO SPAM) ===
+    -- === 3. FAST ATTACK ===
     task.spawn(function()
-        local comboIndex = 1
         while true do
             if states.attack then
                 if monsterNearby then
-                    -- Сбрасываем клиентские замки
-                    _G.Attacking = false
-                    _G.LastAttackTime = 0
-                    
-                    -- Шлём ПРАВИЛЬНУЮ комбо-последовательность (1, 2, 3, 4)
-                    attackRemote:FireServer(comboIndex)
-                    
-                    -- Переходим к следующему индексу
-                    comboIndex = comboIndex + 1
-                    if comboIndex > 4 then comboIndex = 1 end
+                    attackRemote:FireServer(4)
                     
                     if animCancel then
                         local hum = player.Character and player.Character:FindFirstChild("Humanoid")
@@ -127,12 +105,12 @@ if Library then
                             end
                         end
                     end
+                    
                     task.wait(1/speeds.attack)
                 else
                     task.wait(0.1)
                 end
             else
-                comboIndex = 1 -- Сбрасываем комбо когда выключаем
                 task.wait(0.5)
             end
         end
@@ -143,11 +121,6 @@ if Library then
         task.spawn(function()
             while states[stateKey] do
                 if monsterNearby then
-                    -- Сбрасываем замки атаки и скилла
-                    _G.Attacking = false
-                    _G.Skilling = false
-                    _G.LastAttackTime = 0
-                    
                     skillRemote:FireServer(skillNum)
                     task.wait(0.1)
                 else
@@ -186,20 +159,6 @@ if Library then
         end
     end)
 
-    -- === AUTO LOCK TARGET (ОБЯЗАТЕЛЬНО ДЛЯ УРОНА) ===
-    task.spawn(function()
-        while task.wait(0.05) do
-            if states.attack or states.skill1 or states.skill2 or states.skill3 then
-                local char = player.Character
-                if char and char:FindFirstChild("LockedEnermy") and currentTarget then
-                    if char.LockedEnermy.Value ~= currentTarget then
-                        char.LockedEnermy.Value = currentTarget
-                    end
-                end
-            end
-        end
-    end)
-
     -- === 6. PAUSE FIX ===
     local CoreGui = game:GetService("CoreGui")
     local AntiGameplayPaused
@@ -228,18 +187,6 @@ if Library then
                 destroyNetworkPause()
             end
         end)
-    end)
-
-    -- Хук на клиентскую функцию атаки (обход проверки комбо на клиенте)
-    pcall(function()
-        local oldAttack = _G.Attack
-        _G.Attack = function(...)
-            -- Принудительно сбрасываем таймер, чтобы клиент всегда считал комбо активным
-            _G.LastAttackTime = tick()
-            _G.Attacking = false
-            return oldAttack(...)
-        end
-        print("Хук на _G.Attack установлен!")
     end)
 
     -- === 7. ANTI AFK ===
@@ -294,6 +241,66 @@ if Library then
             end
         end)
     end)
+
+        -- === УВЕЛИЧЕНИЕ РАДИУСА АТАКИ ===
+    pcall(function()
+        -- 1. Хукаем SetSkillPlayerPos — увеличиваем дистанцию скиллов с 5 до 25
+        local MathManager = require(game.ReplicatedStorage.Packages.MathManagerExtension)
+        if MathManager and _G.SetSkillPlayerPos then
+            local oldSetSkillPlayerPos = _G.SetSkillPlayerPos
+            _G.SetSkillPlayerPos = function(p9, p10, p11)
+                -- Подменяем дистанцию: если не указана — ставим 25 вместо 5
+                return oldSetSkillPlayerPos(p9, p10, p11 or 25)
+            end
+            print("✅ Радиус скиллов увеличен до 25!")
+        end
+        
+        -- 2. Хукаем calPropertyTribe — добавляем бонус к AttackRange
+        local AttackHelper = require(game.ReplicatedStorage.AttackHelpers.AttackHelper)
+        if AttackHelper and AttackHelper.calPropertyTribe then
+            local oldCalProperty = AttackHelper.calPropertyTribe
+            AttackHelper.calPropertyTribe = function(...)
+                local result = oldCalProperty(...)
+                if result and type(result) == "table" then
+                    -- Увеличиваем радиус атаки в 3 раза
+                    if result.AttackRange then
+                        result.AttackRange = result.AttackRange * 3
+                    end
+                    if result.SkillRange then
+                        result.SkillRange = result.SkillRange * 3
+                    end
+                end
+                return result
+            end
+            print("✅ AttackRange и SkillRange увеличены в 3x!")
+        end
+    end)
+    
+    -- === ФУНКЦИЯ ПРИНУДИТЕЛЬНОГО ТЕЛЕПОРТА К ЦЕЛИ ===
+    -- Вызывай её перед каждой атакой, чтобы гарантированно быть в радиусе
+    local function tpToTarget(range)
+        range = range or 8
+        local char = player.Character
+        if not char or not currentTarget then return end
+        
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local targetHrp = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget.PrimaryPart
+        
+        if not hrp or not targetHrp then return end
+        
+        local dist = (hrp.Position - targetHrp.Position).Magnitude
+        if dist > range then
+            -- Телепортируемся прямо к цели
+            hrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, -4)
+            task.wait(0.05)
+        end
+        
+        -- Захватываем цель
+        local locked = char:FindFirstChild("LockedEnermy")
+        if locked and locked.Value ~= currentTarget then
+            locked.Value = currentTarget
+        end
+    end
 
 
     -- === ATTACKS ===
