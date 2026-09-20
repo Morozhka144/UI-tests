@@ -26,6 +26,8 @@ local AnimateEvent = Utils.GetEvent("AnimateEvent")
 local TagSwing = Utils.GetEvent("TagSwing")
 
 -- [[ Engine Environment Resolver ]] --
+-- В Real Executor таблица shared в песочнице скрипта изолирована от игры.
+-- Настоящие множители и кулдауны лежат в getrenv().shared.
 local function getGameShared()
     local renv = (getrenv and getrenv()) or {}
     return renv.shared or shared or {}
@@ -43,12 +45,8 @@ _G.LegitTagRange = 12
 _G.LegitTagFOV = 0.6
 _G.LegitTagWallCheck = true
 
-_G.HitboxExpanderEnabled = false
-_G.HitboxSize = 8
-_G.HitboxTransparency = 0.6
-
 _G.AutoParryEnabled = false
-_G.AutoParryMode = "Smart"
+_G.AutoParryMode = "Smart" -- "Smart" (по анимации атаки) или "Proximity" (всегда рядом)
 _G.AutoParryRange = 14
 _G.AutoParryProjectiles = true
 _G.ForceParrying = false
@@ -69,13 +67,10 @@ _G.TracerThickness = 1.5
 
 _G.CoinEspEnabled = false
 _G.CoinEspMaxDistance = 800
-_G.CoinShowTracers = false
-_G.CoinTracerOrigin = "Bottom"
-_G.CoinTracerThickness = 1.5
 _G.AutoCollectCoins = false
-_G.CollectCoinsMode = "Map-Wide"
+_G.CollectCoinsMode = "Map-Wide" -- "Map-Wide" или "Radius"
 _G.CollectCoinsRadius = 100
-_G.CollectCoinsDelay = 0.15
+_G.CollectCoinsDelay = 0.5
 
 _G.AntiAFK = true
 _G.AutoRejoin = true
@@ -168,22 +163,34 @@ pcall(function()
 end)
 
 -- ============================================================
--- [[ POWERFUL BOOSTER ENGINE ]] --
+-- [[ ATTRIBUTE BOOSTERS & MOVEMENT ENGINE ]] --
 -- ============================================================
-local boosters = {
-    Speed = { enabled = false, mult = 2.0 },
-    Jump = { enabled = false, mult = 2.5 },
-    Accel = { enabled = false, mult = 5.0 },
-    TagCooldown = { enabled = false, mult = 3.0 },
-    TagRange = { enabled = false, mult = 2.0 },
-    TagKnockback = { enabled = false, mult = 3.0 },
-    SlideSpeed = { enabled = false, mult = 2.0 },
-    SlideJump = { enabled = false, mult = 2.0 },
-    Wallclimb = { enabled = false, mult = 2.0 },
-    VaultMomentum = { enabled = false, mult = 2.0 },
-    Gravity = { enabled = false, mult = 1.0 },
-    CharacterScale = { enabled = false, mult = 1.0 },
+local baseAttributes = {
+    AccelerationMultiplier = 3,
+    RunSpeedMultiplier = 1.01,
+    JumpPowerMultiplier = 1.25,
+    SizeMultiplier = 1.15,
+    HeadSizeMultiplier = 1,
+    TagCooldown = 0.666,
+    TagPlayerKnockback = 0.75,
+    RangeMultiplier = 1,
+    MomentumMultiplier = 1,
+    MomentumDecayMultiplier = 1,
+    FrictionDecayMultiplier = 1,
+    WindowSmashMultiplier = 1,
+    RollBoostMultiplier = 1,
+    SlideSpeedMultiplier = 1,
+    SlideJumpMultiplier = 1,
+    WallclimbMultiplier = 1,
+    VaultMomentumMultiplier = 1,
+    GravityMultiplier = 1,
+    FrictionMultiplier = 1,
 }
+
+local boosters = {}
+for attr, defaultBase in pairs(baseAttributes) do
+    boosters[attr] = { enabled = false, mult = 1.0, base = defaultBase }
+end
 
 local moveFlags = {
     RunInAllDirections = false,
@@ -215,154 +222,77 @@ local function applyAllBoosts()
         m[flag] = state and true or false
     end
 
-    -- Скорость (Speed Booster): синхронно WalkSpeedMultiplier и RunSpeedMultiplier
-    if boosters.Speed.enabled then
-        local spd = boosters.Speed.mult
-        m.WalkSpeedMultiplier = spd
-        m.RunSpeedMultiplier = spd
-    else
-        m.WalkSpeedMultiplier = 1
-        m.RunSpeedMultiplier = 1.01
-    end
-
-    -- Сила прыжка (Jump Power Booster)
-    if boosters.Jump.enabled then
-        local jmp = boosters.Jump.mult
-        m.JumpPowerMultiplier = jmp
-        if not boosters.SlideJump.enabled then
-            m.SlideJumpMultiplier = jmp
-        end
-    else
-        m.JumpPowerMultiplier = 1.25
-    end
-
-    -- Ускорение (Acceleration Booster)
-    if boosters.Accel.enabled then
-        m.AccelerationMultiplier = boosters.Accel.mult
-    else
-        m.AccelerationMultiplier = 1
-    end
-
-    -- Кулдаун тага (Tag Cooldown Booster)
+    -- Кулдаун тага (чем меньше, тем быстрее)
     if boosters.TagCooldown.enabled then
-        m.TagCooldown = math.max(0.01, 0.666 / boosters.TagCooldown.mult)
-        if gShared.cooldowns then
+        local cdVal = 0.666 / math.max(0.01, boosters.TagCooldown.mult)
+        m.TagCooldown = cdVal
+        if gShared.cooldowns and boosters.TagCooldown.mult > 1 then
             gShared.cooldowns["Tag"] = 0
         end
     else
         m.TagCooldown = 0.666
     end
 
-    -- Дальность тага (Tag Range Booster)
-    if boosters.TagRange.enabled then
-        m.RangeMultiplier = boosters.TagRange.mult
-        m.TagRayNumber = 18
-        m.TagRaySpread = 2
-        m.TagRayRows = 2
-    else
-        m.RangeMultiplier = 1
-        m.TagRayNumber = 9
-        m.TagRaySpread = 1
-        m.TagRayRows = 1
+    -- Дальность тага
+    m.RangeMultiplier = boosters.RangeMultiplier.enabled and boosters.RangeMultiplier.mult or 1
+
+    -- Сила отбрасывания при таге
+    if boosters.TagPlayerKnockback.enabled then
+        m.TagPlayerKnockback = (boosters.TagPlayerKnockback.base or 0.75) * boosters.TagPlayerKnockback.mult
     end
 
-    -- Сила отбрасывания при таге (Knockback Booster)
-    if boosters.TagKnockback.enabled then
-        local kb = boosters.TagKnockback.mult
-        m.TagPlayerKnockback = kb
-        m.TagPartKnockback = kb
-        m.TagKnockback = kb
-    else
-        m.TagPlayerKnockback = 1
-        m.TagPartKnockback = 1
-        m.TagKnockback = 1
+    -- Прямые множители движка
+    local directAttrs = {
+        "SlideSpeedMultiplier", "SlideJumpMultiplier", "WallclimbMultiplier",
+        "VaultMomentumMultiplier", "GravityMultiplier", "FrictionMultiplier"
+    }
+    for _, attr in ipairs(directAttrs) do
+        if boosters[attr] and boosters[attr].enabled then
+            m[attr] = (boosters[attr].base or 1) * boosters[attr].mult
+        end
     end
 
-    -- Паркур-множители
-    if boosters.SlideSpeed.enabled then
-        m.SlideSpeedMultiplier = boosters.SlideSpeed.mult
-    else
-        m.SlideSpeedMultiplier = 1
-    end
-
-    if boosters.SlideJump.enabled then
-        m.SlideJumpMultiplier = boosters.SlideJump.mult
-    elseif not boosters.Jump.enabled then
-        m.SlideJumpMultiplier = 1
-    end
-
-    if boosters.Wallclimb.enabled then
-        m.WallclimbMultiplier = boosters.Wallclimb.mult
-    else
-        m.WallclimbMultiplier = 1
-    end
-
-    if boosters.VaultMomentum.enabled then
-        m.VaultMomentumMultiplier = boosters.VaultMomentum.mult
-    else
-        m.VaultMomentumMultiplier = 1
-    end
-
-    if boosters.Gravity.enabled then
-        m.GravityMultiplier = boosters.Gravity.mult
-    else
-        m.GravityMultiplier = 1
-    end
-
-    -- Физический размер локального персонажа (Character Scale)
-    local char = LocalPlayer.Character
-    if char then
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local head = char:FindFirstChild("Head")
-        local scale = boosters.CharacterScale.enabled and boosters.CharacterScale.mult or 1
-        if hrp then hrp.Size = Vector3.new(2 * scale, 2 * scale, 1 * scale) end
-        if head then head.Size = Vector3.new(2 * scale, 1 * scale, 1 * scale) end
+    -- Атрибуты персонажа / роли
+    local roleObj = getModifiersRole()
+    if roleObj then
+        for attr, data in pairs(boosters) do
+            if attr ~= "TagCooldown" and attr ~= "RangeMultiplier" and attr ~= "GravityMultiplier" then
+                if data.enabled then
+                    local baseVal = data.base or baseAttributes[attr] or 1
+                    local finalVal = baseVal * data.mult
+                    pcall(function() roleObj:SetAttribute(attr, finalVal) end)
+                    if m[attr] ~= nil then m[attr] = finalVal end
+                end
+            end
+        end
     end
 end
 
--- ============================================================
--- [[ ENEMY HITBOX EXPANDER ]] --
--- ============================================================
-local originalHRPProps = {}
-
-local function updateHitboxes()
-    if not _G.HitboxExpanderEnabled then
-        if next(originalHRPProps) then
-            for hrp, props in pairs(originalHRPProps) do
-                if hrp and hrp.Parent then
-                    pcall(function()
-                        hrp.Size = props.Size or Vector3.new(2, 2, 1)
-                        hrp.Transparency = props.Transparency or 1
-                        hrp.CanCollide = false
-                    end)
-                end
+local function makeBoostToggle(attr)
+    return function(state)
+        boosters[attr].enabled = state
+        local roleObj = getModifiersRole()
+        if state then
+            if roleObj then
+                boosters[attr].base = roleObj:GetAttribute(attr) or baseAttributes[attr]
             end
-            table.clear(originalHRPProps)
+        else
+            if roleObj and attr ~= "TagCooldown" and attr ~= "RangeMultiplier" then
+                pcall(function() roleObj:SetAttribute(attr, boosters[attr].base or baseAttributes[attr]) end)
+            end
         end
-        return
+        applyAllBoosts()
     end
+end
 
-    local size = _G.HitboxSize or 8
-    local trans = _G.HitboxTransparency or 0.6
-    local myChar = LocalPlayer.Character
+local function makeBoostSlider(attr)
+    return function(v) boosters[attr].mult = v; applyAllBoosts() end
+end
 
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and isEnemy and isEnemy(player) and player.Character and player.Character ~= myChar then
-            local eHRP = player.Character:FindFirstChild("HumanoidRootPart")
-            if eHRP then
-                if not originalHRPProps[eHRP] then
-                    originalHRPProps[eHRP] = {
-                        Size = eHRP.Size,
-                        Transparency = eHRP.Transparency
-                    }
-                end
-                eHRP.Size = Vector3.new(size, size, size)
-                eHRP.Transparency = trans
-                eHRP.BrickColor = BrickColor.new("Bright red")
-                eHRP.Material = Enum.Material.Neon
-                eHRP.CanCollide = false
-            end
-        end
+local function makeFlagToggle(flag)
+    return function(state)
+        moveFlags[flag] = state
+        applyAllBoosts()
     end
 end
 
@@ -465,6 +395,7 @@ local function autoTagLoop()
             local targetRole = targetPlayer and getRole(targetPlayer)
             local skip = false
 
+            -- Проверка неуязвимости / щита спавна
             if _G.IgnoreNoTagBack ~= false then
                 if char:GetAttribute("NoTagBack") or (targetPlayer and targetPlayer:GetAttribute("NoTagBack")) then
                     skip = true
@@ -522,7 +453,7 @@ local function autoTagLoop()
     if s and res then
         pcall(function() SoundEvent:Fire("Tag", hrp, 0.25, true) end)
         local cd = boosters.TagCooldown
-        local tagSpeed = cd.enabled and cd.mult or 1
+        local tagSpeed = 1 / (cd.enabled and (cd.base * cd.mult) or cd.base)
         pcall(function() AnimateEvent:Fire("Tag", 0.1, tagSpeed) end)
         pcall(function() TagSwing:Fire() end)
     end
@@ -550,6 +481,7 @@ local function legitTagLoop()
             local targetRole = targetPlayer and getRole(targetPlayer)
             local skip = false
 
+            -- Проверка неуязвимости / щита спавна
             if _G.IgnoreNoTagBack ~= false then
                 if char:GetAttribute("NoTagBack") or (targetPlayer and targetPlayer:GetAttribute("NoTagBack")) then
                     skip = true
@@ -612,7 +544,7 @@ local function legitTagLoop()
     if s and res then
         pcall(function() SoundEvent:Fire("Tag", hrp, 0.25, true) end)
         local cd = boosters.TagCooldown
-        local tagSpeed = cd.enabled and cd.mult or 1
+        local tagSpeed = 1 / (cd.enabled and (cd.base * cd.mult) or cd.base)
         pcall(function() AnimateEvent:Fire("Tag", 0.1, tagSpeed) end)
         pcall(function() TagSwing:Fire() end)
     end
@@ -654,6 +586,7 @@ local function isEnemyAttacking(enemyPlayer, enemyChar, myHRP)
     local enemyLook = eHRP.CFrame.LookVector
     local dot = enemyLook:Dot(toUs.Unit)
 
+    -- Если враг смотрит в противоположную сторону, он не атакует нас
     if dot < -0.2 then
         return false
     end
@@ -662,6 +595,7 @@ local function isEnemyAttacking(enemyPlayer, enemyChar, myHRP)
         return true
     end
 
+    -- Smart Mode: Проверяем анимацию атаки/замаха у врага
     local hum = enemyChar:FindFirstChildOfClass("Humanoid")
     if hum then
         local animator = hum:FindFirstChildOfClass("Animator")
@@ -677,6 +611,7 @@ local function isEnemyAttacking(enemyPlayer, enemyChar, myHRP)
         end
     end
 
+    -- Если дистанция критически мала и враг смотрит прямо на нас
     if dist <= 6.5 and dot > 0.6 then
         return true
     end
@@ -703,6 +638,7 @@ local function autoParryLoop()
     end
 end
 
+-- Автопарирование входящих снарядов
 pcall(function()
     CIParryClientEvent.Event:Connect(function(...)
         if _G.AutoParryEnabled and _G.AutoParryProjectiles ~= false then
@@ -927,7 +863,7 @@ local function updatePlayerEsp(player, myPos, tracerOrigin)
         cache.Highlight.Enabled = false
     end
 
-    -- 2. BILLBOARD GUI
+    -- 2. BILLBOARD GUI (NAME, ROLE, DISTANCE, SHIELD)
     local showAnyText = _G.EspEnabled and (_G.ShowNames or _G.ShowRoles or _G.ShowDistance)
     if showAnyText then
         if not cache.Billboard or cache.Billboard.Parent ~= char then
@@ -1024,7 +960,7 @@ local function updatePlayerEsp(player, myPos, tracerOrigin)
         cache.Billboard.Enabled = false
     end
 
-    -- 3. 2D BOX & TRACERS
+    -- 3. 2D BOX & TRACERS (Screen space)
     local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
     local hrpCFrame = hrp.CFrame
     local topPos, topOnScreen = Camera:WorldToViewportPoint((hrpCFrame * CFrame.new(0, 3, 0)).Position)
@@ -1153,18 +1089,10 @@ end)
 -- ============================================================
 local coinEspCache = {}
 
-local function hideCoinEsp(item)
-    local cache = coinEspCache[item]
-    if not cache then return end
-    if cache.Billboard then cache.Billboard.Enabled = false end
-    if cache.Tracer then cache.Tracer.Visible = false end
-end
-
 local function clearCoinEsp(item)
     local cache = coinEspCache[item]
     if cache then
         if cache.Billboard then pcall(function() cache.Billboard:Destroy() end) end
-        if cache.Tracer then pcall(function() cache.Tracer:Remove() end) end
         coinEspCache[item] = nil
     end
 end
@@ -1176,12 +1104,8 @@ local function clearAllCoinEsp()
 end
 
 local function updateCoinEsp()
-    if not _G.CoinEspEnabled and not _G.CoinShowTracers then
-        if next(coinEspCache) then
-            for item, _ in pairs(coinEspCache) do
-                hideCoinEsp(item)
-            end
-        end
+    if not _G.CoinEspEnabled then
+        if next(coinEspCache) then clearAllCoinEsp() end
         return
     end
 
@@ -1190,18 +1114,6 @@ local function updateCoinEsp()
     local maxDist = _G.CoinEspMaxDistance or 800
     local currencyFolders = {"coins", "specialcurrency", "doublecoins", "doublecoinsLegacy"}
     local seen = {}
-
-    local originMode = _G.CoinTracerOrigin or _G.TracerOrigin or "Bottom"
-    local mousePos = UserInputService:GetMouseLocation()
-    local viewportSize = Camera.ViewportSize
-    local coinTracerOrigin
-    if originMode == "Center" then
-        coinTracerOrigin = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
-    elseif originMode == "Mouse" then
-        coinTracerOrigin = mousePos
-    else
-        coinTracerOrigin = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-    end
 
     for _, fName in ipairs(currencyFolders) do
         local folder = workspace:FindFirstChild(fName)
@@ -1212,8 +1124,6 @@ local function updateCoinEsp()
                     seen[item] = true
                     local dist = (part.Position - myPos).Magnitude
                     local cache = coinEspCache[item]
-                    local coinColor = fName == "specialcurrency" and Color3.fromRGB(0, 255, 255)
-                        or (fName:find("double") and Color3.fromRGB(255, 100, 255) or Color3.fromRGB(255, 215, 0))
 
                     if dist <= maxDist then
                         if not cache then
@@ -1235,7 +1145,8 @@ local function updateCoinEsp()
                             lbl.Size = UDim2.new(1, 0, 1, 0)
                             lbl.Font = Enum.Font.GothamBold
                             lbl.TextSize = 11
-                            lbl.TextColor3 = coinColor
+                            lbl.TextColor3 = fName == "specialcurrency" and Color3.fromRGB(0, 255, 255)
+                                or (fName:find("double") and Color3.fromRGB(255, 100, 255) or Color3.fromRGB(255, 215, 0))
                             lbl.TextStrokeTransparency = 0.2
                             lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
                             lbl.Parent = bb
@@ -1249,43 +1160,13 @@ local function updateCoinEsp()
                         end
 
                         if cache.Billboard then
-                            cache.Billboard.Enabled = _G.CoinEspEnabled == true
-                            if _G.CoinEspEnabled then
-                                local tagText = fName == "specialcurrency" and "SPECIAL"
-                                    or (fName:find("double") and "2X COIN" or "COIN")
-                                cache.Label.Text = string.format("%s\n[%d studs]", tagText, math.floor(dist))
-                                cache.Label.TextColor3 = coinColor
-                            end
+                            cache.Billboard.Enabled = true
+                            local tagText = fName == "specialcurrency" and "SPECIAL"
+                                or (fName:find("double") and "2X COIN" or "COIN")
+                            cache.Label.Text = string.format("%s\n[%d studs]", tagText, math.floor(dist))
                         end
-
-                        -- Tracers
-                        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-                        if _G.CoinShowTracers and onScreen and screenPos.Z > 0 and Drawing and Drawing.new then
-                            if not cache.Tracer then
-                                local success, line = pcall(function()
-                                    local l = Drawing.new("Line")
-                                    l.Thickness = _G.CoinTracerThickness or 1.5
-                                    l.Color = coinColor
-                                    l.Visible = false
-                                    return l
-                                end)
-                                if success and line then
-                                    cache.Tracer = line
-                                end
-                            end
-
-                            if cache.Tracer then
-                                cache.Tracer.From = coinTracerOrigin
-                                cache.Tracer.To = Vector2.new(screenPos.X, screenPos.Y)
-                                cache.Tracer.Color = coinColor
-                                cache.Tracer.Thickness = _G.CoinTracerThickness or 1.5
-                                cache.Tracer.Visible = true
-                            end
-                        else
-                            if cache.Tracer then cache.Tracer.Visible = false end
-                        end
-                    else
-                        hideCoinEsp(item)
+                    elseif cache and cache.Billboard then
+                        cache.Billboard.Enabled = false
                     end
                 end
             end
@@ -1299,11 +1180,24 @@ local function updateCoinEsp()
     end
 end
 
-local function collectCoins(mapWide, maxRadius)
-    local hrp = getHRP()
-    if not hrp then return 0 end
-    local myPos = hrp.Position
-    local count = 0
+-- Сбор монет (безопасный — CFrame-телепорт + рандомизация)
+-- Настройки анти-кика
+_G.CollectCoinsPerCycle = _G.CollectCoinsPerCycle or 3       -- макс монет за один цикл
+_G.CollectCoinsTouchHold = _G.CollectCoinsTouchHold or 0.12  -- удержание touch (сек)
+_G.CollectCoinsJitter = _G.CollectCoinsJitter or true        -- случайный разброс задержки
+
+local coinCollectBusy = false
+
+local function randDelay(base)
+    if _G.CollectCoinsJitter then
+        return base + (math.random() * base * 0.6)  -- +0..60% разброс
+    end
+    return base
+end
+
+-- Сортируем монеты по расстоянию — ближайшие первыми (выглядит естественнее)
+local function getSortedCoins(myPos, mapWide, maxRadius)
+    local results = {}
     local currencyFolders = {"coins", "specialcurrency", "doublecoins", "doublecoinsLegacy"}
 
     for _, fName in ipairs(currencyFolders) do
@@ -1314,32 +1208,304 @@ local function collectCoins(mapWide, maxRadius)
                 if part and part.Parent then
                     local dist = (part.Position - myPos).Magnitude
                     if mapWide or dist <= (maxRadius or 100) then
-                        pcall(function()
-                            firetouchinterest(hrp, part, 0)
-                            task.wait(0.01)
-                            firetouchinterest(hrp, part, 1)
-                            count = count + 1
-                        end)
-                        if not mapWide then
-                            task.wait(0.02)
-                        end
+                        table.insert(results, {part = part, dist = dist})
                     end
                 end
             end
         end
     end
+
+    table.sort(results, function(a, b) return a.dist < b.dist end)
+    return results
+end
+
+local function collectCoins(mapWide, maxRadius)
+    if coinCollectBusy then return 0 end
+    coinCollectBusy = true
+
+    local hrp = getHRP()
+    if not hrp then coinCollectBusy = false; return 0 end
+
+    local originalCFrame = hrp.CFrame
+    local myPos = hrp.Position
+    local count = 0
+    local limit = _G.CollectCoinsPerCycle or 3
+    local holdTime = _G.CollectCoinsTouchHold or 0.12
+
+    local sorted = getSortedCoins(myPos, mapWide, maxRadius)
+
+    for i, entry in ipairs(sorted) do
+        if count >= limit then break end
+
+        local part = entry.part
+        if not part or not part.Parent then continue end
+
+        local ok = pcall(function()
+            -- Телепорт вплотную к монете (со сдвигом ~1 stud чтобы не застрять)
+            local coinPos = part.Position
+            local offset = Vector3.new(
+                (math.random() - 0.5) * 1.5,
+                0,
+                (math.random() - 0.5) * 1.5
+            )
+            hrp.CFrame = CFrame.new(coinPos + offset)
+
+            -- Подождать чтобы сервер "увидел" позицию
+            task.wait(randDelay(0.04))
+
+            -- Touch
+            firetouchinterest(hrp, part, 0)
+            task.wait(randDelay(holdTime))
+            firetouchinterest(hrp, part, 1)
+
+            count = count + 1
+        end)
+
+        -- Задержка между монетами
+        if ok and count < limit then
+            task.wait(randDelay(0.08))
+        end
+    end
+
+    -- Вернуть персонажа на исходную позицию
+    pcall(function()
+        if hrp and hrp.Parent then
+            hrp.CFrame = originalCFrame
+        end
+    end)
+
+    coinCollectBusy = false
     return count
 end
 
+-- Фоновый поток автосбора монет (с безопасным интервалом)
 task.spawn(function()
     while true do
-        task.wait(_G.CollectCoinsDelay or 0.15)
+        local interval = math.max(0.3, _G.CollectCoinsDelay or 0.5)
+        task.wait(interval)
         if _G.AutoCollectCoins then
             local isMapWide = (_G.CollectCoinsMode == "Map-Wide")
-            collectCoins(isMapWide, _G.CollectCoinsRadius or 100)
+            pcall(function()
+                collectCoins(isMapWide, _G.CollectCoinsRadius or 100)
+            end)
         end
     end
 end)
+
+-- ============================================================
+-- [[ FLY-COLLECT ALL (Noclip + скоростной пролёт) ]] --
+-- ============================================================
+_G.FlyCollectSpeed = _G.FlyCollectSpeed or 600   -- studs/sec скорость пролёта
+local flyCollectRunning = false
+
+local function setNoclip(char, state)
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = not state
+        end
+    end
+end
+
+-- Ближайший сосед: каждый раз летим к самой близкой оставшейся монете
+local function nearestNeighborSort(coins, startPos)
+    local ordered = {}
+    local remaining = {}
+    for i, c in ipairs(coins) do
+        remaining[i] = c
+    end
+
+    local currentPos = startPos
+    while #remaining > 0 do
+        local bestIdx, bestDist = 1, math.huge
+        for i, c in ipairs(remaining) do
+            local d = (c.part.Position - currentPos).Magnitude
+            if d < bestDist then
+                bestDist = d
+                bestIdx = i
+            end
+        end
+        local chosen = table.remove(remaining, bestIdx)
+        currentPos = chosen.part.Position
+        table.insert(ordered, chosen)
+    end
+    return ordered
+end
+
+local function flyCollectAll()
+    if flyCollectRunning then return 0 end
+    if coinCollectBusy then return 0 end
+    flyCollectRunning = true
+    coinCollectBusy = true
+
+    local hrp = getHRP()
+    local char = LocalPlayer.Character
+    if not hrp or not char then
+        flyCollectRunning = false
+        coinCollectBusy = false
+        return 0
+    end
+
+    local originalCFrame = hrp.CFrame
+    local count = 0
+    local speed = _G.FlyCollectSpeed or 600
+
+    -- Собираем все монеты на карте
+    local allCoins = getSortedCoins(hrp.Position, true, 99999)
+    if #allCoins == 0 then
+        flyCollectRunning = false
+        coinCollectBusy = false
+        return 0
+    end
+
+    -- Оптимальный маршрут (nearest neighbor)
+    local route = nearestNeighborSort(allCoins, hrp.Position)
+
+    -- Сохраняем оригинальное состояние коллизии
+    local originalCollisions = {}
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalCollisions[part] = part.CanCollide
+        end
+    end
+
+    -- Включаем ноуклип
+    setNoclip(char, true)
+
+    -- Подключаем Stepped чтобы ноуклип не сбрасывался физикой
+    local noclipConn
+    noclipConn = RunService.Stepped:Connect(function()
+        if flyCollectRunning and char and char.Parent then
+            setNoclip(char, true)
+        end
+    end)
+
+    -- Отключаем гравитацию на время пролёта
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local bodyVel, bodyGyro
+    pcall(function()
+        -- BodyVelocity чтобы не падать
+        bodyVel = Instance.new("BodyVelocity")
+        bodyVel.Velocity = Vector3.zero
+        bodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bodyVel.P = 1e5
+        bodyVel.Parent = hrp
+
+        bodyGyro = Instance.new("BodyGyro")
+        bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        bodyGyro.P = 1e5
+        bodyGyro.Parent = hrp
+    end)
+
+    -- Летим по маршруту
+    for _, entry in ipairs(route) do
+        local part = entry.part
+        if not part or not part.Parent then continue end
+        if not hrp or not hrp.Parent then break end
+
+        local targetPos = part.Position
+        local startPos = hrp.Position
+        local direction = targetPos - startPos
+        local distance = direction.Magnitude
+
+        if distance < 2 then
+            -- Уже рядом, просто собираем
+            pcall(function()
+                hrp.CFrame = CFrame.new(targetPos)
+                if bodyVel then bodyVel.Velocity = Vector3.zero end
+                if bodyGyro then bodyGyro.CFrame = hrp.CFrame end
+            end)
+        else
+            -- Плавный пролёт с CFrame на каждый фрейм
+            local flyTime = distance / speed
+            local elapsed = 0
+
+            while elapsed < flyTime do
+                if not hrp or not hrp.Parent then break end
+                if not part or not part.Parent then break end
+
+                local dt = RunService.Heartbeat:Wait()
+                elapsed = elapsed + dt
+
+                local alpha = math.min(elapsed / flyTime, 1)
+                -- Обновляем targetPos на случай если монета двигалась
+                local curTarget = (part and part.Parent) and part.Position or targetPos
+                local newPos = startPos:Lerp(curTarget, alpha)
+                local lookDir = (curTarget - newPos)
+                if lookDir.Magnitude > 0.1 then
+                    hrp.CFrame = CFrame.new(newPos, newPos + lookDir)
+                else
+                    hrp.CFrame = CFrame.new(newPos)
+                end
+
+                if bodyVel then bodyVel.Velocity = Vector3.zero end
+                if bodyGyro then bodyGyro.CFrame = hrp.CFrame end
+            end
+        end
+
+        -- Финальная позиция точно на монете и сбор
+        if part and part.Parent and hrp and hrp.Parent then
+            pcall(function()
+                hrp.CFrame = CFrame.new(part.Position)
+                if bodyVel then bodyVel.Velocity = Vector3.zero end
+            end)
+
+            task.wait(0.03)
+
+            pcall(function()
+                firetouchinterest(hrp, part, 0)
+                task.wait(0.06)
+                firetouchinterest(hrp, part, 1)
+            end)
+
+            count = count + 1
+            task.wait(0.02)
+        end
+    end
+
+    -- Возвращаемся на исходную позицию
+    if hrp and hrp.Parent then
+        local returnDist = (hrp.Position - originalCFrame.Position).Magnitude
+        local returnTime = math.max(0.15, returnDist / speed)
+        local startPos = hrp.Position
+        local elapsed = 0
+
+        while elapsed < returnTime do
+            if not hrp or not hrp.Parent then break end
+            local dt = RunService.Heartbeat:Wait()
+            elapsed = elapsed + dt
+            local alpha = math.min(elapsed / returnTime, 1)
+            local newPos = startPos:Lerp(originalCFrame.Position, alpha)
+            hrp.CFrame = CFrame.new(newPos) * (originalCFrame - originalCFrame.Position)
+            if bodyVel then bodyVel.Velocity = Vector3.zero end
+            if bodyGyro then bodyGyro.CFrame = hrp.CFrame end
+        end
+
+        pcall(function() hrp.CFrame = originalCFrame end)
+    end
+
+    -- Убираем body movers
+    pcall(function() if bodyVel then bodyVel:Destroy() end end)
+    pcall(function() if bodyGyro then bodyGyro:Destroy() end end)
+
+    -- Отключаем ноуклип-апдейт
+    if noclipConn then
+        pcall(function() noclipConn:Disconnect() end)
+    end
+
+    -- Восстанавливаем коллизии
+    for part, wasCollide in pairs(originalCollisions) do
+        pcall(function()
+            if part and part.Parent then
+                part.CanCollide = wasCollide
+            end
+        end)
+    end
+
+    flyCollectRunning = false
+    coinCollectBusy = false
+    return count
+end
 
 -- ============================================================
 -- [[ VISUALIZER RANGE RING ]] --
@@ -1488,6 +1654,7 @@ local function getTrailModel(displayName)
     return TRAIL_MODEL_MAP[displayName] or displayName
 end
 
+-- Защита косметики от удаления игрой
 if hookmetamethods and getnamecallmethod then
     local oldNamecall
     oldNamecall = hookmetamethods(game, "__namecall", newcclosure(function(self, ...)
@@ -1625,7 +1792,7 @@ auraToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
 
 auraSec:AddSlider({
     Name = "Aura Radius", Icon = "maximize",
-    Min = 5, Max = 30, Default = 15, Decimals = 0, Suffix = " studs",
+    Min = 5, Max = 25, Default = 15, Decimals = 0, Suffix = " studs",
     Callback = function(val) _G.KillAuraRange = val end,
 })
 auraSec:AddToggle({
@@ -1667,22 +1834,6 @@ legitSec:AddToggle({
     Callback = function(state) _G.IgnoreNoTagBack = state end,
 })
 
-local hitboxSec = combatTab:CreateSection({ Name = "Enemy Hitbox Expander", Icon = "box" })
-hitboxSec:AddToggle({
-    Name = "Expand Enemy Hitboxes", Icon = "maximize", Default = false,
-    Callback = function(state) _G.HitboxExpanderEnabled = state end,
-})
-hitboxSec:AddSlider({
-    Name = "Hitbox Size", Icon = "maximize",
-    Min = 3, Max = 25, Default = 8, Decimals = 0, Suffix = " studs",
-    Callback = function(val) _G.HitboxSize = val end,
-})
-hitboxSec:AddSlider({
-    Name = "Hitbox Transparency", Icon = "sun",
-    Min = 0.1, Max = 0.9, Default = 0.6, Decimals = 2,
-    Callback = function(val) _G.HitboxTransparency = val end,
-})
-
 combatTab:Column("right")
 local parrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
 local parryToggle = parrySec:AddToggle({
@@ -1721,30 +1872,30 @@ combatModSec:AddToggle({
 })
 combatModSec:AddToggle({
     Name = "Tag Cooldown Booster", Icon = "clock", Default = false,
-    Callback = function(state) boosters.TagCooldown.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("TagCooldown"),
 })
 combatModSec:AddSlider({
     Name = "Cooldown Multiplier", Icon = "trending-up",
-    Min = 1.0, Max = 10.0, Default = 3.0, Decimals = 1, Suffix = "x",
-    Callback = function(v) boosters.TagCooldown.mult = v; applyAllBoosts() end,
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("TagCooldown"),
 })
 combatModSec:AddToggle({
     Name = "Tag Range Booster", Icon = "maximize", Default = false,
-    Callback = function(state) boosters.TagRange.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("RangeMultiplier"),
 })
 combatModSec:AddSlider({
     Name = "Range Multiplier", Icon = "trending-up",
-    Min = 1.0, Max = 5.0, Default = 2.0, Decimals = 1, Suffix = "x",
-    Callback = function(v) boosters.TagRange.mult = v; applyAllBoosts() end,
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("RangeMultiplier"),
 })
 combatModSec:AddToggle({
     Name = "Tag Knockback Booster", Icon = "wind", Default = false,
-    Callback = function(state) boosters.TagKnockback.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("TagPlayerKnockback"),
 })
 combatModSec:AddSlider({
     Name = "Knockback Multiplier", Icon = "trending-up",
-    Min = 1.0, Max = 10.0, Default = 3.0, Decimals = 1, Suffix = "x",
-    Callback = function(v) boosters.TagKnockback.mult = v; applyAllBoosts() end,
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("TagPlayerKnockback"),
 })
 
 local lookSec = combatTab:CreateSection({ Name = "Target Aim / Look At", Icon = "eye" })
@@ -1783,117 +1934,175 @@ moveTab:Column("left")
 local speedSec = moveTab:CreateSection({ Name = "Locomotion", Icon = "zap" })
 speedSec:AddToggle({
     Name = "Run In All Directions", Icon = "compass", Default = false,
-    Callback = function(state) moveFlags.RunInAllDirections = state; applyAllBoosts() end,
-})
-speedSec:AddToggle({
-    Name = "Speed Booster (Walk & Run)", Icon = "activity", Default = false,
-    Callback = function(state) boosters.Speed.enabled = state; applyAllBoosts() end,
-})
-speedSec:AddSlider({
-    Name = "Speed Multiplier", Icon = "trending-up",
-    Min = 1.0, Max = 10.0, Default = 2.0, Decimals = 1, Suffix = "x",
-    Callback = function(v) boosters.Speed.mult = v; applyAllBoosts() end,
-})
-speedSec:AddToggle({
-    Name = "Jump Power Booster", Icon = "arrow-up", Default = false,
-    Callback = function(state) boosters.Jump.enabled = state; applyAllBoosts() end,
-})
-speedSec:AddSlider({
-    Name = "Jump Multiplier", Icon = "trending-up",
-    Min = 1.0, Max = 10.0, Default = 2.5, Decimals = 1, Suffix = "x",
-    Callback = function(v) boosters.Jump.mult = v; applyAllBoosts() end,
+    Callback = makeFlagToggle("RunInAllDirections"),
 })
 speedSec:AddToggle({
     Name = "Acceleration Booster", Icon = "zap", Default = false,
-    Callback = function(state) boosters.Accel.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("AccelerationMultiplier"),
 })
 speedSec:AddSlider({
     Name = "Accel Multiplier", Icon = "trending-up",
-    Min = 1.0, Max = 10.0, Default = 5.0, Decimals = 1, Suffix = "x",
-    Callback = function(v) boosters.Accel.mult = v; applyAllBoosts() end,
+    Min = 0.1, Max = 10.0, Default = 10.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("AccelerationMultiplier"),
+})
+speedSec:AddToggle({
+    Name = "Run Speed Booster", Icon = "activity", Default = false,
+    Callback = makeBoostToggle("RunSpeedMultiplier"),
+})
+speedSec:AddSlider({
+    Name = "Run Speed Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 3.0, Default = 1.1, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("RunSpeedMultiplier"),
+})
+speedSec:AddToggle({
+    Name = "Jump Power Booster", Icon = "arrow-up", Default = false,
+    Callback = makeBoostToggle("JumpPowerMultiplier"),
+})
+speedSec:AddSlider({
+    Name = "Jump Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("JumpPowerMultiplier"),
 })
 speedSec:AddToggle({
     Name = "Gravity Multiplier", Icon = "arrow-down", Default = false,
-    Callback = function(state) boosters.Gravity.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("GravityMultiplier"),
 })
 speedSec:AddSlider({
     Name = "Gravity Scale", Icon = "trending-down",
     Min = 0.1, Max = 3.0, Default = 1.0, Decimals = 2, Suffix = "x",
-    Callback = function(v) boosters.Gravity.mult = v; applyAllBoosts() end,
+    Callback = makeBoostSlider("GravityMultiplier"),
 })
 
-local charScaleSec = moveTab:CreateSection({ Name = "Character Scale (Self)", Icon = "user" })
-charScaleSec:AddToggle({
-    Name = "Character Scale Booster", Icon = "maximize", Default = false,
-    Callback = function(state) boosters.CharacterScale.enabled = state; applyAllBoosts() end,
+local hitboxSec = moveTab:CreateSection({ Name = "Character Scale", Icon = "user" })
+hitboxSec:AddToggle({
+    Name = "Body Size Booster", Icon = "maximize", Default = false,
+    Callback = makeBoostToggle("SizeMultiplier"),
 })
-charScaleSec:AddSlider({
-    Name = "Scale Multiplier", Icon = "trending-up",
-    Min = 0.5, Max = 3.0, Default = 1.0, Decimals = 2, Suffix = "x",
-    Callback = function(v) boosters.CharacterScale.mult = v; applyAllBoosts() end,
+hitboxSec:AddSlider({
+    Name = "Body Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("SizeMultiplier"),
+})
+hitboxSec:AddToggle({
+    Name = "Head Size Booster", Icon = "circle", Default = false,
+    Callback = makeBoostToggle("HeadSizeMultiplier"),
+})
+hitboxSec:AddSlider({
+    Name = "Head Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("HeadSizeMultiplier"),
 })
 
 moveTab:Column("right")
 local parkourSec = moveTab:CreateSection({ Name = "Parkour & Abilities", Icon = "sparkles" })
 parkourSec:AddToggle({
     Name = "Infinite Slides", Icon = "fast-forward", Default = false,
-    Callback = function(state) moveFlags.InfiniteSlides = state; applyAllBoosts() end,
+    Callback = makeFlagToggle("InfiniteSlides"),
 })
 parkourSec:AddToggle({
     Name = "Enable Wallrunning", Icon = "chevrons-right", Default = false,
-    Callback = function(state) moveFlags.EnableWallrunning = state; applyAllBoosts() end,
+    Callback = makeFlagToggle("EnableWallrunning"),
 })
 parkourSec:AddToggle({
     Name = "Enable Tictacs", Icon = "corner-up-right", Default = false,
-    Callback = function(state) moveFlags.EnableTictacs = state; applyAllBoosts() end,
+    Callback = makeFlagToggle("EnableTictacs"),
 })
 parkourSec:AddToggle({
     Name = "Enable Paragliding", Icon = "wind", Default = false,
-    Callback = function(state) moveFlags.EnableParagliding = state; applyAllBoosts() end,
+    Callback = makeFlagToggle("EnableParagliding"),
 })
 parkourSec:AddToggle({
     Name = "Enable Fly Mode", Icon = "feather", Default = false,
-    Callback = function(state) moveFlags.EnableFlying = state; applyAllBoosts() end,
+    Callback = makeFlagToggle("EnableFlying"),
 })
 parkourSec:AddToggle({
     Name = "Slide Speed Booster", Icon = "activity", Default = false,
-    Callback = function(state) boosters.SlideSpeed.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("SlideSpeedMultiplier"),
 })
 parkourSec:AddSlider({
     Name = "Slide Speed Multiplier", Icon = "trending-up",
-    Min = 0.5, Max = 5.0, Default = 2.0, Decimals = 2, Suffix = "x",
-    Callback = function(v) boosters.SlideSpeed.mult = v; applyAllBoosts() end,
+    Min = 0.5, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("SlideSpeedMultiplier"),
 })
 parkourSec:AddToggle({
     Name = "Slide Jump Booster", Icon = "arrow-up-right", Default = false,
-    Callback = function(state) boosters.SlideJump.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("SlideJumpMultiplier"),
 })
 parkourSec:AddSlider({
     Name = "Slide Jump Multiplier", Icon = "trending-up",
-    Min = 0.5, Max = 5.0, Default = 2.0, Decimals = 2, Suffix = "x",
-    Callback = function(v) boosters.SlideJump.mult = v; applyAllBoosts() end,
+    Min = 0.5, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("SlideJumpMultiplier"),
 })
 parkourSec:AddToggle({
     Name = "Wallclimb Booster", Icon = "chevrons-up", Default = false,
-    Callback = function(state) boosters.Wallclimb.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("WallclimbMultiplier"),
 })
 parkourSec:AddSlider({
     Name = "Wallclimb Multiplier", Icon = "trending-up",
-    Min = 0.5, Max = 5.0, Default = 2.0, Decimals = 2, Suffix = "x",
-    Callback = function(v) boosters.Wallclimb.mult = v; applyAllBoosts() end,
+    Min = 0.5, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("WallclimbMultiplier"),
 })
 parkourSec:AddToggle({
     Name = "Vault Momentum Booster", Icon = "external-link", Default = false,
-    Callback = function(state) boosters.VaultMomentum.enabled = state; applyAllBoosts() end,
+    Callback = makeBoostToggle("VaultMomentumMultiplier"),
 })
 parkourSec:AddSlider({
     Name = "Vault Multiplier", Icon = "trending-up",
-    Min = 0.5, Max = 5.0, Default = 2.0, Decimals = 2, Suffix = "x",
-    Callback = function(v) boosters.VaultMomentum.mult = v; applyAllBoosts() end,
+    Min = 0.5, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("VaultMomentumMultiplier"),
 })
-parkourSec:AddToggle({
+
+local momentumSec = moveTab:CreateSection({ Name = "Momentum & Friction", Icon = "activity" })
+momentumSec:AddToggle({
+    Name = "Momentum Booster", Icon = "activity", Default = false,
+    Callback = makeBoostToggle("MomentumMultiplier"),
+})
+momentumSec:AddSlider({
+    Name = "Momentum Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("MomentumMultiplier"),
+})
+momentumSec:AddToggle({
+    Name = "Momentum Decay Booster", Icon = "trending-down", Default = false,
+    Callback = makeBoostToggle("MomentumDecayMultiplier"),
+})
+momentumSec:AddSlider({
+    Name = "Decay Multiplier", Icon = "trending-down",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("MomentumDecayMultiplier"),
+})
+momentumSec:AddToggle({
+    Name = "Friction Decay Booster", Icon = "wind", Default = false,
+    Callback = makeBoostToggle("FrictionDecayMultiplier"),
+})
+momentumSec:AddSlider({
+    Name = "Friction Multiplier", Icon = "wind",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("FrictionDecayMultiplier"),
+})
+momentumSec:AddToggle({
     Name = "Zero Friction (Ice Mode)", Icon = "snowflake", Default = false,
-    Callback = function(state) moveFlags.DisableFriction = state; applyAllBoosts() end,
+    Callback = makeFlagToggle("DisableFriction"),
+})
+
+local perksSec = moveTab:CreateSection({ Name = "Movement Perks", Icon = "sparkles" })
+perksSec:AddToggle({
+    Name = "Window Smash Booster", Icon = "box", Default = false,
+    Callback = makeBoostToggle("WindowSmashMultiplier"),
+})
+perksSec:AddSlider({
+    Name = "Window Multiplier", Icon = "box",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("WindowSmashMultiplier"),
+})
+perksSec:AddToggle({
+    Name = "Roll Boost Booster", Icon = "rotate-cw", Default = false,
+    Callback = makeBoostToggle("RollBoostMultiplier"),
+})
+perksSec:AddSlider({
+    Name = "Roll Multiplier", Icon = "rotate-cw",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("RollBoostMultiplier"),
 })
 
 -- ===================== VISUALS TAB =====================
@@ -2018,11 +2227,35 @@ magnetSec:AddSlider({
 })
 magnetSec:AddSlider({
     Name = "Collect Interval", Icon = "clock",
-    Min = 0.05, Max = 1.0, Default = 0.15, Decimals = 2, Suffix = "s",
+    Min = 0.3, Max = 2.0, Default = 0.5, Decimals = 2, Suffix = "s",
     Callback = function(val) _G.CollectCoinsDelay = val end,
 })
+magnetSec:AddSlider({
+    Name = "Coins Per Cycle", Icon = "layers",
+    Min = 1, Max = 10, Default = 3, Decimals = 0,
+    Callback = function(val) _G.CollectCoinsPerCycle = val end,
+})
+magnetSec:AddSlider({
+    Name = "Fly Speed", Icon = "rocket",
+    Min = 100, Max = 2000, Default = 600, Decimals = 0, Suffix = " studs/s",
+    Callback = function(val) _G.FlyCollectSpeed = val end,
+})
 magnetSec:AddButton({
-    Name = "Collect All Now (Map Wipe)", Primary = true, Icon = "check",
+    Name = "Fly & Collect All (Noclip)", Primary = true, Icon = "rocket",
+    Callback = function()
+        if flyCollectRunning then
+            Window:Notify({ Title = "Coin Magnet", Content = "Already flying!", Type = "Warning", Duration = 1.5 })
+            return
+        end
+        Window:Notify({ Title = "Coin Magnet", Content = "Noclip fly-collect started...", Type = "Info", Duration = 1.5 })
+        task.spawn(function()
+            local count = flyCollectAll()
+            Window:Notify({ Title = "Coin Magnet", Content = "Fly-collected " .. tostring(count) .. " coins!", Type = "Success", Duration = 3 })
+        end)
+    end,
+})
+magnetSec:AddButton({
+    Name = "Instant Collect (Teleport)", Icon = "check",
     Callback = function()
         local count = collectCoins(true, 5000)
         Window:Notify({ Title = "Coin Magnet", Content = "Collected " .. tostring(count) .. " coins!", Type = "Success", Duration = 2 })
@@ -2035,39 +2268,13 @@ coinEspSec:AddToggle({
     Name = "Enable Coin ESP", Icon = "eye", Default = false,
     Callback = function(state)
         _G.CoinEspEnabled = state
-        if not state and not _G.CoinShowTracers then clearAllCoinEsp() end
+        if not state then clearAllCoinEsp() end
     end,
 })
 coinEspSec:AddSlider({
     Name = "Max Distance", Icon = "maximize",
     Min = 50, Max = 1500, Default = 800, Decimals = 0, Suffix = " studs",
     Callback = function(val) _G.CoinEspMaxDistance = val end,
-})
-
-local coinTracerToggle = coinEspSec:AddToggle({
-    Name = "Coin Tracers", Icon = "crosshair", Default = false,
-    Callback = function(state)
-        _G.CoinShowTracers = state
-        if not state then
-            for _, cache in pairs(coinEspCache) do
-                if cache.Tracer then cache.Tracer.Visible = false end
-            end
-            if not _G.CoinEspEnabled then clearAllCoinEsp() end
-        end
-    end,
-})
-coinTracerToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
-
-coinEspSec:AddDropdown({
-    Name = "Tracer Origin", Icon = "corner-down-right",
-    Options = {"Bottom", "Center", "Mouse"}, Default = "Bottom",
-    Callback = function(val) _G.CoinTracerOrigin = val end,
-})
-
-coinEspSec:AddSlider({
-    Name = "Tracer Thickness", Icon = "trending-up",
-    Min = 1, Max = 5, Default = 1.5, Decimals = 1,
-    Callback = function(val) _G.CoinTracerThickness = val end,
 })
 
 -- ===================== COSMETICS TAB =====================
@@ -2241,7 +2448,6 @@ RunService.Heartbeat:Connect(function()
     legitTagLoop()
     autoParryLoop()
     applyAllBoosts()
-    updateHitboxes()
 end)
 
 RunService.RenderStepped:Connect(function()
