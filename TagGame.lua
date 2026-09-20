@@ -69,6 +69,9 @@ _G.TracerThickness = 1.5
 
 _G.CoinEspEnabled = false
 _G.CoinEspMaxDistance = 800
+_G.CoinShowTracers = false
+_G.CoinTracerOrigin = "Bottom"
+_G.CoinTracerThickness = 1.5
 _G.AutoCollectCoins = false
 _G.CollectCoinsMode = "Map-Wide"
 _G.CollectCoinsRadius = 100
@@ -1150,10 +1153,18 @@ end)
 -- ============================================================
 local coinEspCache = {}
 
+local function hideCoinEsp(item)
+    local cache = coinEspCache[item]
+    if not cache then return end
+    if cache.Billboard then cache.Billboard.Enabled = false end
+    if cache.Tracer then cache.Tracer.Visible = false end
+end
+
 local function clearCoinEsp(item)
     local cache = coinEspCache[item]
     if cache then
         if cache.Billboard then pcall(function() cache.Billboard:Destroy() end) end
+        if cache.Tracer then pcall(function() cache.Tracer:Remove() end) end
         coinEspCache[item] = nil
     end
 end
@@ -1165,8 +1176,12 @@ local function clearAllCoinEsp()
 end
 
 local function updateCoinEsp()
-    if not _G.CoinEspEnabled then
-        if next(coinEspCache) then clearAllCoinEsp() end
+    if not _G.CoinEspEnabled and not _G.CoinShowTracers then
+        if next(coinEspCache) then
+            for item, _ in pairs(coinEspCache) do
+                hideCoinEsp(item)
+            end
+        end
         return
     end
 
@@ -1175,6 +1190,18 @@ local function updateCoinEsp()
     local maxDist = _G.CoinEspMaxDistance or 800
     local currencyFolders = {"coins", "specialcurrency", "doublecoins", "doublecoinsLegacy"}
     local seen = {}
+
+    local originMode = _G.CoinTracerOrigin or _G.TracerOrigin or "Bottom"
+    local mousePos = UserInputService:GetMouseLocation()
+    local viewportSize = Camera.ViewportSize
+    local coinTracerOrigin
+    if originMode == "Center" then
+        coinTracerOrigin = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+    elseif originMode == "Mouse" then
+        coinTracerOrigin = mousePos
+    else
+        coinTracerOrigin = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+    end
 
     for _, fName in ipairs(currencyFolders) do
         local folder = workspace:FindFirstChild(fName)
@@ -1185,6 +1212,8 @@ local function updateCoinEsp()
                     seen[item] = true
                     local dist = (part.Position - myPos).Magnitude
                     local cache = coinEspCache[item]
+                    local coinColor = fName == "specialcurrency" and Color3.fromRGB(0, 255, 255)
+                        or (fName:find("double") and Color3.fromRGB(255, 100, 255) or Color3.fromRGB(255, 215, 0))
 
                     if dist <= maxDist then
                         if not cache then
@@ -1206,8 +1235,7 @@ local function updateCoinEsp()
                             lbl.Size = UDim2.new(1, 0, 1, 0)
                             lbl.Font = Enum.Font.GothamBold
                             lbl.TextSize = 11
-                            lbl.TextColor3 = fName == "specialcurrency" and Color3.fromRGB(0, 255, 255)
-                                or (fName:find("double") and Color3.fromRGB(255, 100, 255) or Color3.fromRGB(255, 215, 0))
+                            lbl.TextColor3 = coinColor
                             lbl.TextStrokeTransparency = 0.2
                             lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
                             lbl.Parent = bb
@@ -1221,13 +1249,43 @@ local function updateCoinEsp()
                         end
 
                         if cache.Billboard then
-                            cache.Billboard.Enabled = true
-                            local tagText = fName == "specialcurrency" and "SPECIAL"
-                                or (fName:find("double") and "2X COIN" or "COIN")
-                            cache.Label.Text = string.format("%s\n[%d studs]", tagText, math.floor(dist))
+                            cache.Billboard.Enabled = _G.CoinEspEnabled == true
+                            if _G.CoinEspEnabled then
+                                local tagText = fName == "specialcurrency" and "SPECIAL"
+                                    or (fName:find("double") and "2X COIN" or "COIN")
+                                cache.Label.Text = string.format("%s\n[%d studs]", tagText, math.floor(dist))
+                                cache.Label.TextColor3 = coinColor
+                            end
                         end
-                    elseif cache and cache.Billboard then
-                        cache.Billboard.Enabled = false
+
+                        -- Tracers
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                        if _G.CoinShowTracers and onScreen and screenPos.Z > 0 and Drawing and Drawing.new then
+                            if not cache.Tracer then
+                                local success, line = pcall(function()
+                                    local l = Drawing.new("Line")
+                                    l.Thickness = _G.CoinTracerThickness or 1.5
+                                    l.Color = coinColor
+                                    l.Visible = false
+                                    return l
+                                end)
+                                if success and line then
+                                    cache.Tracer = line
+                                end
+                            end
+
+                            if cache.Tracer then
+                                cache.Tracer.From = coinTracerOrigin
+                                cache.Tracer.To = Vector2.new(screenPos.X, screenPos.Y)
+                                cache.Tracer.Color = coinColor
+                                cache.Tracer.Thickness = _G.CoinTracerThickness or 1.5
+                                cache.Tracer.Visible = true
+                            end
+                        else
+                            if cache.Tracer then cache.Tracer.Visible = false end
+                        end
+                    else
+                        hideCoinEsp(item)
                     end
                 end
             end
@@ -1977,13 +2035,39 @@ coinEspSec:AddToggle({
     Name = "Enable Coin ESP", Icon = "eye", Default = false,
     Callback = function(state)
         _G.CoinEspEnabled = state
-        if not state then clearAllCoinEsp() end
+        if not state and not _G.CoinShowTracers then clearAllCoinEsp() end
     end,
 })
 coinEspSec:AddSlider({
     Name = "Max Distance", Icon = "maximize",
     Min = 50, Max = 1500, Default = 800, Decimals = 0, Suffix = " studs",
     Callback = function(val) _G.CoinEspMaxDistance = val end,
+})
+
+local coinTracerToggle = coinEspSec:AddToggle({
+    Name = "Coin Tracers", Icon = "crosshair", Default = false,
+    Callback = function(state)
+        _G.CoinShowTracers = state
+        if not state then
+            for _, cache in pairs(coinEspCache) do
+                if cache.Tracer then cache.Tracer.Visible = false end
+            end
+            if not _G.CoinEspEnabled then clearAllCoinEsp() end
+        end
+    end,
+})
+coinTracerToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
+
+coinEspSec:AddDropdown({
+    Name = "Tracer Origin", Icon = "corner-down-right",
+    Options = {"Bottom", "Center", "Mouse"}, Default = "Bottom",
+    Callback = function(val) _G.CoinTracerOrigin = val end,
+})
+
+coinEspSec:AddSlider({
+    Name = "Tracer Thickness", Icon = "trending-up",
+    Min = 1, Max = 5, Default = 1.5, Decimals = 1,
+    Callback = function(val) _G.CoinTracerThickness = val end,
 })
 
 -- ===================== COSMETICS TAB =====================
