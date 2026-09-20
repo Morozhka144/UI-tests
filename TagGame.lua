@@ -48,6 +48,10 @@ _G.ShowTracers = false
 _G.TracerOrigin = "Bottom"
 _G.TracerThickness = 1.5
 
+_G.AntiAFK = true
+_G.AutoRejoin = true
+_G.ForceUnlockTagging = true
+
 -- [[ Helpers ]] --
 local function getHRP()
     local char = LocalPlayer.Character
@@ -64,23 +68,25 @@ local function getRole(player)
     return roleObj and roleObj.Value
 end
 
--- === 7. ANTI AFK ===
+-- === ANTI AFK & AUTO REJOIN ===
 local xAFKx
-
-if xAFKx then
-    xAFKx:Disconnect()
-    xAFKx = nil
+local function setupAntiAFK(enabled)
+    if xAFKx then
+        pcall(function() xAFKx:Disconnect() end)
+        xAFKx = nil
+    end
+    if enabled then
+        xAFKx = LocalPlayer.Idled:Connect(function()
+            if not _G.AntiAFK then return end
+            local vu = game:GetService("VirtualUser")
+            vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            task.wait(1)
+            vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        end)
+    end
 end
+setupAntiAFK(true)
 
-xAFKx = game:GetService("Players").LocalPlayer.Idled:Connect(function()
-    local vu = game:GetService("VirtualUser")
-    vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-    task.wait(1)
-    vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-end)
-
-
--- === 8. AUTO REJOIN ===
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
@@ -89,7 +95,7 @@ local currentPlace = game.PlaceId
 local currentServer = game.JobId
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
-local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 
 local function reconnect()
     local player = Players.LocalPlayer
@@ -97,7 +103,6 @@ local function reconnect()
         pcall(function()
             TeleportService:TeleportToPlaceInstance(currentPlace, currentServer, player)
         end)
-        
         task.wait(10)
         pcall(function()
             TeleportService:Teleport(currentPlace, player)
@@ -105,12 +110,28 @@ local function reconnect()
     end
 end
 
+local function serverHop()
+    local success, result = pcall(function()
+        local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", currentPlace)
+        return HttpService:JSONDecode(game:HttpGet(url))
+    end)
+    if success and result and result.data then
+        for _, s in ipairs(result.data) do
+            if s.id ~= currentServer and s.playing < s.maxPlayers and s.playing > 0 then
+                TeleportService:TeleportToPlaceInstance(currentPlace, s.id, LocalPlayer)
+                return true
+            end
+        end
+    end
+    TeleportService:Teleport(currentPlace, LocalPlayer)
+    return true
+end
+
 pcall(function()
     GuiService.ErrorMessageChanged:Connect(function()
-        local errorCode = GuiService:GetErrorCode()
+        if not _G.AutoRejoin then return end
         local errorMsg = GuiService:GetErrorMessage()
-        
-        if errorMsg ~= "" then
+        if errorMsg and errorMsg ~= "" then
             task.wait(5)
             reconnect()
         end
@@ -145,8 +166,10 @@ local function applyAllBoosts()
     if not shared or not shared.multipliers then return end
     local m = shared.multipliers
 
-    -- разблокировать таг всегда
-    m.DisableTagging = false
+    -- разблокировать таг
+    if _G.ForceUnlockTagging ~= false then
+        m.DisableTagging = false
+    end
 
     -- Парринг
     m.EnableParrying = _G.AutoParryEnabled and true or false
@@ -160,16 +183,40 @@ local function applyAllBoosts()
 
     -- Дальность
     m.RangeMultiplier = boosters.RangeMultiplier.enabled and boosters.RangeMultiplier.mult or 1
+
+    -- Сила отбрасывания
+    if boosters.TagPlayerKnockback.enabled then
+        m.TagPlayerKnockback = (boosters.TagPlayerKnockback.base or 0.75) * boosters.TagPlayerKnockback.mult
+    end
+
+    -- Атрибуты персонажа / роли
+    local roleObj = getModifiersRole()
+    if roleObj then
+        for attr, data in pairs(boosters) do
+            if attr ~= "TagCooldown" and attr ~= "RangeMultiplier" then
+                if data.enabled then
+                    local baseVal = data.base or baseAttributes[attr] or 1
+                    local finalVal = baseVal * data.mult
+                    pcall(function() roleObj:SetAttribute(attr, finalVal) end)
+                    if m[attr] ~= nil then m[attr] = finalVal end
+                end
+            end
+        end
+    end
 end
 
 -- Хелпер для тоглов бустеров (убирает дублирование)
 local function makeBoostToggle(attr)
     return function(state)
         boosters[attr].enabled = state
+        local roleObj = getModifiersRole()
         if state then
-            local roleObj = getModifiersRole()
             if roleObj then
                 boosters[attr].base = roleObj:GetAttribute(attr) or baseAttributes[attr]
+            end
+        else
+            if roleObj and attr ~= "TagCooldown" and attr ~= "RangeMultiplier" then
+                pcall(function() roleObj:SetAttribute(attr, boosters[attr].base or baseAttributes[attr]) end)
             end
         end
         applyAllBoosts()
@@ -427,8 +474,26 @@ end
 -- ============================================================
 -- [[ AUTO-PARRY ]] --
 -- ============================================================
+local isEnemy
+
+local function hasEnemyNear(range)
+    local hrp = getHRP()
+    if not hrp then return false end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and isEnemy and isEnemy(player) and player.Character then
+            local eHRP = player.Character:FindFirstChild("HumanoidRootPart")
+            if eHRP and (eHRP.Position - hrp.Position).Magnitude <= range then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function autoParryLoop()
     if not _G.AutoParryEnabled then return end
+    if not hasEnemyNear(_G.AutoParryRange or 12) then return end
+
     -- ставим флаг игры (на всякий) + напрямую фаерим
     if shared.multipliers then
         shared.multipliers.EnableParrying = true
@@ -481,7 +546,7 @@ local function isRoyalty(role)
     return role == "Crown" or role == "Monarch" or role == "Knight" or role == "Bodyguard" or role == "Peasant" or role == "Baron"
 end
 
-local function isEnemy(player)
+isEnemy = function(player)
     if not player or player == LocalPlayer then return false end
     local theirRole = getRole(player)
     if not theirRole or isDeadRole(player) then return false end
@@ -1152,31 +1217,239 @@ end)
 -- [[ UI ]] --
 -- ============================================================
 local Lumina = loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"))()
-local Window = Lumina:CreateWindow({ Title = "MoroLumina | Evade" })
+local Window = Lumina:CreateWindow({ Title = "MoroLumina | Tag Game" })
+
+-- ===================== COMBAT TAB =====================
+local combatTab = Window:CreateTab({ Name = "Combat", Icon = "crosshair" })
+
+combatTab:Column("left")
+local auraSec = combatTab:CreateSection({ Name = "Kill Aura (Rage)", Icon = "zap" })
+local auraToggle = auraSec:AddToggle({
+    Name = "Auto Tag (Kill Aura)", Icon = "zap", Default = false,
+    Callback = function(state) _G.AutoTagEnabled = state end,
+})
+auraToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
+
+auraSec:AddSlider({
+    Name = "Aura Radius", Icon = "maximize",
+    Min = 5, Max = 25, Default = 15, Decimals = 0, Suffix = " studs",
+    Callback = function(val) _G.KillAuraRange = val end,
+})
+auraSec:AddToggle({
+    Name = "Wall Check", Icon = "shield", Default = true,
+    Callback = function(state) _G.KillAuraWallCheck = state end,
+})
+auraSec:AddToggle({
+    Name = "Show Range Ring", Icon = "circle", Default = false,
+    Callback = function(state) _G.ShowKillAuraRing = state end,
+})
+
+local legitSec = combatTab:CreateSection({ Name = "Auto Tag (Legit)", Icon = "target" })
+local legitToggle = legitSec:AddToggle({
+    Name = "Auto Tag (Legit)", Icon = "target", Default = false,
+    Callback = function(state) _G.LegitTagEnabled = state end,
+})
+legitToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
+
+legitSec:AddSlider({
+    Name = "Legit Range", Icon = "maximize",
+    Min = 5, Max = 20, Default = 12, Decimals = 0, Suffix = " studs",
+    Callback = function(val) _G.LegitTagRange = val end,
+})
+legitSec:AddSlider({
+    Name = "Cone FOV", Icon = "triangle",
+    Min = 0.1, Max = 0.95, Default = 0.6, Decimals = 2,
+    Callback = function(val) _G.LegitTagFOV = val end,
+})
+legitSec:AddToggle({
+    Name = "Wall Check", Icon = "shield", Default = true,
+    Callback = function(state) _G.LegitTagWallCheck = state end,
+})
+
+combatTab:Column("right")
+local parrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
+local parryToggle = parrySec:AddToggle({
+    Name = "Auto Parry", Icon = "shield", Default = false,
+    Callback = function(state)
+        _G.AutoParryEnabled = state
+        applyAllBoosts()
+    end,
+})
+parryToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
+
+parrySec:AddSlider({
+    Name = "Parry Radius", Icon = "maximize",
+    Min = 5, Max = 25, Default = 12, Decimals = 0, Suffix = " studs",
+    Callback = function(val) _G.AutoParryRange = val end,
+})
+
+local combatModSec = combatTab:CreateSection({ Name = "Combat Boosters", Icon = "trending-up" })
+combatModSec:AddToggle({
+    Name = "Tag Cooldown Booster", Icon = "clock", Default = false,
+    Callback = makeBoostToggle("TagCooldown"),
+})
+combatModSec:AddSlider({
+    Name = "Cooldown Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("TagCooldown"),
+})
+combatModSec:AddToggle({
+    Name = "Tag Range Booster", Icon = "maximize", Default = false,
+    Callback = makeBoostToggle("RangeMultiplier"),
+})
+combatModSec:AddSlider({
+    Name = "Range Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("RangeMultiplier"),
+})
+combatModSec:AddToggle({
+    Name = "Tag Knockback Booster", Icon = "wind", Default = false,
+    Callback = makeBoostToggle("TagPlayerKnockback"),
+})
+combatModSec:AddSlider({
+    Name = "Knockback Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("TagPlayerKnockback"),
+})
+
+local lookSec = combatTab:CreateSection({ Name = "Target Aim / Look At", Icon = "eye" })
+lookSec:AddToggle({
+    Name = "Enable Look At", Icon = "eye", Default = false,
+    Callback = function(state) lookAtEnabled = state end,
+})
+
+local function getPlayerNamesList()
+    local names = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then table.insert(names, p.Name) end
+    end
+    table.sort(names)
+    return names
+end
+
+local targetDrop = lookSec:AddDropdown({
+    Name = "Select Target", Icon = "user",
+    Options = getPlayerNamesList(),
+    Default = getPlayerNamesList()[1],
+    Callback = function(val) lookAtTarget = val end,
+})
+lookSec:AddButton({
+    Name = "Refresh Players", Icon = "refresh-cw",
+    Callback = function()
+        local list = getPlayerNamesList()
+        targetDrop.Refresh(list, true)
+    end,
+})
 
 -- ===================== MOVEMENT TAB =====================
 local moveTab = Window:CreateTab({ Name = "Movement", Icon = "move" })
 
 moveTab:Column("left")
-local accelSec = moveTab:CreateSection({ Name = "Acceleration", Icon = "zap" })
-accelSec:AddToggle({ Name = "Acceleration Booster", Icon = "zap", Default = false, Callback = makeBoostToggle("AccelerationMultiplier") })
-accelSec:AddSlider({ Name = "Accel Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 10.0, Decimals = 2, Callback = makeBoostSlider("AccelerationMultiplier") })
+local speedSec = moveTab:CreateSection({ Name = "Locomotion", Icon = "zap" })
+speedSec:AddToggle({
+    Name = "Acceleration Booster", Icon = "zap", Default = false,
+    Callback = makeBoostToggle("AccelerationMultiplier"),
+})
+speedSec:AddSlider({
+    Name = "Accel Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 10.0, Default = 10.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("AccelerationMultiplier"),
+})
+speedSec:AddToggle({
+    Name = "Run Speed Booster", Icon = "activity", Default = false,
+    Callback = makeBoostToggle("RunSpeedMultiplier"),
+})
+speedSec:AddSlider({
+    Name = "Run Speed Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 3.0, Default = 1.1, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("RunSpeedMultiplier"),
+})
+speedSec:AddToggle({
+    Name = "Jump Power Booster", Icon = "arrow-up", Default = false,
+    Callback = makeBoostToggle("JumpPowerMultiplier"),
+})
+speedSec:AddSlider({
+    Name = "Jump Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("JumpPowerMultiplier"),
+})
 
-local runSec = moveTab:CreateSection({ Name = "Run Speed", Icon = "activity" })
-runSec:AddToggle({ Name = "Run Speed Booster", Icon = "activity", Default = false, Callback = makeBoostToggle("RunSpeedMultiplier") })
-runSec:AddSlider({ Name = "Run Multiplier", Icon = "trending-up", Min = 0.1, Max = 2.0, Default = 1.1, Decimals = 2, Callback = makeBoostSlider("RunSpeedMultiplier") })
+local hitboxSec = moveTab:CreateSection({ Name = "Character Scale", Icon = "user" })
+hitboxSec:AddToggle({
+    Name = "Body Size Booster", Icon = "maximize", Default = false,
+    Callback = makeBoostToggle("SizeMultiplier"),
+})
+hitboxSec:AddSlider({
+    Name = "Body Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("SizeMultiplier"),
+})
+hitboxSec:AddToggle({
+    Name = "Head Size Booster", Icon = "circle", Default = false,
+    Callback = makeBoostToggle("HeadSizeMultiplier"),
+})
+hitboxSec:AddSlider({
+    Name = "Head Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("HeadSizeMultiplier"),
+})
 
 moveTab:Column("right")
-local jumpSec = moveTab:CreateSection({ Name = "Jump Power", Icon = "arrow-up" })
-jumpSec:AddToggle({ Name = "Jump Power Booster", Icon = "arrow-up", Default = false, Callback = makeBoostToggle("JumpPowerMultiplier") })
-jumpSec:AddSlider({ Name = "Jump Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("JumpPowerMultiplier") })
+local momentumSec = moveTab:CreateSection({ Name = "Momentum & Friction", Icon = "activity" })
+momentumSec:AddToggle({
+    Name = "Momentum Booster", Icon = "activity", Default = false,
+    Callback = makeBoostToggle("MomentumMultiplier"),
+})
+momentumSec:AddSlider({
+    Name = "Momentum Multiplier", Icon = "trending-up",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("MomentumMultiplier"),
+})
+momentumSec:AddToggle({
+    Name = "Momentum Decay Booster", Icon = "trending-down", Default = false,
+    Callback = makeBoostToggle("MomentumDecayMultiplier"),
+})
+momentumSec:AddSlider({
+    Name = "Decay Multiplier", Icon = "trending-down",
+    Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("MomentumDecayMultiplier"),
+})
+momentumSec:AddToggle({
+    Name = "Friction Decay Booster", Icon = "wind", Default = false,
+    Callback = makeBoostToggle("FrictionDecayMultiplier"),
+})
+momentumSec:AddSlider({
+    Name = "Friction Multiplier", Icon = "wind",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("FrictionDecayMultiplier"),
+})
+
+local perksSec = moveTab:CreateSection({ Name = "Movement Perks", Icon = "sparkles" })
+perksSec:AddToggle({
+    Name = "Window Smash Booster", Icon = "box", Default = false,
+    Callback = makeBoostToggle("WindowSmashMultiplier"),
+})
+perksSec:AddSlider({
+    Name = "Window Multiplier", Icon = "box",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("WindowSmashMultiplier"),
+})
+perksSec:AddToggle({
+    Name = "Roll Boost Booster", Icon = "rotate-cw", Default = false,
+    Callback = makeBoostToggle("RollBoostMultiplier"),
+})
+perksSec:AddSlider({
+    Name = "Roll Multiplier", Icon = "rotate-cw",
+    Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Suffix = "x",
+    Callback = makeBoostSlider("RollBoostMultiplier"),
+})
 
 -- ===================== VISUALS TAB =====================
 local visualsTab = Window:CreateTab({ Name = "Visuals", Icon = "eye" })
 
 visualsTab:Column("left")
 local espSec = visualsTab:CreateSection({ Name = "ESP Master", Icon = "eye" })
-espSec:AddToggle({
+local espToggle = espSec:AddToggle({
     Name = "Enable ESP", Icon = "eye", Default = false,
     Callback = function(state)
         _G.EspEnabled = state
@@ -1185,15 +1458,17 @@ espSec:AddToggle({
         end
     end,
 })
+espToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
+
 espSec:AddMultiDropdown({
-    Name = "Categories", Icon = "users",
+    Name = "Filter Categories", Icon = "users",
     Options = {"Enemies", "My Team", "Frozen", "OOF", "All"},
     Default = {"Enemies"},
     Callback = function(values) selectedCategories = values or {} end,
 })
 espSec:AddSlider({
     Name = "Max Distance", Icon = "maximize",
-    Min = 50, Max = 1000, Default = 600, Decimals = 0,
+    Min = 50, Max = 1500, Default = 600, Decimals = 0, Suffix = " studs",
     Callback = function(val) _G.EspMaxDistance = val end,
 })
 
@@ -1220,9 +1495,19 @@ chamsSec:AddSlider({
     Callback = function(val) _G.HighlightOutlineTransparency = val end,
 })
 
-local boxSec = visualsTab:CreateSection({ Name = "2D Boxes", Icon = "box" })
-boxSec:AddToggle({
-    Name = "Enable Boxes", Icon = "box", Default = false,
+local visualAidSec = visualsTab:CreateSection({ Name = "Visual Aids", Icon = "circle" })
+visualAidSec:AddToggle({
+    Name = "Show Kill Aura Ring", Icon = "circle", Default = false,
+    Callback = function(state) _G.ShowKillAuraRing = state end,
+})
+
+visualsTab:Column("right")
+local infoSec = visualsTab:CreateSection({ Name = "ESP Elements", Icon = "layout" })
+infoSec:AddToggle({ Name = "Show Names", Icon = "user", Default = true, Callback = function(s) _G.ShowNames = s end })
+infoSec:AddToggle({ Name = "Show Roles", Icon = "tag", Default = true, Callback = function(s) _G.ShowRoles = s end })
+infoSec:AddToggle({ Name = "Show Distance", Icon = "map-pin", Default = true, Callback = function(s) _G.ShowDistance = s end })
+infoSec:AddToggle({
+    Name = "Show 2D Boxes", Icon = "box", Default = false,
     Callback = function(state)
         _G.ShowBoxes = state
         if not state then
@@ -1234,14 +1519,8 @@ boxSec:AddToggle({
     end,
 })
 
-visualsTab:Column("right")
-local infoSec = visualsTab:CreateSection({ Name = "Player Info", Icon = "info" })
-infoSec:AddToggle({ Name = "Show Names", Icon = "user", Default = true, Callback = function(s) _G.ShowNames = s end })
-infoSec:AddToggle({ Name = "Show Roles", Icon = "tag", Default = true, Callback = function(s) _G.ShowRoles = s end })
-infoSec:AddToggle({ Name = "Show Distance", Icon = "map-pin", Default = true, Callback = function(s) _G.ShowDistance = s end })
-
 local tracerSec = visualsTab:CreateSection({ Name = "Tracers", Icon = "crosshair" })
-tracerSec:AddToggle({
+local tracerToggle = tracerSec:AddToggle({
     Name = "Enable Tracers", Icon = "crosshair", Default = false,
     Callback = function(state)
         _G.ShowTracers = state
@@ -1252,6 +1531,8 @@ tracerSec:AddToggle({
         end
     end,
 })
+tracerToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
+
 tracerSec:AddDropdown({
     Name = "Tracer Origin", Icon = "corner-down-right",
     Options = {"Bottom", "Center", "Mouse"}, Default = "Bottom",
@@ -1263,93 +1544,11 @@ tracerSec:AddSlider({
     Callback = function(val) _G.TracerThickness = val end,
 })
 
-local sizeSec = visualsTab:CreateSection({ Name = "Body Size", Icon = "maximize" })
-sizeSec:AddToggle({ Name = "Size Booster", Icon = "maximize", Default = false, Callback = makeBoostToggle("SizeMultiplier") })
-sizeSec:AddSlider({ Name = "Size Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("SizeMultiplier") })
-
-local headSec = visualsTab:CreateSection({ Name = "Head Size", Icon = "circle" })
-headSec:AddToggle({ Name = "Head Size Booster", Icon = "circle", Default = false, Callback = makeBoostToggle("HeadSizeMultiplier") })
-headSec:AddSlider({ Name = "Head Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("HeadSizeMultiplier") })
-
--- ===================== COMBAT TAB =====================
-local combatTab = Window:CreateTab({ Name = "Combat", Icon = "crosshair" })
-
-combatTab:Column("left")
-local tagCdSec = combatTab:CreateSection({ Name = "Tag Cooldown", Icon = "clock" })
-tagCdSec:AddToggle({ Name = "Tag Cooldown Booster", Icon = "clock", Default = false, Callback = makeBoostToggle("TagCooldown") })
-tagCdSec:AddSlider({ Name = "Cooldown Multiplier", Icon = "trending-up", Min = 0.01, Max = 2.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("TagCooldown") })
-
-local tagKbSec = combatTab:CreateSection({ Name = "Tag Knockback", Icon = "wind" })
-tagKbSec:AddToggle({ Name = "Tag Knockback Booster", Icon = "wind", Default = false, Callback = makeBoostToggle("TagPlayerKnockback") })
-tagKbSec:AddSlider({ Name = "Knockback Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("TagPlayerKnockback") })
-
-local rangeSec = combatTab:CreateSection({ Name = "Tag Range", Icon = "maximize" })
-rangeSec:AddToggle({ Name = "Range Booster", Icon = "maximize", Default = false, Callback = makeBoostToggle("RangeMultiplier") })
-rangeSec:AddSlider({ Name = "Range Multiplier", Icon = "trending-up", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("RangeMultiplier") })
-
-local lookSec = combatTab:CreateSection({ Name = "Look At Player", Icon = "eye" })
-lookSec:AddToggle({ Name = "Enable Look At", Icon = "eye", Default = false, Callback = function(state) lookAtEnabled = state end })
-local targetDrop = lookSec:AddDropdown({ Name = "Select Target", Icon = "user", Options = {}, Callback = function(val) lookAtTarget = val end })
-lookSec:AddButton({
-    Name = "Refresh Players", Icon = "refresh-cw",
-    Callback = function()
-        local names = {}
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer then table.insert(names, p.Name) end
-        end
-        targetDrop.Refresh(names, true)
-    end,
-})
-
-combatTab:Column("right")
-local autoTagSec = combatTab:CreateSection({ Name = "Auto Tag", Icon = "zap" })
-autoTagSec:AddToggle({ Name = "Auto Tag (Kill Aura)", Icon = "zap", Default = false, Callback = function(state) _G.AutoTagEnabled = state end })
-autoTagSec:AddToggle({ Name = "Wall Check", Icon = "shield", Default = true, Callback = function(state) _G.KillAuraWallCheck = state end })
-autoTagSec:AddSlider({ Name = "Tag Radius", Icon = "maximize", Min = 5, Max = 20, Default = 10, Decimals = 0, Callback = function(val) _G.KillAuraRange = val end })
-autoTagSec:AddToggle({ Name = "Show Range", Icon = "circle", Default = false, Callback = function(state) _G.ShowKillAuraRing = state end })
-
-local legitTagSec = combatTab:CreateSection({ Name = "Auto Tag (Legit)", Icon = "target" })
-legitTagSec:AddToggle({ Name = "Auto Tag (Legit)", Icon = "target", Default = false, Callback = function(state) _G.LegitTagEnabled = state end })
-legitTagSec:AddToggle({ Name = "Wall Check", Icon = "shield", Default = true, Callback = function(state) _G.LegitTagWallCheck = state end })
-legitTagSec:AddSlider({ Name = "Legit Range", Icon = "maximize", Min = 5, Max = 20, Default = 12, Decimals = 0, Callback = function(val) _G.LegitTagRange = val end })
-legitTagSec:AddSlider({ Name = "Cone FOV", Icon = "triangle", Min = 0.1, Max = 0.95, Default = 0.6, Decimals = 2, Callback = function(val) _G.LegitTagFOV = val end })
-
-local autoParrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
-autoParrySec:AddToggle({
-    Name = "Auto Parry", Icon = "shield", Default = false,
-    Callback = function(state)
-        _G.AutoParryEnabled = state
-        applyAllBoosts() -- сразу выставит атрибут EnableParry
-    end,
-})
-autoParrySec:AddSlider({ Name = "Parry Radius", Icon = "maximize", Min = 5, Max = 20, Default = 12, Decimals = 0, Callback = function(val) _G.AutoParryRange = val end })
-
--- ===================== ADVANCED TAB =====================
-local advancedTab = Window:CreateTab({ Name = "Advanced", Icon = "settings" })
-
-advancedTab:Column("left")
-local momentumSec = advancedTab:CreateSection({ Name = "Momentum", Icon = "activity" })
-momentumSec:AddToggle({ Name = "Momentum Booster", Icon = "activity", Default = false, Callback = makeBoostToggle("MomentumMultiplier") })
-momentumSec:AddSlider({ Name = "Momentum Multiplier", Icon = "trending-up", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("MomentumMultiplier") })
-momentumSec:AddToggle({ Name = "Momentum Decay Booster", Icon = "trending-down", Default = false, Callback = makeBoostToggle("MomentumDecayMultiplier") })
-momentumSec:AddSlider({ Name = "Decay Multiplier", Icon = "trending-down", Min = 0.1, Max = 5.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("MomentumDecayMultiplier") })
-
-local frictionSec = advancedTab:CreateSection({ Name = "Friction", Icon = "wind" })
-frictionSec:AddToggle({ Name = "Friction Decay Booster", Icon = "wind", Default = false, Callback = makeBoostToggle("FrictionDecayMultiplier") })
-frictionSec:AddSlider({ Name = "Friction Multiplier", Icon = "wind", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("FrictionDecayMultiplier") })
-
-advancedTab:Column("right")
-local specialSec = advancedTab:CreateSection({ Name = "Special", Icon = "zap" })
-specialSec:AddToggle({ Name = "Window Smash Booster", Icon = "box", Default = false, Callback = makeBoostToggle("WindowSmashMultiplier") })
-specialSec:AddSlider({ Name = "Window Multiplier", Icon = "box", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("WindowSmashMultiplier") })
-specialSec:AddToggle({ Name = "Roll Boost Booster", Icon = "rotate-cw", Default = false, Callback = makeBoostToggle("RollBoostMultiplier") })
-specialSec:AddSlider({ Name = "Roll Multiplier", Icon = "rotate-cw", Min = 0.1, Max = 10.0, Default = 1.0, Decimals = 2, Callback = makeBoostSlider("RollBoostMultiplier") })
-
 -- ===================== COSMETICS TAB =====================
 local cosmeticsTab = Window:CreateTab({ Name = "Cosmetics", Icon = "shirt" })
 
 cosmeticsTab:Column("left")
-local trailsSec = cosmeticsTab:CreateSection({ Name = "Trails", Icon = "zap" })
+local trailsSec = cosmeticsTab:CreateSection({ Name = "Trails", Icon = "sparkles" })
 
 local trailDrop = trailsSec:AddDropdown({
     Name = "Select Trail", Icon = "layers",
@@ -1376,13 +1575,13 @@ trailsSec:AddButton({
     end,
 })
 
-local trailNameBox = trailsSec:AddTextbox({ Name = "Trail Name (exact)", Placeholder = "Enter model name" })
+local trailNameBox = trailsSec:AddTextbox({ Name = "Trail Name (Custom)", Placeholder = "Enter model name..." })
 
 trailsSec:AddButton({
-    Name = "Equip by Name", Icon = "edit",
+    Name = "Equip by Custom Name", Icon = "edit",
     Callback = function()
         local name = trailNameBox.Get()
-        if name == "" then
+        if not name or name == "" then
             Window:Notify({ Title = "Trail", Content = "Enter a name", Type = "Warning", Duration = 2 })
             return
         end
@@ -1407,7 +1606,7 @@ if outfitsFolder then
 end
 
 if #OUTFIT_NAMES == 0 then
-    outfitsSec:AddLabel("No outfits found")
+    outfitsSec:AddLabel("No outfits found in ReplicatedStorage")
 else
     local outfitDrop = outfitsSec:AddDropdown({
         Name = "Select Outfit", Icon = "layers",
@@ -1434,13 +1633,13 @@ else
         end,
     })
 
-    local outfitNameBox = outfitsSec:AddTextbox({ Name = "Outfit Name (exact)", Placeholder = "Enter outfit name" })
+    local outfitNameBox = outfitsSec:AddTextbox({ Name = "Outfit Name (Custom)", Placeholder = "Enter outfit name..." })
 
     outfitsSec:AddButton({
-        Name = "Equip by Name", Icon = "edit",
+        Name = "Equip by Custom Name", Icon = "edit",
         Callback = function()
             local name = outfitNameBox.Get()
-            if name == "" then
+            if not name or name == "" then
                 Window:Notify({ Title = "Outfit", Content = "Enter a name", Type = "Warning", Duration = 2 })
                 return
             end
@@ -1452,6 +1651,58 @@ else
         end,
     })
 end
+
+-- ===================== MISC TAB =====================
+local miscTab = Window:CreateTab({ Name = "Misc", Icon = "sliders" })
+
+miscTab:Column("left")
+local autoSec = miscTab:CreateSection({ Name = "Automation", Icon = "cpu" })
+autoSec:AddToggle({
+    Name = "Anti-AFK", Icon = "shield-check", Default = true,
+    Callback = function(state)
+        _G.AntiAFK = state
+        setupAntiAFK(state)
+    end,
+})
+autoSec:AddToggle({
+    Name = "Auto Rejoin on Error", Icon = "refresh-cw", Default = true,
+    Callback = function(state) _G.AutoRejoin = state end,
+})
+autoSec:AddToggle({
+    Name = "Force Unlock Tagging", Icon = "unlock", Default = true,
+    Callback = function(state)
+        _G.ForceUnlockTagging = state
+        applyAllBoosts()
+    end,
+})
+
+miscTab:Column("right")
+local serverSec = miscTab:CreateSection({ Name = "Server Tools", Icon = "server" })
+serverSec:AddButton({
+    Name = "Rejoin Current Server", Icon = "rotate-cw",
+    Callback = function()
+        Window:Notify({ Title = "Server", Content = "Reconnecting...", Type = "Info", Duration = 2 })
+        reconnect()
+    end,
+})
+serverSec:AddButton({
+    Name = "Server Hop (New Server)", Icon = "shuffle",
+    Callback = function()
+        Window:Notify({ Title = "Server", Content = "Finding a new server...", Type = "Info", Duration = 2 })
+        serverHop()
+    end,
+})
+serverSec:AddButton({
+    Name = "Copy Job ID", Icon = "clipboard",
+    Callback = function()
+        if setclipboard then
+            setclipboard(tostring(game.JobId))
+            Window:Notify({ Title = "Clipboard", Content = "Copied JobId!", Type = "Success", Duration = 2 })
+        else
+            Window:Notify({ Title = "Clipboard", Content = "Clipboard not supported", Type = "Warning", Duration = 2 })
+        end
+    end,
+})
 
 -- ===================== SETTINGS TAB =====================
 Window:AddSettingsTab()
