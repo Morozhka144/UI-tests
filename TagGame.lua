@@ -1182,7 +1182,7 @@ end
 
 -- Сбор монет (безопасный — CFrame-телепорт + рандомизация)
 -- Настройки анти-кика
-_G.CollectCoinsPerCycle = _G.CollectCoinsPerCycle or 3       -- макс монет за один цикл
+_G.CollectCoinsPerCycle = _G.CollectCoinsPerCycle or 5       -- макс монет за один цикл
 _G.CollectCoinsTouchHold = _G.CollectCoinsTouchHold or 0.12  -- удержание touch (сек)
 _G.CollectCoinsJitter = _G.CollectCoinsJitter or true        -- случайный разброс задержки
 
@@ -1295,7 +1295,7 @@ end)
 -- ============================================================
 -- [[ FLY-COLLECT ALL (Noclip + скоростной пролёт) ]] --
 -- ============================================================
-_G.FlyCollectSpeed = _G.FlyCollectSpeed or 600   -- studs/sec скорость пролёта
+_G.FlyCollectSpeed = _G.FlyCollectSpeed or 999
 local flyCollectRunning = false
 
 local function setNoclip(char, state)
