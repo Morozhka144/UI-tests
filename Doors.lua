@@ -1,14 +1,3 @@
---[[
-    ╔═══════════════════════════════════════════════════════╗
-    ║            MORO DOORS — ULTIMATE EDITION              ║
-    ║        Modeled after mspaint, cheesy & abyssal        ║
-    ║            UI: MoroLumina v2 (Emerald)                ║
-    ╚═══════════════════════════════════════════════════════╝
-    [SECURITY & PRIVACY]: 
-    - 0 Webhooks, 0 Discord tracking, 0 Statistics logging
-    - Pure local executor execution
-]]
-
 print("==================================================")
 print("[Moro DOORS] Starting Moro DOORS (Emerald Edition)...")
 print("[Moro DOORS] PlaceId: " .. tostring(game.PlaceId))
@@ -215,8 +204,8 @@ end
 function library:CreateWindow(cfg)
     cfg = cfg or {}
     local win = Lumina:CreateWindow({
-        Title = "Moro DOORS (Cheesy Revamped)",
-        Theme = "Emerald",
+        Title = "Moro DOORS",
+        Theme = "Orange",
         ToggleKey = cfg.ToggleKeybind or Enum.KeyCode.RightShift,
     })
     currentWindow = win
