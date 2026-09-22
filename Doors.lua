@@ -1,7 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════╗
     ║            MORO DOORS — ULTIMATE EDITION              ║
-    ║        Modeled after mspaint, moro & abyssal        ║
     ║            UI: MoroLumina v2 (Emerald)                ║
     ╚═══════════════════════════════════════════════════════╝
     [SECURITY & PRIVACY]: 
