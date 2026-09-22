@@ -1,3 +1,14 @@
+--[[
+    ╔═══════════════════════════════════════════════════════╗
+    ║            MORO DOORS — ULTIMATE EDITION              ║
+    ║        Modeled after mspaint, moro & abyssal        ║
+    ║            UI: MoroLumina v2 (Emerald)                ║
+    ╚═══════════════════════════════════════════════════════╝
+    [SECURITY & PRIVACY]: 
+    - 0 Webhooks, 0 Discord tracking, 0 Statistics logging
+    - Pure local executor execution
+]]
+
 print("==================================================")
 print("[Moro DOORS] Starting Moro DOORS (Emerald Edition)...")
 print("[Moro DOORS] PlaceId: " .. tostring(game.PlaceId))
@@ -118,6 +129,9 @@ function library:Notify(info)
                 Duration = duration,
                 Type = nType
             })
+            if val171 and val171.PlaySound and type(info) == "table" and not info.NoSound then
+                val171.PlaySound()
+            end
         end)
     end
 end
@@ -205,19 +219,19 @@ function library:CreateWindow(cfg)
     cfg = cfg or {}
     local win = Lumina:CreateWindow({
         Title = "Moro DOORS",
-        Theme = "Orange",
+        Theme = "Emerald",
         ToggleKey = cfg.ToggleKeybind or Enum.KeyCode.RightShift,
     })
     currentWindow = win
     library.ScreenGui = win.Gui
     holder = win.Gui
 
-    local cheesyWindow = {
+    local moroWindow = {
         Holder = win.Gui,
         _window = win,
     }
 
-    function cheesyWindow:AddTab(title, icon)
+    function moroWindow:AddTab(title, icon)
         local lumTab = win:CreateTab({
             Name = title,
             Icon = icon or "menu",
@@ -794,11 +808,11 @@ function library:CreateWindow(cfg)
         return tabWrapper
     end
 
-    return cheesyWindow
+    return moroWindow
 end
 
 local obsidian = {
-    Folder = "cheesy/Configs",
+    Folder = "moro/Configs",
     SetFolder = function(self, f) self.Folder = f end,
     SetLibrary = function(self, l) end,
     SetIgnoreIndexes = function(self, t) end,
@@ -809,8 +823,8 @@ local obsidian = {
 }
 
 local obsidian2 = {
-    Folder = "cheesy/Data",
-    BuiltInThemes = setmetatable({ cheesy = { 1, {} } }, {
+    Folder = "moro/Data",
+    BuiltInThemes = setmetatable({ moro = { 1, {} } }, {
         __len = function() return 1 end
     }),
     SetFolder = function(self, f) self.Folder = f end,
@@ -977,8 +991,8 @@ pcall(function()
   end
 end)
 
-CHEESE_KEY = "joincheesydsc"
-DISCORD_INVITE = "https://discord.gg/CuZJQaCquK"
+CHEESE_KEY = "moro_key"
+DISCORD_INVITE = ""
 
 -- [SECURITY & PRIVACY] All telemetry, Discord webhooks, and analytics removed
 local val79 = false
@@ -1484,8 +1498,8 @@ local function helper19()
   return remoteListener and remoteListener:FindFirstChild("Modules")
 end
 
-local cheesyWindow = library:CreateWindow({
-  Title = "cheesy", Footer = "Revamped :O dsc.gg/cheesyscript", Icon = 106990021902590, IconSize = UDim2.fromOffset(42, 42), ToggleKeybind = Enum.KeyCode.RightShift, NotifySide = "Right", ShowCustomCursor = false, AutoShow = false, Center = true, TabPadding = 3, CornerRadius = 2, })
+local moroWindow = library:CreateWindow({
+  Title = "Moro DOORS", Footer = "Moro Edition", Icon = 106990021902590, IconSize = UDim2.fromOffset(42, 42), ToggleKeybind = Enum.KeyCode.RightShift, NotifySide = "Right", ShowCustomCursor = false, AutoShow = false, Center = true, TabPadding = 3, CornerRadius = 2, })
 
 local dummyGroupbox = {
     AddToggle = function(self, tag, opt)
@@ -1525,17 +1539,17 @@ local dummyTab = {
 
 local element3 = {
   Home = dummyTab, -- Home tab removed
-  Main = cheesyWindow:AddTab("Main", "house"),
-  Farm = cheesyWindow:AddTab("Auto-Farm", "bot"), -- Dedicated Auto-Farm Tab!
-  Visuals = cheesyWindow:AddTab("Visuals", "scan-eye"),
-  Exploits = cheesyWindow:AddTab("Exploits", "sparkle"),
-  Miscellaneous = cheesyWindow:AddTab("Miscellaneous", "sliders"),
-  Mines = cheesyWindow:AddTab("Mines", "gem"),
-  FoolsHotel = cheesyWindow:AddTab("Hotel-/Fools", "party-popper"),
-  Rooms = cheesyWindow:AddTab("Rooms", "bed-double"),
-  Garden = cheesyWindow:AddTab("Outdoors", "tree-pine"),
-  Archives = cheesyWindow:AddTab("Archives", "archive"),
-  Stairwell = cheesyWindow:AddTab("Stairwell", "tv"),
+  Main = moroWindow:AddTab("Main", "house"),
+  Farm = moroWindow:AddTab("Auto-Farm", "bot"), -- Dedicated Auto-Farm Tab!
+  Visuals = moroWindow:AddTab("Visuals", "scan-eye"),
+  Exploits = moroWindow:AddTab("Exploits", "sparkle"),
+  Miscellaneous = moroWindow:AddTab("Miscellaneous", "sliders"),
+  Mines = moroWindow:AddTab("Mines", "gem"),
+  FoolsHotel = moroWindow:AddTab("Hotel-/Fools", "party-popper"),
+  Rooms = moroWindow:AddTab("Rooms", "bed-double"),
+  Garden = moroWindow:AddTab("Outdoors", "tree-pine"),
+  Archives = moroWindow:AddTab("Archives", "archive"),
+  Stairwell = moroWindow:AddTab("Stairwell", "tv"),
   UserAddons = dummyTab, -- Addons tab removed
 }
 
@@ -1760,12 +1774,12 @@ Groupboxes.HomeFunctions:AddLabel({
 Groupboxes.HomeInfo = element3.Home:AddRightGroupbox("Info")
 
 Groupboxes.HomeInfo:AddLabel({
-  Text = "<font size=\"18\">Cheese Hub revamped :)<br/>'cheesy' is still actively getting updated, so i'm sorry for any bugs that might occur!<br/>also, cheesy/cheese hub will eventually support more games :D</font>", DoesWrap = true, })
+  Text = "<font size=\"18\">Moro DOORS (Emerald Edition)</font>", DoesWrap = true, })
 
 Groupboxes.HomeInfo:AddDivider()
 
 Groupboxes.HomeInfo:AddLabel({
-  Text = "<font size=\"18\">Join our discord for help, updates, and for chatting!<br/>discord.gg/CuZJQaCquK</font>", DoesWrap = true, })
+  Text = "<font size=\"18\">Moro DOORS • Pure Local Execution</font>", DoesWrap = true, })
 
 Groupboxes.Misc = element3.Miscellaneous:AddLeftGroupbox("Miscellaneous")
 
@@ -2011,7 +2025,7 @@ local function helper21()
   end
 
   safeCall9("SetRichPresence", {
-    details = "Using cheesy", state = safeCall10(), largeImage = { assetId = BLOXSTRAP_CHEESE_ICON, hoverText = "cheesy" }, smallImage = { assetId = BLOXSTRAP_CHEESE_ICON, hoverText = "discord.gg/CuZJQaCquK" }, })
+    details = "Using Moro DOORS", state = safeCall10(), largeImage = { assetId = BLOXSTRAP_CHEESE_ICON, hoverText = "Moro DOORS" }, smallImage = { assetId = BLOXSTRAP_CHEESE_ICON, hoverText = "discord.gg/CuZJQaCquK" }, })
 end
 
 toggles.DiscordRichPresence:OnChanged(function(p33)
@@ -2647,7 +2661,7 @@ toggles.DisplayInfo:OnChanged(function(p37)
   if p37 then
     DisplayInfoFC = 0
     DisplayInfoFT = tick()
-    DisplayInfoLabel = library:AddDraggableLabel("cheesy | loading...")
+    DisplayInfoLabel = library:AddDraggableLabel("Moro | loading...")
 
     if val85.UILibrary == "Obsidian" then
       local label = DisplayInfoLabel.Label or DisplayInfoLabel
@@ -2674,7 +2688,7 @@ toggles.DisplayInfo:OnChanged(function(p37)
 
       local success16 = pcall(identifyexecutor) and identifyexecutor() or "Unknown"
 
-      DisplayInfoLabel:SetText(("cheesy | FPS: %d | Ping: %dms | Executor: %s | User: %s"):format(
+      DisplayInfoLabel:SetText(("Moro | FPS: %d | Ping: %dms | Executor: %s | User: %s"):format(
         math.floor(DisplayInfoFPS), success15, success16, localPlayer2.Name
       ))
     end)
@@ -6732,7 +6746,7 @@ local function helper56(val177, val178)
 
   library:Notify({ Title = "An item has spawned", Description = val177 .. val179, Time = 4 })
 
-  if options.ItemNotifyStyle.Value ~= "Obsidian" then
+  if options.ItemNotifyStyle.Value == "Achievement" then
     task.spawn(function() val171.ShowAchievement("An item has spawned", val177, val179) end)
   end
 
@@ -7556,7 +7570,7 @@ function val202.MainTab()
     return
   end
 
-  local addTab2 = cheesyWindow:AddTab("LobbyMain", "house")
+  local addTab2 = moroWindow:AddTab("LobbyMain", "house")
 
   val202.MainTab = addTab2
   val202.MainButton = helper3(addTab2)
@@ -10075,7 +10089,7 @@ Groupboxes.Visuals_Notifs:AddDropdown("EntityList", {
     "Rush", "Ambush", "A-60", "A-120", "Blitz", "Eyes", "Lookman", "Monument", "Sally", "Gloombat Swarm", "Glitch Rush", "Glitch Ambush", "Drones", "Bash", "Electric Puddle", "Scribbles", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected entities (leave empty to notify all)", })
 
 Groupboxes.Visuals_Notifs:AddDropdown("NotifyStyle", {
-  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
+  Text = "Notification Style", Values = { "Lumina", "Achievement" }, Default = 1, })
 
 Groupboxes.Visuals_Notifs:AddDropdown("NotifySound", {
   Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 5, })
@@ -10098,7 +10112,7 @@ Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemList", {
     "Alarm Clock", "Aloe Vera", "Bandage", "Bandage Pack", "Battery", "Battery Pack", "Big Bomb", "Big Shield Potion", "Bomb", "Boxing Gloves", "Briefcase", "Bread", "Candle", "Candy", "Cheese", "Compass", "Crucifix", "Donut", "Flashlight", "FihFlakes", "Glitch Fragment", "Glowstick", "Golden Gun", "Gummy Flashlight", "Gween Soda", "Hiding Box", "Holy Hand Grenade", "Iron Key", "Knockbomb", "Lantern", "Laser Pointer", "Lighter", "Lockpicks", "Lotus", "Lotus Petal", "Mini Shield Potion", "Moonlight Candle", "Moonlight Smoothie", "Multitool", "Nanner", "Paper Plane", "Pizza", "Leftovers", "Rift Jar", "Shears", "Skeleton Key", "Smoothie", "Spotlight", "Starlight Barrel", "Starlight Bottle", "Starlight Vial", "Stop Sign", "Straplight", "Tablet", "Tip Jar", "Vitamins", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected items (leave empty to notify all)", })
 
 Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifyStyle", {
-  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
+  Text = "Notification Style", Values = { "Lumina", "Achievement" }, Default = 1, })
 
 Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifySound", {
   Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 4, })
@@ -10370,12 +10384,12 @@ val171.SoundAssets = {
 
 pcall(function()
   if isfolder then
-    if not isfolder("cheesy/Notification Sounds") then
-      makefolder("cheesy/Notification Sounds")
+    if not isfolder("moro/Notification Sounds") then
+      makefolder("moro/Notification Sounds")
     end
 
     local function fetchData2(val287, val288)
-      local val289 = "cheesy/Notification Sounds" .. "/" .. val287 .. "."
+      local val289 = "moro/Notification Sounds" .. "/" .. val287 .. "."
         .. (val288:match("%.([a-zA-Z0-9]+)$") or "mp3")
 
       if not isfile(val289) then
@@ -10404,7 +10418,7 @@ pcall(function()
 end)
 
 val171.SoundInstance = Instance.new("Sound")
-val171.SoundInstance.Name = "cheesehubnotifsound"
+val171.SoundInstance.Name = "MoroNotifySound"
 val171.SoundInstance.Volume = 0.65
 
 pcall(function() val171.SoundInstance.Parent = SoundService end)
@@ -10662,7 +10676,7 @@ function helper57(val297)
     val298 = element41.Alias .. " is coming, but you have godmode enabled so don't worry!"
   end
 
-  if options.NotifyStyle.Value == "Obsidian" then
+  if options.NotifyStyle.Value == "Lumina" or options.NotifyStyle.Value == "Obsidian" then
     library:Notify({ Title = "Entity detected", Description = val298, Time = 5 })
   else
     task.spawn(function()
@@ -10931,20 +10945,20 @@ localPlayer2.CharacterAdded:Connect(function()
   end
 end)
 
-obsidian2:SetFolder("cheesy/Data")
+obsidian2:SetFolder("moro/Data")
 obsidian2:SetLibrary(library)
 
-obsidian2.BuiltInThemes.cheesy = {
+obsidian2.BuiltInThemes.moro = {
   #obsidian2.BuiltInThemes + 1, {
     FontColor = "ebebeb", MainColor = "0c0c0c", AccentColor = "ffc33f", BackgroundColor = "151518", OutlineColor = "28282a", BackgroundImage = "", }, }
 
 pcall(function()
   if not isfile(obsidian2.Folder .. "/themes/default.txt") then
-    writefile(obsidian2.Folder .. "/themes/default.txt", "cheesy")
+    writefile(obsidian2.Folder .. "/themes/default.txt", "moro")
   end
 end)
 
-obsidian:SetFolder("cheesy/Configs")
+obsidian:SetFolder("moro/Configs")
 obsidian:SetLibrary(library)
 
 do
@@ -10997,23 +11011,23 @@ do
     end
 
     pcall(function()
-      if not isfolder("cheesy") then
-        makefolder("cheesy")
+      if not isfolder("moro") then
+        makefolder("moro")
       end
 
-      if not isfolder("cheesy/addons") then
-        makefolder("cheesy/addons")
+      if not isfolder("moro/addons") then
+        makefolder("moro/addons")
       end
     end)
 
-    if not isfolder("cheesy/addons") then
+    if not isfolder("moro/addons") then
       return
     end
 
-    local cheesyAddons = listfiles("cheesy/addons")
+    local moroAddons = listfiles("moro/addons")
     local val308 = {}
 
-    for index78, value120 in ipairs(cheesyAddons) do
+    for index78, value120 in ipairs(moroAddons) do
       local match = value120:match("([^/\\]+)$")
 
       if match and match:match("%.lua$") then
@@ -11033,7 +11047,8 @@ do
 
         local val311, success26 = pcall(function()
           local loader2 = loadstring([[
-local cheesy = ...
+local moro = ...
+local cheesy = moro
 ]] .. success25)
 
           if loader2 then
@@ -11114,7 +11129,7 @@ menu:AddDropdown("UILibrary", {
 menu:AddDivider()
 
 menu:AddButton({
-  Text = "Refresh Addon List", Tooltip = "Reloads all .lua files from cheesy/addons", Func = function()
+  Text = "Refresh Addon List", Tooltip = "Reloads all .lua files from moro/addons", Func = function()
     if RefreshAddons then
       RefreshAddons()
       library:Notify({ Title = "Addons", Description = "Addon list refreshed", Time = 3 })
@@ -11580,11 +11595,13 @@ local function safeCall11()
   end
 end
 
-getgenv().CheesyUnload = safeCall11
+getgenv().MoroUnload = safeCall11
+  getgenv().CheesyUnload = safeCall11
 
 library:OnUnload(function()
   _Unloading = true
   safeCall11()
+  getgenv().MoroUnload = nil
   getgenv().CheesyUnload = nil
 end)
 
