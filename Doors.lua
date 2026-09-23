@@ -835,13 +835,7 @@ function TableFind(val72, val73)
   return nil
 end
 
-do
-  local finishedLoadingRoom = replicatedStorage.GameData:FindFirstChild("FinishedLoadingRoom")
-
-  if finishedLoadingRoom then
-    finishedLoadingRoom:Destroy()
-  end
-end
+-- FinishedLoadingRoom kept intact to avoid RemoteListener crash
 local httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = game:HttpGet("https://raw.githubusercontent.com/bocaj111004/ESPLibrary/refs/heads/main/Library.lua")
 
 httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
@@ -1318,10 +1312,10 @@ FakeEvents.A90.Name = "A90"
 FakeEvents.Surge.Name = "SurgeRemote"
 
 if remotesFolder2 then
-  FakeEvents.Screech_Real = remotesFolder2:FindFirstChild("Screech")
-  FakeEvents.Shade_Real = remotesFolder2:FindFirstChild("ShadeResult")
-  FakeEvents.A90_Real = remotesFolder2:FindFirstChild("A90")
-  FakeEvents.Surge_Real = remotesFolder2:FindFirstChild("SurgeRemote")
+  FakeEvents.Screech_Real = remotesFolder2:FindFirstChild("Screech") or remotesFolder2:WaitForChild("Screech", 2)
+  FakeEvents.Shade_Real = remotesFolder2:FindFirstChild("ShadeResult") or remotesFolder2:WaitForChild("ShadeResult", 2)
+  FakeEvents.A90_Real = remotesFolder2:FindFirstChild("A90") or remotesFolder2:WaitForChild("A90", 2)
+  FakeEvents.Surge_Real = remotesFolder2:FindFirstChild("SurgeRemote") or remotesFolder2:WaitForChild("SurgeRemote", 2)
 end
 
 local function helper19()
@@ -10076,44 +10070,75 @@ local function HasLineOfSight(fromPos, toPos, ignoreList)
   return true, toPos
 end
 
-local function HasLineOfSight(fromPos, toPos, ignoreList)
+local function GetClearFlightVelocity(fromPos, targetDir, speed, filter)
   local rayParams = RaycastParams.new()
   rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  local filter = { character, workspace.CurrentCamera }
-  if ignoreList then
-    for _, item in ipairs(ignoreList) do table.insert(filter, item) end
-  end
   rayParams.FilterDescendantsInstances = filter
   rayParams.IgnoreWater = true
 
-  local dir = toPos - fromPos
-  local result = workspace:Raycast(fromPos, dir, rayParams)
-  if result and result.Instance then
-    if result.Instance.CanCollide and result.Instance.Transparency < 0.9 then
-      return false, result.Position
+  local checkDist = 4.0
+  local hit = workspace:Raycast(fromPos, targetDir * checkDist, rayParams)
+  if not hit or not hit.Instance or not hit.Instance.CanCollide then
+    return targetDir * speed
+  end
+
+  -- Obstacle detected in front! Try steering angles (left, right, up)
+  local candidateAngles = {
+    CFrame.Angles(0, math.rad(45), 0),
+    CFrame.Angles(0, math.rad(-45), 0),
+    CFrame.Angles(0, math.rad(75), 0),
+    CFrame.Angles(0, math.rad(-75), 0),
+    CFrame.Angles(math.rad(30), 0, 0),
+  }
+
+  for _, rot in ipairs(candidateAngles) do
+    local altDir = (rot * targetDir).Unit
+    local altHit = workspace:Raycast(fromPos, altDir * checkDist, rayParams)
+    if not altHit or not altHit.Instance or not altHit.Instance.CanCollide then
+      return altDir * speed
     end
   end
-  return true, toPos
+
+  return targetDir * speed
 end
 
 function KnobFarm.StartFlight()
-  if KnobFarm.BodyVelocity and KnobFarm.BodyVelocity.Parent then return end
   local hrp = character and character:FindFirstChild("HumanoidRootPart")
   if not hrp then return end
 
-  local bv = Instance.new("BodyVelocity")
-  bv.Name = "FarmBV"
-  bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-  bv.P = 1e5
-  bv.Velocity = Vector3.zero
-  bv.Parent = hrp
-  KnobFarm.BodyVelocity = bv
+  if not KnobFarm.BodyVelocity or not KnobFarm.BodyVelocity.Parent then
+    local bv = Instance.new("BodyVelocity")
+    bv.Name = "FarmBV"
+    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bv.P = 1e5
+    bv.Velocity = Vector3.zero
+    bv.Parent = hrp
+    KnobFarm.BodyVelocity = bv
+  end
+
+  if not KnobFarm.BodyGyro or not KnobFarm.BodyGyro.Parent then
+    local bg = Instance.new("BodyGyro")
+    bg.Name = "FarmBG"
+    bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    bg.P = 1e5
+    bg.CFrame = hrp.CFrame
+    bg.Parent = hrp
+    KnobFarm.BodyGyro = bg
+  end
+
+  if humanoid then
+    humanoid.PlatformStand = true
+  end
 end
 
 function KnobFarm.StopFlight()
   if KnobFarm.BodyVelocity then
     pcall(function() KnobFarm.BodyVelocity:Destroy() end)
     KnobFarm.BodyVelocity = nil
+  end
+  if KnobFarm.BodyGyro then
+    pcall(function() KnobFarm.BodyGyro:Destroy() end)
+    KnobFarm.BodyGyro = nil
   end
   if humanoid then
     humanoid.PlatformStand = false
@@ -10132,25 +10157,34 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
   local hrp = humanoidRootPart
   if not hrp then return false end
 
+  local filter = { character, workspace.CurrentCamera }
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  rayParams.FilterDescendantsInstances = filter
+  rayParams.IgnoreWater = true
+
   -- 1. Check if direct line-of-sight is completely clear and close
   local distToTarget = (targetPos - hrp.Position).Magnitude
   local clearSight = distToTarget < 12 and HasLineOfSight(hrp.Position, targetPos)
 
   local waypoints = {}
   if not clearSight then
-    -- Raycast down to find floor level near the target for pathfinding
-    local rayFloor = workspace:Raycast(targetPos + Vector3.new(0, 2, 0), Vector3.new(0, -30, 0))
-    local groundTarget = (rayFloor and rayFloor.Position) or targetPos
+    -- Project both positions down to walkable floor for PathfindingService
+    local startFloor = workspace:Raycast(hrp.Position, Vector3.new(0, -40, 0), rayParams)
+    local navStart = startFloor and (startFloor.Position + Vector3.new(0, 1, 0)) or hrp.Position
+
+    local destFloor = workspace:Raycast(targetPos + Vector3.new(0, 2, 0), Vector3.new(0, -40, 0), rayParams)
+    local navDest = destFloor and (destFloor.Position + Vector3.new(0, 1, 0)) or targetPos
 
     local path = pathfindingService:CreatePath({
-      AgentRadius = 2.0,
-      AgentHeight = 4.5,
-      AgentCanJump = true,
+      AgentRadius = 1.5,
+      AgentHeight = 3.5,
+      AgentCanJump = false,
       AgentCanClimb = false,
-      WaypointSpacing = 4,
+      WaypointSpacing = 3,
     })
 
-    local ok, _ = pcall(path.ComputeAsync, path, hrp.Position, groundTarget)
+    local ok, _ = pcall(path.ComputeAsync, path, navStart, navDest)
     if ok and path.Status == Enum.PathStatus.Success then
       waypoints = path:GetWaypoints()
     end
@@ -10168,12 +10202,12 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
 
       local wp = waypoints[i]
       -- Fly at torso height above the waypoint to avoid floor friction
-      local wpPos = wp.Position + Vector3.new(0, 2, 0)
+      local wpPos = wp.Position + Vector3.new(0, 2.5, 0)
       local wpStart = tick()
 
       while toggles.AutoFarmEnabled.Value and not _Unloading do
         if tick() - startT > maxTime or tick() - wpStart > 2.5 then
-          break -- Advance to next waypoint if taking too long
+          break
         end
 
         local curPos = humanoidRootPart.Position
@@ -10181,11 +10215,15 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
         local d = delta.Magnitude
 
         if d <= 3.5 then
-          break -- Arrived at waypoint
+          break
         end
 
         if KnobFarm.BodyVelocity then
-          KnobFarm.BodyVelocity.Velocity = delta.Unit * speed
+          local clearVel = GetClearFlightVelocity(curPos, delta.Unit, speed, filter)
+          KnobFarm.BodyVelocity.Velocity = clearVel
+        end
+        if KnobFarm.BodyGyro and delta.Magnitude > 0.5 then
+          KnobFarm.BodyGyro.CFrame = CFrame.lookAt(curPos, curPos + Vector3.new(delta.X, 0, delta.Z))
         end
         task.wait()
       end
@@ -10212,7 +10250,11 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
     end
 
     if KnobFarm.BodyVelocity then
-      KnobFarm.BodyVelocity.Velocity = delta.Unit * speed
+      local clearVel = GetClearFlightVelocity(curPos, delta.Unit, speed, filter)
+      KnobFarm.BodyVelocity.Velocity = clearVel
+    end
+    if KnobFarm.BodyGyro and delta.Magnitude > 0.5 then
+      KnobFarm.BodyGyro.CFrame = CFrame.lookAt(curPos, curPos + Vector3.new(delta.X, 0, delta.Z))
     end
     task.wait()
   end
@@ -10223,10 +10265,16 @@ end
 
 function KnobFarm.PhaseThrough()
   if not character or not humanoidRootPart then return end
-  pcall(function()
-    character:PivotTo(character:GetPivot() * CFrame.new(0, 0, 750))
-  end)
-  task.wait(0.15)
+  if toggles.AnticheatManipulation then
+    toggles.AnticheatManipulation:SetValue(true)
+    task.wait(0.35)
+    toggles.AnticheatManipulation:SetValue(false)
+  else
+    pcall(function()
+      character:PivotTo(character:GetPivot() * CFrame.new(0, 0, 750))
+    end)
+    task.wait(0.15)
+  end
 end
 
 function KnobFarm.GetUnlootedContainers(room)
@@ -11126,9 +11174,10 @@ local function safeCall11()
       FakeEvents.Surge_Real.Parent = remotesFolder2
     end
 
-    for key20, value134 in pairs(FakeEvents) do
-      if type(value134) == "Instance" and value134:IsA("RemoteEvent") then
-        pcall(value134.Destroy, value134)
+    for _, fakeName in ipairs({"Screech", "Shade", "A90", "Surge"}) do
+      local fake = FakeEvents[fakeName]
+      if typeof(fake) == "Instance" and fake:IsA("RemoteEvent") then
+        pcall(fake.Destroy, fake)
       end
     end
   end
