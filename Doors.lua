@@ -1,18 +1,3 @@
---[[
-    ╔═══════════════════════════════════════════════════════╗
-    ║            MORO DOORS — ULTIMATE EDITION              ║
-    ║            UI: MoroLumina v2 (Emerald)                ║
-    ╚═══════════════════════════════════════════════════════╝
-    [SECURITY & PRIVACY]: 
-    - 0 Webhooks, 0 Discord tracking, 0 Statistics logging
-    - Pure local executor execution
-]]
-
-print("==================================================")
-print("[Moro DOORS] Starting Moro DOORS (Emerald Edition)...")
-print("[Moro DOORS] PlaceId: " .. tostring(game.PlaceId))
-print("==================================================")
-
 local httpService = game:GetService("HttpService")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local players = game:GetService("Players")
@@ -33,807 +18,657 @@ local workspace = game:GetService("Workspace")
 local pathfindingService = game:GetService("PathfindingService")
 local logService = game:GetService("LogService")
 
-LoadStart = tick()
 
--- Clean up any prior GUI instances
-pcall(function()
-    local parent = (gethui and gethui()) or coreGui or players.LocalPlayer:FindFirstChild("PlayerGui")
-    if parent then
-        local old = parent:FindFirstChild("MoroLumina") or parent:FindFirstChild("LuminaUI")
-        if old then old:Destroy() end
-    end
-end)
+-- =====================================================================
+--                   MOROLUMINA UI — DOORS SCRIPT
+--                 Converted from Obsidian to Lumina
+-- =====================================================================
 
--- ═══════════════════════════════════════════════════════════════════════════
---  MORO DOORS — LUMINA UI COMPATIBILITY ADAPTER
---  Translates Linoria / Obsidian UI API 1-to-1 to MoroLumina v2 Emerald UI
---  0 Webhooks | 0 Discord Tracking | 100% Local Execution
--- ═══════════════════════════════════════════════════════════════════════════
-
-local uiLibrary = "Obsidian"
-local holder = nil
-local currentWindow = nil
-
+local RAW_URL = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
 local Lumina
-do
-    local ok, res = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"))()
+local ok, res = pcall(function()
+    return loadstring(game:HttpGet(RAW_URL))()
+end)
+if ok and res then
+    Lumina = res
+else
+    pcall(function()
+        if readfile and isfile("Lumina.lua") then
+            Lumina = loadstring(readfile("Lumina.lua"))()
+        end
     end)
-    if ok and res then
-        Lumina = res
-        print("[Moro DOORS] Lumina UI Library loaded successfully ✓")
-    else
-        warn("[Moro DOORS] Failed to load Lumina from GitHub: " .. tostring(res))
-        if isfile and isfile("Lumina.lua") then
-            local fOk, fRes = pcall(function()
-                return loadstring(readfile("Lumina.lua"))()
-            end)
-            if fOk and fRes then
-                Lumina = fRes
-                print("[Moro DOORS] Lumina loaded from local file Lumina.lua ✓")
-            end
-        end
-        if not Lumina then
-            Lumina = (getgenv and getgenv().Lumina) or _G.Lumina
-        end
-    end
 end
-
 if not Lumina then
-    error("[Moro DOORS] Critical error: Lumina UI Library could not be loaded! Check internet or Lumina raw link.")
+    error("[Moro] Failed to load MoroLumina UI library!")
 end
 
-local library = {
-    Toggles = setmetatable({}, {
-        __index = function(t, k) return rawget(t, k) end
-    }),
-    Options = setmetatable({}, {
-        __index = function(t, k) return rawget(t, k) end
-    }),
-    TabButtons = {},
-    ActiveTab = nil,
-    ScreenGui = nil,
-    ToggleKeybind = Enum.KeyCode.RightShift,
-    ShowCustomCursor = false,
-    TracersEnabled = {},
-    _onUnload = {},
+local library = {}
+library.Toggles = {}
+library.Options = {}
+library.TabButtons = {}
+library.ScreenGui = nil
+
+local MoroWindow = nil
+
+local dummyToggle = {
+    Value = false,
+    SetValue = function() end,
+    SetDisabled = function() end,
+    OnChanged = function() end,
+    AddColorPicker = function()
+        return { Value = Color3.new(1,1,1), SetValue = function() end, OnChanged = function() end }
+    end,
+    AddKeyPicker = function()
+        return { Value = Enum.KeyCode.F, SetValue = function() end, OnChanged = function() end }
+    end,
+}
+local dummyOption = {
+    Value = false,
+    SetValue = function() end,
+    SetDisabled = function() end,
+    OnChanged = function() end,
+    GetState = function() return {} end,
+}
+setmetatable(library.Toggles, {
+    __index = function(t, k) return dummyToggle end
+})
+setmetatable(library.Options, {
+    __index = function(t, k) return dummyOption end
+})
+
+local dummySection = {
+    AddToggle = function() return dummyToggle end,
+    AddSlider = function() return dummyOption end,
+    AddDropdown = function() return dummyOption end,
+    AddButton = function() end,
+    AddLabel = function() return { SetText = function() end, AddKeyPicker = function() return dummyOption end } end,
+    AddDivider = function() end,
+    AddInput = function() return dummyOption end,
+    AddImage = function() return { SetImage = function() end, SetVisible = function() end } end,
+}
+local dummyTab = {
+    AddLeftGroupbox = function() return dummySection end,
+    AddRightGroupbox = function() return dummySection end,
+    AddLeftTabbox = function() return { AddTab = function() return dummySection end } end,
+    AddRightTabbox = function() return { AddTab = function() return dummySection end } end,
+    SetVisible = function() end,
 }
 
--- Lumina.Notify / library.Notify compatibility
-function library:Notify(info)
-    local title = "Notification"
-    local desc = ""
-    local duration = 3
-    local nType = "Info"
+local function wrapSection(luminaSec, tab, colName)
+    local secProxy = {
+        _raw = luminaSec,
+        _tab = tab,
+    }
 
-    if type(info) == "string" then
-        desc = info
-    elseif type(info) == "table" then
-        if info.Description or info.Content or info.Text then
-            title = info.Title or "Notification"
-            desc = info.Description or info.Content or info.Text or ""
-        elseif info.Title then
-            title = "Notification"
-            desc = info.Title
-        end
-        duration = info.Time or info.Duration or 3
-        nType = info.Type or "Info"
-    end
+    function secProxy:AddToggle(flag, cfg)
+        cfg = cfg or {}
+        local name = cfg.Text or flag
+        local luminaTgl = luminaSec:AddToggle({
+            Name = name,
+            Default = cfg.Default or false,
+            Flag = flag,
+            Callback = cfg.Callback,
+        })
 
-    if currentWindow and currentWindow.Notify then
-        pcall(function()
-            currentWindow:Notify({
-                Title = title,
-                Content = desc,
-                Duration = duration,
-                Type = nType
-            })
-            if val171 and val171.PlaySound and type(info) == "table" and not info.NoSound then
-                val171.PlaySound()
-            end
-        end)
-    end
-end
-
-if not Lumina.Notify then
-    Lumina.Notify = function(self, info) return library:Notify(info) end
-end
-
-function library:Toggle(state)
-    if currentWindow and currentWindow.Toggle then
-        pcall(function() currentWindow:Toggle(state) end)
-    end
-end
-
-function library:Unload()
-    _Unloading = true
-    for _, cb in ipairs(library._onUnload) do
-        pcall(cb)
-    end
-    if currentWindow and currentWindow.Gui then
-        pcall(function() currentWindow.Gui:Destroy() end)
-    end
-end
-
-function library:OnUnload(cb)
-    table.insert(library._onUnload, cb)
-end
-
-function library:SetDPIScale(scale)
-    if currentWindow and currentWindow._setUserScale then
-        pcall(function() currentWindow._setUserScale((scale or 100) / 100) end)
-    end
-end
-
-function library:GetCustomIcon(icon)
-    return { Url = "", ImageRectOffset = Vector2.zero, ImageRectSize = Vector2.zero }
-end
-
-function library:CreateLoading(cfg)
-    return {
-        SetDescription = function(self, t) end,
-        Continue = function(self) end,
-        Sidebar = {
-            AddInput = function(self, tag, opt) end,
-            AddButton = function(self, opt) end,
+        local tglProxy = {
+            _raw = luminaTgl,
+            _flag = flag,
+            _listeners = {},
+            SetValue = function(self, val)
+                if luminaTgl and luminaTgl.Set then
+                    luminaTgl.Set(val)
+                end
+            end,
+            SetDisabled = function(self, dis) end,
+            OnChanged = function(self, fn)
+                table.insert(self._listeners, fn)
+                if luminaTgl and luminaTgl.AddListener then
+                    luminaTgl.AddListener(fn)
+                end
+            end,
+            AddColorPicker = function(self, cpFlag, cpCfg)
+                cpCfg = cpCfg or {}
+                local luminaCP = luminaTgl:AddColorPicker({
+                    Default = cpCfg.Default or Color3.fromRGB(255, 255, 255),
+                    Flag = cpFlag,
+                    Callback = cpCfg.Callback,
+                })
+                local cpProxy = {
+                    _raw = luminaCP,
+                    _flag = cpFlag,
+                    _listeners = {},
+                    SetValue = function(self, col)
+                        if luminaCP and luminaCP.Set then luminaCP.Set(col) end
+                    end,
+                    SetValueRGB = function(self, col)
+                        if luminaCP and luminaCP.Set then luminaCP.Set(col) end
+                    end,
+                    OnChanged = function(self, fn)
+                        table.insert(self._listeners, fn)
+                        if luminaCP and luminaCP.AddListener then luminaCP.AddListener(fn) end
+                    end,
+                }
+                setmetatable(cpProxy, {
+                    __index = function(t, k)
+                        if k == "Value" then
+                            return (luminaCP and luminaCP.Get and luminaCP.Get()) or cpCfg.Default or Color3.fromRGB(255, 255, 255)
+                        end
+                        return rawget(t, k)
+                    end,
+                    __newindex = function(t, k, v)
+                        if k == "Value" then t:SetValue(v) else rawset(t, k, v) end
+                    end,
+                })
+                library.Options[cpFlag] = cpProxy
+                return cpProxy
+            end,
+            AddKeyPicker = function(self, kpFlag, kpCfg)
+                kpCfg = kpCfg or {}
+                local defKey = kpCfg.Default
+                if type(defKey) == "string" then
+                    defKey = Enum.KeyCode[defKey] or Enum.KeyCode.F
+                end
+                local luminaKB = luminaTgl:AddKeybind({
+                    Default = defKey,
+                    Mode = kpCfg.Mode or "Toggle",
+                    Flag = kpFlag,
+                })
+                local kbProxy = {
+                    _raw = luminaKB,
+                    _flag = kpFlag,
+                    _listeners = {},
+                    SetValue = function(self, key, mode)
+                        if luminaKB and luminaKB.Set then luminaKB.Set(key) end
+                        if mode and luminaKB and luminaKB.SetMode then luminaKB.SetMode(mode) end
+                    end,
+                    OnChanged = function(self, fn)
+                        table.insert(self._listeners, fn)
+                        if luminaKB and luminaKB.AddListener then luminaKB.AddListener(fn) end
+                    end,
+                }
+                setmetatable(kbProxy, {
+                    __index = function(t, k)
+                        if k == "Value" then
+                            return (luminaKB and luminaKB.Get and luminaKB.Get()) or defKey
+                        end
+                        return rawget(t, k)
+                    end,
+                    __newindex = function(t, k, v)
+                        if k == "Value" then t:SetValue(v) else rawset(t, k, v) end
+                    end,
+                })
+                library.Options[kpFlag] = kbProxy
+                return kbProxy
+            end,
         }
-    }
-end
+        setmetatable(tglProxy, {
+            __index = function(t, k)
+                if k == "Value" then
+                    return luminaTgl.Get()
+                end
+                return rawget(t, k)
+            end,
+            __newindex = function(t, k, v)
+                if k == "Value" then t:SetValue(v) else rawset(t, k, v) end
+            end,
+        })
+        library.Toggles[flag] = tglProxy
+        return tglProxy
+    end
 
-function library:AddDraggableLabel(text)
-    local screenGui = library.ScreenGui or (currentWindow and currentWindow.Gui) or game:GetService("CoreGui"):FindFirstChild("MoroLumina")
-    local lbl = Instance.new("TextLabel")
-    lbl.Name = "DisplayInfoLabel"
-    lbl.Text = text or ""
-    lbl.Size = UDim2.new(0, 320, 0, 30)
-    lbl.Position = UDim2.new(0.5, -160, 0, 15)
-    lbl.BackgroundColor3 = Color3.fromRGB(15, 23, 42)
-    lbl.BackgroundTransparency = 0.2
-    lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-    lbl.Font = Enum.Font.SourceSansBold
-    lbl.TextSize = 14
-    lbl.BorderSizePixel = 0
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = lbl
-    pcall(function() lbl.Parent = screenGui end)
-    return {
-        Label = lbl,
-        SetText = function(self, t) pcall(function() lbl.Text = t end) end,
-        Destroy = function(self) pcall(function() lbl:Destroy() end) end,
-    }
-end
+    function secProxy:AddSlider(flag, cfg)
+        cfg = cfg or {}
+        local luminaSlider = luminaSec:AddSlider({
+            Name = cfg.Text or flag,
+            Min = cfg.Min or 0,
+            Max = cfg.Max or 100,
+            Default = cfg.Default or cfg.Min or 0,
+            Decimals = cfg.Rounding or 0,
+            Suffix = cfg.Suffix or "",
+            Flag = flag,
+            Callback = cfg.Callback,
+        })
+        local sliderProxy = {
+            _raw = luminaSlider,
+            _flag = flag,
+            _listeners = {},
+            SetValue = function(self, val)
+                if luminaSlider and luminaSlider.Set then luminaSlider.Set(val) end
+            end,
+            OnChanged = function(self, fn)
+                table.insert(self._listeners, fn)
+                if luminaSlider and luminaSlider.AddListener then luminaSlider.AddListener(fn) end
+            end,
+        }
+        setmetatable(sliderProxy, {
+            __index = function(t, k)
+                if k == "Value" then
+                    return (luminaSlider and luminaSlider.Get and luminaSlider.Get()) or cfg.Default or 0
+                end
+                return rawget(t, k)
+            end,
+            __newindex = function(t, k, v)
+                if k == "Value" then t:SetValue(v) else rawset(t, k, v) end
+            end,
+        })
+        library.Options[flag] = sliderProxy
+        return sliderProxy
+    end
 
-function library:Create(className, props)
-    local inst = Instance.new(className)
-    if props then
-        for k, v in pairs(props) do
-            pcall(function() inst[k] = v end)
+    function secProxy:AddDropdown(flag, cfg)
+        cfg = cfg or {}
+        if cfg.Multi then
+            local defs = {}
+            if type(cfg.Default) == "table" then
+                for k, v in pairs(cfg.Default) do
+                    if type(k) == "number" then table.insert(defs, v)
+                    elseif v == true then table.insert(defs, k) end
+                end
+            elseif type(cfg.Default) == "string" then
+                table.insert(defs, cfg.Default)
+            end
+            local luminaMulti = luminaSec:AddMultiDropdown({
+                Name = cfg.Text or flag,
+                Options = cfg.Values or {},
+                Default = defs,
+                Flag = flag,
+                Callback = cfg.Callback,
+            })
+            local multiProxy = {
+                _raw = luminaMulti,
+                _flag = flag,
+                _listeners = {},
+                GetState = function(self)
+                    return (luminaMulti and luminaMulti.GetSet and luminaMulti.GetSet()) or {}
+                end,
+                SetValue = function(self, val)
+                    if luminaMulti and luminaMulti.Set then
+                        if type(val) == "table" then
+                            local list = {}
+                            for k, v in pairs(val) do
+                                if type(k) == "number" then table.insert(list, v)
+                                elseif v == true then table.insert(list, k) end
+                            end
+                            luminaMulti.Set(list)
+                        end
+                    end
+                end,
+                OnChanged = function(self, fn)
+                    table.insert(self._listeners, fn)
+                end,
+            }
+            setmetatable(multiProxy, {
+                __index = function(t, k)
+                    if k == "Value" then
+                        return (luminaMulti and luminaMulti.GetSet and luminaMulti.GetSet()) or {}
+                    end
+                    return rawget(t, k)
+                end,
+                __newindex = function(t, k, v)
+                    if k == "Value" then t:SetValue(v) else rawset(t, k, v) end
+                end,
+            })
+            library.Options[flag] = multiProxy
+            return multiProxy
+        else
+            local def = cfg.Default
+            if type(def) == "number" and cfg.Values and cfg.Values[def] then
+                def = cfg.Values[def]
+            end
+            local luminaDrop = luminaSec:AddDropdown({
+                Name = cfg.Text or flag,
+                Options = cfg.Values or {},
+                Default = def or (cfg.Values and cfg.Values[1]) or "",
+                Flag = flag,
+                Callback = cfg.Callback,
+            })
+            local dropProxy = {
+                _raw = luminaDrop,
+                _flag = flag,
+                _listeners = {},
+                SetValue = function(self, val)
+                    if luminaDrop and luminaDrop.Set then luminaDrop.Set(val) end
+                end,
+                OnChanged = function(self, fn)
+                    table.insert(self._listeners, fn)
+                end,
+            }
+            setmetatable(dropProxy, {
+                __index = function(t, k)
+                    if k == "Value" then
+                        return (luminaDrop and luminaDrop.Get and luminaDrop.Get()) or def or ""
+                    end
+                    return rawget(t, k)
+                end,
+                __newindex = function(t, k, v)
+                    if k == "Value" then t:SetValue(v) else rawset(t, k, v) end
+                end,
+            })
+            library.Options[flag] = dropProxy
+            return dropProxy
         end
     end
-    return inst
+
+    function secProxy:AddButton(cfg)
+        cfg = cfg or {}
+        local cb = cfg.Callback or cfg.Func
+        return luminaSec:AddButton({
+            Name = cfg.Text or "Button",
+            Callback = cb,
+        })
+    end
+
+    function secProxy:AddLabel(cfg)
+        local text = type(cfg) == "table" and cfg.Text or tostring(cfg or "")
+        local cleanText = text:gsub("<[^>]+>", "")
+        local luminaLbl = luminaSec:AddLabel(cleanText)
+        local lblProxy = {
+            _raw = luminaLbl,
+            SetText = function(self, t)
+                if luminaLbl and luminaLbl.Set then
+                    luminaLbl.Set(tostring(t):gsub("<[^>]+>", ""))
+                end
+            end,
+            AddKeyPicker = function(self, kpFlag, kpCfg)
+                kpCfg = kpCfg or {}
+                local defKey = kpCfg.Default
+                if type(defKey) == "string" then
+                    defKey = Enum.KeyCode[defKey] or Enum.KeyCode.RightShift
+                end
+                local luminaKB = luminaSec:AddKeybind({
+                    Name = kpCfg.Text or cleanText or kpFlag,
+                    Default = defKey,
+                    Mode = kpCfg.Mode or "Toggle",
+                    Flag = kpFlag,
+                })
+                local kbProxy = {
+                    _raw = luminaKB,
+                    _flag = kpFlag,
+                    SetValue = function(self, key, mode)
+                        if luminaKB and luminaKB.Set then luminaKB.Set(key) end
+                        if mode and luminaKB and luminaKB.SetMode then luminaKB.SetMode(mode) end
+                    end,
+                    OnChanged = function(self, fn)
+                        if luminaKB and luminaKB.AddListener then luminaKB.AddListener(fn) end
+                    end,
+                }
+                setmetatable(kbProxy, {
+                    __index = function(t, k)
+                        if k == "Value" then
+                            return (luminaKB and luminaKB.Get and luminaKB.Get()) or defKey
+                        end
+                        return rawget(t, k)
+                    end,
+                })
+                library.Options[kpFlag] = kbProxy
+                return kbProxy
+            end,
+        }
+        return lblProxy
+    end
+
+    function secProxy:AddDivider() end
+
+    function secProxy:AddInput(flag, cfg)
+        cfg = cfg or {}
+        local luminaBox = luminaSec:AddTextbox({
+            Name = cfg.Text or flag,
+            Placeholder = cfg.Placeholder or "",
+            Default = cfg.Default or "",
+            Numeric = cfg.Numeric or false,
+            Flag = flag,
+            Callback = cfg.Callback,
+        })
+        local inputProxy = {
+            _raw = luminaBox,
+            _flag = flag,
+            SetValue = function(self, v)
+                if luminaBox and luminaBox.Set then luminaBox.Set(v) end
+            end,
+            OnChanged = function(self, fn) end,
+        }
+        setmetatable(inputProxy, {
+            __index = function(t, k)
+                if k == "Value" then
+                    return (luminaBox and luminaBox.Get and luminaBox.Get()) or cfg.Default or ""
+                end
+                return rawget(t, k)
+            end,
+            __newindex = function(t, k, v)
+                if k == "Value" then t:SetValue(v) else rawset(t, k, v) end
+            end,
+        })
+        library.Options[flag] = inputProxy
+        return inputProxy
+    end
+
+    function secProxy:AddImage(...)
+        return { SetImage = function() end, SetVisible = function() end }
+    end
+
+    return secProxy
+end
+
+local function wrapTab(luminaTab)
+    local tabProxy = {
+        _raw = luminaTab,
+    }
+
+    function tabProxy:AddLeftGroupbox(name)
+        luminaTab:Column("left")
+        local sec = luminaTab:CreateSection({ Name = name, Collapsible = true })
+        return wrapSection(sec, luminaTab, "left")
+    end
+
+    function tabProxy:AddRightGroupbox(name)
+        luminaTab:Column("right")
+        local sec = luminaTab:CreateSection({ Name = name, Collapsible = true })
+        return wrapSection(sec, luminaTab, "right")
+    end
+
+    function tabProxy:AddLeftTabbox(name)
+        luminaTab:Column("left")
+        return {
+            AddTab = function(_, subName)
+                local sec = luminaTab:CreateSection({ Name = subName, Collapsible = true })
+                return wrapSection(sec, luminaTab, "left")
+            end
+        }
+    end
+
+    function tabProxy:AddRightTabbox(name)
+        luminaTab:Column("right")
+        return {
+            AddTab = function(_, subName)
+                local sec = luminaTab:CreateSection({ Name = subName, Collapsible = true })
+                return wrapSection(sec, luminaTab, "right")
+            end
+        }
+    end
+
+    function tabProxy:SetVisible(vis) end
+
+    return tabProxy
 end
 
 function library:CreateWindow(cfg)
     cfg = cfg or {}
-    local win = Lumina:CreateWindow({
-        Title = "Moro DOORS",
-        Theme = "Emerald",
-        ToggleKey = cfg.ToggleKeybind or Enum.KeyCode.RightShift,
+    MoroWindow = Lumina:CreateWindow({
+        Title = cfg.Title or "MOROLUMINA.lua",
+        ToggleKey = cfg.ToggleKeybind or cfg.ToggleKey or Enum.KeyCode.RightShift,
     })
-    currentWindow = win
-    library.ScreenGui = win.Gui
-    holder = win.Gui
+    library.ScreenGui = MoroWindow.Gui or MoroWindow.ScreenGui
 
-    local moroWindow = {
-        Holder = win.Gui,
-        _window = win,
+    local winProxy = {
+        _raw = MoroWindow,
+        AddSettingsTab = function(self)
+            if MoroWindow and MoroWindow.AddSettingsTab then
+                MoroWindow:AddSettingsTab()
+            end
+        end,
     }
 
-    function moroWindow:AddTab(title, icon)
-        local lumTab = win:CreateTab({
-            Name = title,
+    function winProxy:AddTab(name, icon)
+        local luminaTab = MoroWindow:CreateTab({
+            Name = name,
             Icon = icon or "menu",
         })
-
-        local tabWrapper = {
-            Name = title,
-            OriginalName = title,
-            _tab = lumTab,
-            _Button = lumTab._btn,
-            _Label = lumTab._label,
-        }
-
-        table.insert(library.TabButtons, { Frame = lumTab._btn, Label = lumTab._label })
-
-        function tabWrapper:SetVisible(vis)
-            if lumTab._btn then
-                lumTab._btn.Visible = vis
-            end
-        end
-
-        function tabWrapper:Show()
-            if lumTab._activate then
-                pcall(lumTab._activate)
-            elseif lumTab._btn and firesignal then
-                pcall(function() firesignal(lumTab._btn.MouseButton1Click) end)
-            end
-            library.ActiveTab = tabWrapper
-        end
-
-        local function makeGroupbox(sec)
-            local gbWrapper = {
-                _sec = sec,
-            }
-
-            function gbWrapper:AddToggle(tag, opt)
-                opt = opt or {}
-                local defaultVal = opt.Default or false
-                local lumToggle
-
-                local toggleObj = {
-                    Value = defaultVal,
-                    _callbacks = {},
-                    Type = "Toggle",
-                }
-
-                lumToggle = sec:AddToggle({
-                    Name = opt.Text or tag,
-                    Default = defaultVal,
-                    Callback = function(v)
-                        toggleObj.Value = v
-                        for _, cb in ipairs(toggleObj._callbacks) do
-                            task.spawn(cb, v)
-                        end
-                        if opt.Callback then
-                            task.spawn(opt.Callback, v)
-                        end
-                    end,
-                })
-
-                function toggleObj:SetValue(v)
-                    self.Value = v
-                    pcall(function() lumToggle:Set(v) end)
-                    for _, cb in ipairs(self._callbacks) do
-                        task.spawn(cb, v)
-                    end
-                    if opt.Callback then
-                        task.spawn(opt.Callback, v)
-                    end
-                end
-
-                function toggleObj:OnChanged(cb)
-                    table.insert(self._callbacks, cb)
-                end
-
-                function toggleObj:SetDisabled(d) end
-
-                function toggleObj:AddKeyPicker(keyTag, keyOpt)
-                    keyOpt = keyOpt or {}
-                    local keyVal = keyOpt.Default or "None"
-                    local lumKey
-
-                    local keyObj = {
-                        Value = keyVal,
-                        _callbacks = {},
-                        _state = false,
-                        Type = "KeyPicker",
-                    }
-
-                    lumKey = lumToggle:AddKeybind({
-                        Name = keyOpt.Text or keyTag,
-                        Default = keyVal,
-                        Mode = keyOpt.Mode or "Toggle",
-                        Callback = function(k)
-                            keyObj.Value = k and (k.Name or tostring(k)) or "None"
-                            keyObj._state = not keyObj._state
-                            if keyOpt.SyncToggleState then
-                                toggleObj:SetValue(not toggleObj.Value)
-                            end
-                            for _, cb in ipairs(keyObj._callbacks) do
-                                task.spawn(cb, k)
-                            end
-                            if keyOpt.Callback then
-                                task.spawn(keyOpt.Callback, k)
-                            end
-                        end,
-                    })
-
-                    function keyObj:GetState()
-                        return self._state
-                    end
-
-                    function keyObj:SetValue(k)
-                        self.Value = type(k) == "table" and (k[1] or "None") or tostring(k)
-                        pcall(function() lumKey:Set(k) end)
-                    end
-
-                    function keyObj:OnChanged(cb)
-                        table.insert(self._callbacks, cb)
-                    end
-
-                    function keyObj:OnClick(cb)
-                        table.insert(self._callbacks, cb)
-                    end
-
-                    function keyObj:SetDisabled(d) end
-                    function keyObj:Destroy() end
-
-                    library.Options[keyTag] = keyObj
-                    return keyObj
-                end
-
-                function toggleObj:AddColorPicker(cpTag, cpOpt)
-                    cpOpt = cpOpt or {}
-                    local colVal = cpOpt.Default or Color3.fromRGB(255, 255, 255)
-                    local lumCP
-
-                    local colorObj = {
-                        Value = colVal,
-                        _callbacks = {},
-                        Type = "ColorPicker",
-                    }
-
-                    lumCP = lumToggle:AddColorPicker({
-                        Default = colVal,
-                        Callback = function(c)
-                            colorObj.Value = c
-                            for _, cb in ipairs(colorObj._callbacks) do
-                                task.spawn(cb, c)
-                            end
-                            if cpOpt.Callback then
-                                task.spawn(cpOpt.Callback, c)
-                            end
-                        end,
-                    })
-
-                    function colorObj:SetValue(c)
-                        self.Value = c
-                        pcall(function() lumCP:Set(c) end)
-                        for _, cb in ipairs(self._callbacks) do
-                            task.spawn(cb, c)
-                        end
-                        if cpOpt.Callback then
-                            task.spawn(cpOpt.Callback, c)
-                        end
-                    end
-
-                    function colorObj:SetValueRGB(c)
-                        self:SetValue(c)
-                    end
-
-                    function colorObj:OnChanged(cb)
-                        table.insert(self._callbacks, cb)
-                    end
-
-                    function colorObj:SetDisabled(d) end
-                    function colorObj:Destroy() end
-
-                    library.Options[cpTag] = colorObj
-                    return colorObj
-                end
-
-                library.Toggles[tag] = toggleObj
-                return toggleObj
-            end
-
-            function gbWrapper:AddSlider(tag, opt)
-                opt = opt or {}
-                local defaultVal = opt.Default or opt.Min or 0
-                local lumSlider
-
-                local sliderObj = {
-                    Value = defaultVal,
-                    _callbacks = {},
-                    Type = "Slider",
-                }
-
-                lumSlider = sec:AddSlider({
-                    Name = opt.Text or tag,
-                    Min = opt.Min or 0,
-                    Max = opt.Max or 100,
-                    Default = defaultVal,
-                    Decimals = opt.Rounding or 1,
-                    Suffix = opt.Suffix or "",
-                    Callback = function(v)
-                        sliderObj.Value = v
-                        for _, cb in ipairs(sliderObj._callbacks) do
-                            task.spawn(cb, v)
-                        end
-                        if opt.Callback then
-                            task.spawn(opt.Callback, v)
-                        end
-                    end,
-                })
-
-                function sliderObj:SetValue(v)
-                    self.Value = v
-                    pcall(function() lumSlider:Set(v) end)
-                    for _, cb in ipairs(self._callbacks) do
-                        task.spawn(cb, v)
-                    end
-                    if opt.Callback then
-                        task.spawn(opt.Callback, v)
-                    end
-                end
-
-                function sliderObj:OnChanged(cb)
-                    table.insert(self._callbacks, cb)
-                end
-
-                function sliderObj:SetDisabled(d) end
-                function sliderObj:Destroy() end
-
-                library.Options[tag] = sliderObj
-                return sliderObj
-            end
-
-            function gbWrapper:AddDropdown(tag, opt)
-                opt = opt or {}
-                local defaultVal = opt.Default or (opt.Values and opt.Values[1])
-                local lumDropdown
-
-                local dropdownObj = {
-                    Value = defaultVal,
-                    Values = opt.Values or {},
-                    _callbacks = {},
-                    Type = "Dropdown",
-                }
-
-                if opt.Multi then
-                    lumDropdown = sec:AddMultiDropdown({
-                        Name = opt.Text or tag,
-                        Options = opt.Values or {},
-                        Default = type(defaultVal) == "table" and defaultVal or { defaultVal },
-                        Callback = function(v)
-                            dropdownObj.Value = v
-                            for _, cb in ipairs(dropdownObj._callbacks) do
-                                task.spawn(cb, v)
-                            end
-                            if opt.Callback then
-                                task.spawn(opt.Callback, v)
-                            end
-                        end,
-                    })
-                else
-                    lumDropdown = sec:AddDropdown({
-                        Name = opt.Text or tag,
-                        Options = opt.Values or {},
-                        Default = defaultVal,
-                        Callback = function(v)
-                            dropdownObj.Value = v
-                            for _, cb in ipairs(dropdownObj._callbacks) do
-                                task.spawn(cb, v)
-                            end
-                            if opt.Callback then
-                                task.spawn(opt.Callback, v)
-                            end
-                        end,
-                    })
-                end
-
-                function dropdownObj:SetValue(v)
-                    self.Value = v
-                    if lumDropdown and lumDropdown.Set then
-                        pcall(function() lumDropdown:Set(v) end)
-                    end
-                    for _, cb in ipairs(self._callbacks) do
-                        task.spawn(cb, v)
-                    end
-                    if opt.Callback then
-                        task.spawn(opt.Callback, v)
-                    end
-                end
-
-                function dropdownObj:SetValues(vals)
-                    self.Values = vals
-                    if lumDropdown and lumDropdown.SetOptions then
-                        pcall(function() lumDropdown:SetOptions(vals) end)
-                    end
-                end
-
-                function dropdownObj:OnChanged(cb)
-                    table.insert(self._callbacks, cb)
-                end
-
-                function dropdownObj:SetDisabled(d) end
-                function dropdownObj:Destroy() end
-
-                library.Options[tag] = dropdownObj
-                return dropdownObj
-            end
-
-            function gbWrapper:AddInput(tag, opt)
-                opt = opt or {}
-                local defaultVal = opt.Default or ""
-                local lumInput
-
-                local inputObj = {
-                    Value = tostring(defaultVal),
-                    _callbacks = {},
-                    Type = "Input",
-                }
-
-                lumInput = sec:AddTextbox({
-                    Name = opt.Text or tag,
-                    Default = tostring(defaultVal),
-                    Placeholder = opt.Placeholder or "",
-                    Callback = function(v)
-                        inputObj.Value = tostring(v)
-                        for _, cb in ipairs(inputObj._callbacks) do
-                            task.spawn(cb, v)
-                        end
-                        if opt.Callback then
-                            task.spawn(opt.Callback, v)
-                        end
-                    end,
-                })
-
-                function inputObj:SetValue(v)
-                    self.Value = tostring(v)
-                    pcall(function() lumInput:Set(v) end)
-                    for _, cb in ipairs(self._callbacks) do
-                        task.spawn(cb, v)
-                    end
-                    if opt.Callback then
-                        task.spawn(opt.Callback, v)
-                    end
-                end
-
-                function inputObj:OnChanged(cb)
-                    table.insert(self._callbacks, cb)
-                end
-
-                function inputObj:SetDisabled(d) end
-                function inputObj:Destroy() end
-
-                library.Options[tag] = inputObj
-                return inputObj
-            end
-
-            function gbWrapper:AddButton(opt)
-                if type(opt) == "string" then
-                    opt = { Text = opt }
-                end
-                opt = opt or {}
-                local btnObj
-
-                local lumBtn = sec:AddButton({
-                    Name = opt.Text or "Button",
-                    Callback = function()
-                        if opt.Func then task.spawn(opt.Func) end
-                        if opt.Callback then task.spawn(opt.Callback) end
-                    end,
-                })
-
-                btnObj = {
-                    AddButton = function(self, subOpt)
-                        if type(subOpt) == "string" then subOpt = { Text = subOpt } end
-                        return sec:AddButton({
-                            Name = subOpt.Text or "Button",
-                            Callback = function()
-                                if subOpt.Func then task.spawn(subOpt.Func) end
-                                if subOpt.Callback then task.spawn(subOpt.Callback) end
-                            end,
-                        })
-                    end,
-                    AddTooltip = function(self, tt) end,
-                }
-                return btnObj
-            end
-
-            function gbWrapper:AddLabel(opt)
-                local txt = type(opt) == "table" and (opt.Text or "") or tostring(opt)
-                local lumLbl = sec:AddLabel(txt)
-                local lblObj = {
-                    SetText = function(self, t)
-                        if lumLbl and lumLbl.Set then
-                            lumLbl:Set(t)
-                        end
-                    end,
-                    AddKeyPicker = function(self, keyTag, keyOpt)
-                        return gbWrapper:AddKeyPicker(keyTag, keyOpt)
-                    end,
-                    AddColorPicker = function(self, cpTag, cpOpt)
-                        return gbWrapper:AddColorPicker(cpTag, cpOpt)
-                    end,
-                }
-                return lblObj
-            end
-
-            function gbWrapper:AddDivider()
-                sec:AddLabel("────────────────────────────")
-            end
-
-            function gbWrapper:AddImage(tag, opt)
-                opt = opt or {}
-                local img = Instance.new("ImageLabel")
-                img.Name = tag
-                img.Size = UDim2.new(1, 0, 0, opt.Height or 100)
-                img.Image = opt.Image or ""
-                img.BackgroundTransparency = 1
-                img.ScaleType = Enum.ScaleType.Fit
-                pcall(function() img.Parent = sec._left or sec._container or sec end)
-                return {
-                    SetImage = function(self, url) pcall(function() img.Image = url end) end,
-                    SetVisible = function(self, vis) pcall(function() img.Visible = vis end) end,
-                }
-            end
-
-            function gbWrapper:AddColorPicker(tag, opt)
-                opt = opt or {}
-                local colVal = opt.Default or Color3.fromRGB(255, 255, 255)
-                local lumCP
-
-                local colorObj = {
-                    Value = colVal,
-                    _callbacks = {},
-                    Type = "ColorPicker",
-                }
-
-                lumCP = sec:AddColorPicker({
-                    Name = opt.Title or opt.Text or tag,
-                    Default = colVal,
-                    Callback = function(c)
-                        colorObj.Value = c
-                        for _, cb in ipairs(colorObj._callbacks) do
-                            task.spawn(cb, c)
-                        end
-                        if opt.Callback then
-                            task.spawn(opt.Callback, c)
-                        end
-                    end,
-                })
-
-                function colorObj:SetValue(c)
-                    self.Value = c
-                    pcall(function() lumCP:Set(c) end)
-                    for _, cb in ipairs(self._callbacks) do
-                        task.spawn(cb, c)
-                    end
-                    if opt.Callback then
-                        task.spawn(opt.Callback, c)
-                    end
-                end
-
-                function colorObj:SetValueRGB(c)
-                    self:SetValue(c)
-                end
-
-                function colorObj:OnChanged(cb)
-                    table.insert(self._callbacks, cb)
-                end
-
-                function colorObj:SetDisabled(d) end
-                function colorObj:Destroy() end
-
-                library.Options[tag] = colorObj
-                return colorObj
-            end
-
-            function gbWrapper:AddKeyPicker(tag, opt)
-                opt = opt or {}
-                local keyVal = opt.Default or "None"
-                local lumKey
-
-                local keyObj = {
-                    Value = keyVal,
-                    _callbacks = {},
-                    _state = false,
-                    Type = "KeyPicker",
-                }
-
-                lumKey = sec:AddKeybind({
-                    Name = opt.Text or tag,
-                    Default = keyVal,
-                    Mode = opt.Mode or "Toggle",
-                    Callback = function(k)
-                        keyObj.Value = k and (k.Name or tostring(k)) or "None"
-                        keyObj._state = not keyObj._state
-                        for _, cb in ipairs(keyObj._callbacks) do
-                            task.spawn(cb, k)
-                        end
-                        if opt.Callback then
-                            task.spawn(opt.Callback, k)
-                        end
-                    end,
-                })
-
-                function keyObj:GetState()
-                    return self._state
-                end
-
-                function keyObj:SetValue(k)
-                    self.Value = type(k) == "table" and (k[1] or "None") or tostring(k)
-                    pcall(function() lumKey:Set(k) end)
-                end
-
-                function keyObj:OnChanged(cb)
-                    table.insert(self._callbacks, cb)
-                end
-
-                function keyObj:OnClick(cb)
-                    table.insert(self._callbacks, cb)
-                end
-
-                function keyObj:SetDisabled(d) end
-                function keyObj:Destroy() end
-
-                library.Options[tag] = keyObj
-                return keyObj
-            end
-
-            function gbWrapper:AddDependencyBox()
-                return gbWrapper
-            end
-
-            function gbWrapper:SetupDependencies(deps) end
-
-            return gbWrapper
-        end
-
-        function tabWrapper:AddLeftGroupbox(title)
-            lumTab:Column("left")
-            local sec = lumTab:CreateSection({ Name = title })
-            return makeGroupbox(sec)
-        end
-
-        function tabWrapper:AddRightGroupbox(title)
-            lumTab:Column("right")
-            local sec = lumTab:CreateSection({ Name = title })
-            return makeGroupbox(sec)
-        end
-
-        function tabWrapper:AddLeftTabbox(boxName)
-            return {
-                AddTab = function(self, secTitle)
-                    lumTab:Column("left")
-                    local sec = lumTab:CreateSection({ Name = secTitle })
-                    return makeGroupbox(sec)
-                end
-            }
-        end
-
-        function tabWrapper:AddRightTabbox(boxName)
-            return {
-                AddTab = function(self, secTitle)
-                    lumTab:Column("right")
-                    local sec = lumTab:CreateSection({ Name = secTitle })
-                    return makeGroupbox(sec)
-                end
-            }
-        end
-
-        return tabWrapper
+        local wrapped = wrapTab(luminaTab)
+        wrapped.Button = luminaTab.Button
+        wrapped._Button = luminaTab.Button
+        return wrapped
     end
 
-    return moroWindow
+    return winProxy
 end
 
-local obsidian = {
-    Folder = "moro/Configs",
-    SetFolder = function(self, f) self.Folder = f end,
-    SetLibrary = function(self, l) end,
-    SetIgnoreIndexes = function(self, t) end,
-    BuildConfigSection = function(self, tab) end,
-    LoadAutoloadConfig = function(self) end,
-    Save = function(self) end,
-    Load = function(self) end,
-}
+function library:Notify(cfg)
+    cfg = cfg or {}
+    local title = cfg.Title or "Moro"
+    local desc = cfg.Description or cfg.Content or cfg.Text or ""
+    local dur = cfg.Time or cfg.Duration or 4
+    if MoroWindow and MoroWindow.Notify then
+        MoroWindow:Notify({
+            Title = title,
+            Content = desc,
+            Duration = dur,
+            Type = cfg.Type or "Info"
+        })
+    elseif Lumina and Lumina.Notify then
+        Lumina:Notify({
+            Title = title,
+            Content = desc,
+            Duration = dur,
+            Type = cfg.Type or "Info"
+        })
+    end
+end
 
-local obsidian2 = {
-    Folder = "moro/Data",
-    BuiltInThemes = setmetatable({ moro = { 1, {} } }, {
-        __len = function() return 1 end
-    }),
-    SetFolder = function(self, f) self.Folder = f end,
-    SetLibrary = function(self, l) end,
-    ApplyToGroupbox = function(self, gb) end,
-    ApplyTheme = function(self, theme) end,
-    LoadDefault = function(self) end,
-    GetCustomTheme = function(self, name) return nil end,
-    ThemeUpdate = function(self) end,
-}
+library.KeybindFrame = { Visible = false }
+setmetatable(library.KeybindFrame, {
+    __newindex = function(t, k, v)
+        rawset(t, k, v)
+        if k == "Visible" and MoroWindow and MoroWindow.GetKeybindList then
+            pcall(function()
+                MoroWindow:GetKeybindList().SetVisible(v)
+            end)
+        end
+    end
+})
+
+function library:Toggle(v)
+    if MoroWindow and MoroWindow.Toggle then
+        MoroWindow:Toggle()
+    end
+end
+
+local _unloadCallbacks = {}
+function library:OnUnload(fn)
+    table.insert(_unloadCallbacks, fn)
+end
+
+function library:Unload()
+    for _, fn in ipairs(_unloadCallbacks) do
+        pcall(fn)
+    end
+    if library.ScreenGui then
+        pcall(function() library.ScreenGui:Destroy() end)
+    end
+    pcall(function()
+        local g = (gethui and gethui()) or CoreGui
+        local m = g:FindFirstChild("MoroLumina")
+        if m then m:Destroy() end
+    end)
+end
+
+function library:AddDraggableLabel(initialText)
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "MoroDisplayInfo"
+    screenGui.ResetOnSpawn = false
+    screenGui.DisplayOrder = 999
+    pcall(function()
+        local parent = (gethui and gethui()) or CoreGui
+        screenGui.Parent = parent
+    end)
+
+    local frame = Instance.new("Frame")
+    frame.Name = "DisplayInfoFrame"
+    frame.BackgroundColor3 = Color3.fromRGB(14, 15, 14)
+    frame.BorderSizePixel = 0
+    frame.Position = UDim2.new(0, 40, 0, 40)
+    frame.Size = UDim2.new(0, 360, 0, 28)
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(0, 225, 134)
+    stroke.Thickness = 1
+    stroke.Parent = frame
+
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(1, -16, 1, 0)
+    label.Position = UDim2.new(0, 8, 0, 0)
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 12
+    label.TextColor3 = Color3.fromRGB(235, 240, 238)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Text = initialText or "moro | loading..."
+    label.Parent = frame
+
+    return {
+        SetText = function(self, t)
+            label.Text = tostring(t)
+        end,
+        SetVisible = function(self, v)
+            screenGui.Enabled = v
+        end,
+        Destroy = function(self)
+            screenGui:Destroy()
+        end
+    }
+end
+
+LoadStart = tick()
+if not string.split then
+  function string:split(p3)
+    local val41 = {}
+    local val42 = 1
+
+    while true do
+      local val43, findResult = string.find(self, p3, val42, true)
+
+      if not val43 then
+        break
+      end
+
+      table.insert(val41, string.sub(self, val42, val43 - 1))
+      val42 = findResult + 1
+    end
+
+    table.insert(val41, string.sub(self, val42))
+    return val41
+  end
+end
+
+if not table.find then
+  function table:find(p4)
+    for n = 1, #self do
+      if self[n] == p4 then
+        return n
+      end
+    end
+
+    return nil
+  end
+end
+
+
 local function safeCall4(val45)
   if typeof(val45) == "string" then
     local val46, success2 = pcall(Color3.fromHex, val45)
@@ -955,14 +790,12 @@ local function helper4(val60)
 
   return false
 end
-
-
-local function iterate() end
-
 local val70 = 1
 
--- PlaceId logger (no hard blocker)
-print("[Moro DOORS] Running in PlaceId:", game.PlaceId)
+if game.PlaceId ~= 6516141723 and game.PlaceId ~= 6839171747 and game.PlaceId ~= 110258689672370
+  and game.PlaceId ~= 10549820578 then
+  return
+end
 
 function TableClear(val71)
   for key3 in pairs(val71) do
@@ -980,38 +813,14 @@ function TableFind(val72, val73)
   return nil
 end
 
-pcall(function()
-  local gameData = replicatedStorage:FindFirstChild("GameData")
-  if gameData then
-    local finishedLoadingRoom = gameData:FindFirstChild("FinishedLoadingRoom")
-    if finishedLoadingRoom then
-      finishedLoadingRoom:Destroy()
-    end
-  end
-end)
-
-CHEESE_KEY = "moro_key"
-DISCORD_INVITE = ""
-
--- [SECURITY & PRIVACY] All telemetry, Discord webhooks, and analytics removed
-local val79 = false
-
-local function safeCall8()
-  return true
-end
-
-local httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua
 do
-    local ok, res = pcall(function()
-        return game:HttpGet("https://raw.githubusercontent.com/bocaj111004/ESPLibrary/refs/heads/main/Library.lua")
-    end)
-    if ok and res and #res > 100 then
-        httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = res
-    else
-        warn("[Moro DOORS] Could not fetch Bocaj ESP from GitHub, using embedded fallback")
-        httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = "return { ObjectMaxDistance = {}, TracersEnabled = {}, AddESP = function() end, SetTracersEnabled = function() end }"
-    end
+  local finishedLoadingRoom = replicatedStorage.GameData:FindFirstChild("FinishedLoadingRoom")
+
+  if finishedLoadingRoom then
+    finishedLoadingRoom:Destroy()
+  end
 end
+local httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = game:HttpGet("https://raw.githubusercontent.com/bocaj111004/ESPLibrary/refs/heads/main/Library.lua")
 
 httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
   "']</font>'", "'M]</font>'"
@@ -1209,13 +1018,9 @@ local function helper10()
 
   TableClear(PartProperties)
 
-
-  local hrpProps = humanoidRootPart.CustomPhysicalProperties
-  local f = hrpProps and math.clamp(hrpProps.Friction, 0, 2) or 0.7
-  local e = hrpProps and hrpProps.Elasticity or 0.5
-  local fw = hrpProps and hrpProps.FrictionWeight or 1
-  local ew = hrpProps and hrpProps.ElasticityWeight or 1
-  CustomPhysics = PhysicalProperties.new(100, f, e, fw, ew)
+  CustomPhysics = PhysicalProperties.new(
+    100, humanoidRootPart.CustomPhysicalProperties.Friction, humanoidRootPart.CustomPhysicalProperties.Elasticity, humanoidRootPart.CustomPhysicalProperties.FrictionWeight, humanoidRootPart.CustomPhysicalProperties.ElasticityWeight
+  )
 
   for v96, v97 in character:GetDescendants() do
     if v97:IsA("BasePart") then
@@ -1497,61 +1302,27 @@ local function helper19()
   return remoteListener and remoteListener:FindFirstChild("Modules")
 end
 
+
 local moroWindow = library:CreateWindow({
-  Title = "Moro DOORS", Footer = "Moro Edition", Icon = 106990021902590, IconSize = UDim2.fromOffset(42, 42), ToggleKeybind = Enum.KeyCode.RightShift, NotifySide = "Right", ShowCustomCursor = false, AutoShow = false, Center = true, TabPadding = 3, CornerRadius = 2, })
-
-local dummyGroupbox = {
-    AddToggle = function(self, tag, opt)
-        local d = (opt and opt.Default) or false
-        local t = { Value = d, OnChanged = function() end, SetValue = function(self, v) self.Value = v end, AddKeyPicker = function() return { Value = "None" } end, AddColorPicker = function() return { Value = Color3.new(1,1,1) } end }
-        if library and library.Toggles and tag then library.Toggles[tag] = t end
-        return t
-    end,
-    AddButton = function() return {} end,
-    AddSlider = function(self, tag, opt)
-        local d = (opt and opt.Default) or 0
-        local o = { Value = d, OnChanged = function() end, SetValue = function(self, v) self.Value = v end }
-        if library and library.Options and tag then library.Options[tag] = o end
-        return o
-    end,
-    AddDropdown = function(self, tag, opt)
-        local d = (opt and opt.Default) or ""
-        local o = { Value = d, OnChanged = function() end, SetValue = function(self, v) self.Value = v end }
-        if library and library.Options and tag then library.Options[tag] = o end
-        return o
-    end,
-    AddLabel = function() return { SetText = function() end } end,
-    AddDivider = function() end,
-    AddInput = function() return { OnChanged = function() end } end,
-    AddKeyPicker = function() return { Value = "None" } end,
-    AddColorPicker = function() return { Value = Color3.new(1,1,1) } end,
-}
-
-local dummyTab = {
-    AddLeftGroupbox = function() return dummyGroupbox end,
-    AddRightGroupbox = function() return dummyGroupbox end,
-    AddLeftTabbox = function() return { AddTab = function() return dummyGroupbox end } end,
-    AddRightTabbox = function() return { AddTab = function() return dummyGroupbox end } end,
-    Show = function() if element3 and element3.Main and element3.Main.Show then element3.Main:Show() end end,
-    SetVisible = function() end,
-}
+  Title = "MOROLUMINA.lua",
+  ToggleKey = Enum.KeyCode.RightShift,
+})
 
 local element3 = {
-  Home = dummyTab, -- Home tab removed
+  Home = dummyTab, -- Home tab removed as requested
   Main = moroWindow:AddTab("Main", "house"),
-  Farm = moroWindow:AddTab("Auto-Farm", "bot"), -- Dedicated Auto-Farm Tab!
+  AutoFarm = moroWindow:AddTab("Auto Farm", "bot"),
   Visuals = moroWindow:AddTab("Visuals", "scan-eye"),
   Exploits = moroWindow:AddTab("Exploits", "sparkle"),
-  Miscellaneous = moroWindow:AddTab("Miscellaneous", "sliders"),
+  Miscellaneous = moroWindow:AddTab("Miscellaneous", "settings"),
   Mines = moroWindow:AddTab("Mines", "gem"),
   FoolsHotel = moroWindow:AddTab("Hotel-/Fools", "party-popper"),
   Rooms = moroWindow:AddTab("Rooms", "bed-double"),
   Garden = moroWindow:AddTab("Outdoors", "tree-pine"),
   Archives = moroWindow:AddTab("Archives", "archive"),
   Stairwell = moroWindow:AddTab("Stairwell", "tv"),
-  UserAddons = dummyTab, -- Addons tab removed
 }
-
+moroWindow:AddSettingsTab()
 do
   local val86 = safeCall6(element3.FoolsHotel)
 
@@ -1687,61 +1458,6 @@ hasHookMeta = Executor.hookmetamethod ~= nil and Executor.newcclosure ~= nil
   and Executor.getnamecallmethod ~= nil
 
 hasRequire = Executor.require ~= nil
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Auto Interact " .. helper20(hasFirePrompt) .. " (fireproximityprompt)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Infinite Items " .. helper20(hasFirePrompt) .. " (fireproximityprompt)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Infinite Crucifix " .. helper20(hasFirePrompt) .. " (fireproximityprompt)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Auto Closet " .. helper20(hasFirePrompt) .. " (fireproximityprompt)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Remove Seek Trigger " .. helper20(hasFireTouch) .. " (firetouchinterest)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Fake Revive " .. helper20(hasReplicateSignal) .. " (replicatesignal)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Remove Figure " .. helper20(hasNetworkOwner) .. " (isnetworkowner)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Delete Figure (Mines) " .. helper20(hasNetworkOwner) .. " (isnetworkowner)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Win Heartbeat Minigame " .. helper20(hasHookMeta) .. " (hookmetamethod)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Bypass Eyes " .. helper20(hasHookMeta) .. " (hookmetamethod)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Bypass Lookman " .. helper20(hasHookMeta) .. " (hookmetamethod)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Spoof Footsteps " .. helper20(hasHookMeta) .. " (hookmetamethod)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Knob Farm " .. helper20(hasReplicateSignal) .. " (replicatesignal)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Auto Minecart " .. helper20(hasRequire) .. " (require)", DoesWrap = true, })
-
-Groupboxes.HomeFunctions:AddLabel({
-  Text = "Viewmodel Offset " .. helper20(hasRequire) .. " (require)", DoesWrap = true, })
-
-Groupboxes.HomeInfo = element3.Home:AddRightGroupbox("Info")
-
-Groupboxes.HomeInfo:AddLabel({
-  Text = "<font size=\"18\">Moro DOORS (Emerald Edition)</font>", DoesWrap = true, })
-
-Groupboxes.HomeInfo:AddDivider()
-
-Groupboxes.HomeInfo:AddLabel({
-  Text = "<font size=\"18\">Moro DOORS • Pure Local Execution</font>", DoesWrap = true, })
 
 Groupboxes.Misc = element3.Miscellaneous:AddLeftGroupbox("Miscellaneous")
 
@@ -1916,116 +1632,11 @@ Groupboxes.Misc:AddButton({
 
 Groupboxes.Misc:AddDivider()
 
-Groupboxes.Misc:AddButton({
-  Text = "Copy/Open Discord Invite", Tooltip = "Copies the Discord invite to your clipboard and opens it in Discord", Callback = function()
-    pcall(function() setclipboard(DISCORD_INVITE) end)
-    pcall(function() _G.Clipboard.set(DISCORD_INVITE) end)
-
-    task.spawn(function()
-      local val94 = syn and syn.request or request or http_request
-
-      if val94 then
-        pcall(function()
-          val94({
-            Url = "http://127.0.0.1:6463/rpc?v=1", Method = "POST", Headers = { ["Content-Type"] = "application/json", Origin = "https://discord.com" }, Body = httpService:JSONEncode({
-              cmd = "INVITE_BROWSER", nonce = httpService:GenerateGUID(false), args = { code = "CuZJQaCquK" }, }), })
-        end)
-      end
-
-      pcall(function()
-        local element5 = getgenv()
-        local openurl = element5.syn and element5.syn.openurl or element5.openurl or element5.open_url
-
-        if openurl then
-          openurl(DISCORD_INVITE)
-        end
-      end)
-    end)
-  end, })
 
 Groupboxes.Misc:AddToggle("ShowKeybinds", {
   Text = "Show Keybinds", Default = false, Tooltip = "Shows all registered keybinds", })
 
 toggles.ShowKeybinds:OnChanged(function(visible2) library.KeybindFrame.Visible = visible2 end)
-
-Groupboxes.Misc:AddToggle("DiscordRichPresence", {
-  Text = "Discord Rich Presence", Default = false, Tooltip = "Shows your current room in your Discord status via Bloxstrap RPC", })
-
-BLOXSTRAP_CHEESE_ICON = 106990021902590
-Discord = { PresenceConn = nil, PresenceActive = false, LastUpdate = 0 }
-
-local function safeCall9(command, data)
-  local jsonEncode = httpService:JSONEncode({ command = command, data = data })
-
-  pcall(function()
-    httpService:PostAsync(
-      "http://127.0.0.1:43594/rpc", jsonEncode, Enum.HttpContentType.ApplicationJson
-    )
-  end)
-end
-
-local function safeCall10()
-  local strVal3 = "Unknown"
-
-  pcall(function()
-    gameData = replicatedStorage:FindFirstChild("GameData")
-    local latestRoom2 = gameData and gameData:FindFirstChild("LatestRoom")
-
-    if latestRoom2 then
-      strVal3 = tostring(latestRoom2.Value)
-    elseif localPlayer2 and localPlayer2:GetAttribute("CurrentRoom") then
-      strVal3 = tostring(localPlayer2:GetAttribute("CurrentRoom"))
-    end
-  end)
-
-  return "Room " .. strVal3
-end
-
-local function helper21()
-  if not toggles.DiscordRichPresence.Value then
-    return
-  end
-
-  safeCall9("SetRichPresence", {
-    details = "Using Moro DOORS", state = safeCall10(), largeImage = { assetId = BLOXSTRAP_CHEESE_ICON, hoverText = "Moro DOORS" }, smallImage = { assetId = BLOXSTRAP_CHEESE_ICON, hoverText = "discord.gg/CuZJQaCquK" }, })
-end
-
-toggles.DiscordRichPresence:OnChanged(function(p33)
-  if Discord.PresenceConn then
-    Discord.PresenceConn:Disconnect()
-    Discord.PresenceConn = nil
-  end
-
-  if p33 then
-    Discord.PresenceActive = true
-    Discord.LastUpdate = 0
-
-    helper21()
-
-    task.spawn(function()
-      while Discord.PresenceActive do
-        task.wait(15)
-
-        if not Discord.PresenceActive then
-          break
-        end
-
-        Discord.LastUpdate = os.clock()
-        helper21()
-      end
-    end)
-  else
-    Discord.PresenceActive = false
-
-    if Discord.PresenceConn then
-      Discord.PresenceConn:Disconnect()
-      Discord.PresenceConn = nil
-    end
-
-    safeCall9("SetRichPresence", {
-      details = "<reset>", state = "<reset>", largeImage = { reset = true }, smallImage = { reset = true }, })
-  end
-end)
 
 Groupboxes.Misc:AddToggle("AntiLag", {
   Text = "Anti-Lag", Default = false, Tooltip = "Reduces lag by setting all parts in the current rooms to Plastic material", })
@@ -2076,532 +1687,6 @@ toggles.DisableIdleKick:OnChanged(function(p35)
   end
 end)
 
-Groupboxes.Misc:AddDivider()
-
-
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------
--- AUTO-FARM ENGINE (High-Stability Flying Loot Bot & Solvers)
---------------------------------------------------------------------------------
-local isAutoFarmActive = false
-local autoFarmSpeed = 30
-local showPathNodes = true
-local autoRoom50Active = true
-local autoRoom100Active = true
-local autoSeekChaseActive = true
-local autoPlayAgainActive = true
-local autoLootDrawersActive = true
-local autoUnlockDoorsActive = true
-local autoBypassesActive = true
-local PathNodesList = {}
-local noclipFarmConn = nil
-
-local function createPathNode(pos)
-    if not showPathNodes then return end
-    local p = Instance.new("Part")
-    p.Name = "MoroPathNode"
-    p.Shape = Enum.PartType.Cylinder
-    p.Size = Vector3.new(0.3, 2.5, 2.5)
-    p.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
-    p.Material = Enum.Material.Neon
-    p.Color = Color3.fromRGB(0, 255, 120)
-    p.Transparency = 0.4
-    p.Anchored = true
-    p.CanCollide = false
-    p.Parent = workspace
-    table.insert(PathNodesList, p)
-end
-
-local function clearPathNodes()
-    for _, p in ipairs(PathNodesList) do
-        pcall(function() p:Destroy() end)
-    end
-    PathNodesList = {}
-end
-
--- Safely get the room the player is CURRENTLY in (never an ungenerated future room)
-local function getPlayerCurrentRoom()
-    local cr = workspace:FindFirstChild("CurrentRooms")
-    if not cr then return nil, 0 end
-
-    local roomNum = tonumber(localPlayer2:GetAttribute("CurrentRoom"))
-    if not roomNum and element2 then
-        roomNum = tonumber(element2.Value)
-    end
-    if roomNum then
-        local r = cr:FindFirstChild(tostring(roomNum))
-        if r then return r, roomNum end
-    end
-
-    -- Spatial fallback to closest loaded room within 180 studs
-    local char = localPlayer2 and localPlayer2.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if hrp then
-        local closestRoom, closestDist, closestNum = nil, 999999, 0
-        for _, r in ipairs(cr:GetChildren()) do
-            local num = tonumber(r.Name)
-            if num then
-                local p = r.PrimaryPart or r:FindFirstChildWhichIsA("BasePart")
-                if p then
-                    local d = (p.Position - hrp.Position).Magnitude
-                    if d < closestDist then
-                        closestDist = d
-                        closestRoom = r
-                        closestNum = num
-                    end
-                end
-            end
-        end
-        if closestRoom and closestDist < 180 then
-            return closestRoom, closestNum
-        end
-    end
-
-    return nil, 0
-end
-
-local function getDoorPart(doorModel)
-    if not doorModel then return nil end
-    return doorModel:FindFirstChild("Door") or doorModel:FindFirstChild("DoorPart")
-        or doorModel:FindFirstChildWhichIsA("BasePart") or doorModel.PrimaryPart
-end
-
--- Bulletproof flight interpolation: NEVER generates NaN CFrame, zeroes velocity, respects bounds
-local function flyToTarget(targetPos, speed)
-    speed = speed or autoFarmSpeed
-    local char = localPlayer2 and localPlayer2.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then return false end
-
-    -- Sanity check: do not fly into the void or across the galaxy
-    if targetPos.Y < -20 then return false end
-    local startPos = hrp.Position
-    local dist = (targetPos - startPos).Magnitude
-    if dist < 0.5 then return true end
-    if dist > 200 then
-        -- Target is outside normal room range, reject to avoid glitch teleports!
-        return false
-    end
-
-    local duration = math.clamp(dist / speed, 0.1, 4)
-    local steps = math.max(1, math.floor(duration * 30))
-
-    for i = 1, steps do
-        if not isAutoFarmActive or _Unloading then return false end
-        if not char or not char.Parent or hum.Health <= 0 then return false end
-
-        local alpha = i / steps
-        local curPos = startPos:Lerp(targetPos, alpha)
-        local diff = targetPos - curPos
-
-        -- PREVENT NaN: only apply lookAt if distance is safe
-        if diff.Magnitude > 0.05 then
-            hrp.CFrame = CFrame.new(curPos, curPos + diff.Unit)
-        else
-            hrp.CFrame = CFrame.new(curPos) * hrp.CFrame.Rotation
-        end
-
-        -- Zero physics velocities to prevent explosive flinging
-        pcall(function()
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-
-        if showPathNodes and i % 5 == 0 then
-            createPathNode(curPos - Vector3.new(0, 2, 0))
-        end
-        runService.Heartbeat:Wait()
-    end
-
-    hrp.CFrame = CFrame.new(targetPos) * hrp.CFrame.Rotation
-    pcall(function()
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
-    end)
-    return true
-end
-
-local function interactPrompt(prompt)
-    if not prompt or not prompt.Parent then return end
-    if fireproximityprompt then
-        pcall(function() fireproximityprompt(prompt) end)
-    else
-        pcall(function()
-            prompt:InputHoldBegin()
-            task.wait(0.05)
-            prompt:InputHoldEnd()
-        end)
-    end
-end
-
-local function runAutoFarmStep()
-    local char = localPlayer2 and localPlayer2.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then return end
-
-    local currentRoom, currentRoomNum = getPlayerCurrentRoom()
-    if not currentRoom then return end
-
-    -- 1. Seek Chase Check
-    local isSeek = workspace:FindFirstChild("SeekMoving") or currentRoom:FindFirstChild("SeekMoving")
-    if isSeek and autoSeekChaseActive then
-        local doorModel = currentRoom:FindFirstChild("Door")
-        local doorPart = getDoorPart(doorModel)
-        if doorPart then
-            flyToTarget(doorPart.Position + Vector3.new(0, 1, 0), autoFarmSpeed)
-            local prompt = doorModel:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if prompt then interactPrompt(prompt) end
-            task.wait(0.2)
-            -- Walk through doorway safely without blind clipping
-            local stepThrough = doorPart.Position + (doorPart.CFrame.LookVector * 4)
-            flyToTarget(stepThrough, autoFarmSpeed)
-            task.wait(0.3)
-        end
-        clearPathNodes()
-        return
-    end
-
-    -- 2. Room 50 (Library)
-    if currentRoomNum == 50 and autoRoom50Active then
-        library:Notify({ Title = "📚 Room 50", Description = "Automating Library & Padlock...", Time = 3 })
-        local padlock = currentRoom:FindFirstChild("Padlock", true) or workspace:FindFirstChild("Padlock", true)
-        local doorModel = currentRoom:FindFirstChild("Door")
-        local doorPart = getDoorPart(doorModel)
-        local targetPos = (padlock and padlock.PrimaryPart and padlock.PrimaryPart.Position) or (doorPart and doorPart.Position)
-
-        if targetPos then
-            flyToTarget(targetPos + Vector3.new(0, 2, 0), autoFarmSpeed)
-            if remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
-                local tries = 0
-                while isAutoFarmActive and tries < 600 do
-                    tries = tries + 1
-                    local testCode = string.format("%05d", math.random(0, 99999))
-                    remotesFolder2.PL:FireServer(testCode)
-                    if tries % 50 == 0 then task.wait(0.05) end
-                    if not padlock or not padlock.Parent or padlock:GetAttribute("Locked") == false then
-                        break
-                    end
-                end
-                library:Notify({ Title = "Padlock", Description = "Padlock opened ✓", Time = 3 })
-            end
-            task.wait(0.3)
-            if doorPart then
-                local stepThrough = doorPart.Position + (doorPart.CFrame.LookVector * 5)
-                flyToTarget(stepThrough, autoFarmSpeed)
-            end
-            task.wait(0.5)
-        end
-        clearPathNodes()
-        return
-    end
-
-    -- 3. Room 100 (Electrical & Elevator)
-    if currentRoomNum == 100 and autoRoom100Active then
-        library:Notify({ Title = "⚡ Room 100", Description = "Solving Breaker & Heading to Elevator...", Time = 3 })
-        local breaker = workspace:FindFirstChild("ElevatorBreaker", true)
-        if breaker then
-            local bPart = breaker:FindFirstChildWhichIsA("BasePart") or breaker.PrimaryPart
-            if bPart then
-                flyToTarget(bPart.Position + Vector3.new(0, 2, 0), autoFarmSpeed)
-            end
-            task.wait(0.3)
-            if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-                remotesFolder2.EBF:FireServer()
-                library:Notify({ Title = "Breaker", Description = "Breaker solved ✓", Time = 3 })
-            end
-            task.wait(1)
-        end
-
-        local elevator = workspace:FindFirstChild("Elevator", true) or currentRoom:FindFirstChild("Elevator", true)
-        if elevator then
-            local ePart = elevator.PrimaryPart or elevator:FindFirstChildWhichIsA("BasePart")
-            if ePart then
-                flyToTarget(ePart.Position, autoFarmSpeed)
-            end
-        end
-        clearPathNodes()
-        task.wait(3)
-        return
-    end
-
-    -- 4. Regular Room: Loot All Drawers & Containers
-    if autoLootDrawersActive then
-        local lootPrompts = {}
-        for _, desc in ipairs(currentRoom:GetDescendants()) do
-            if desc:IsA("ProximityPrompt") then
-                local pName = desc.Name:lower()
-                if not pName:find("door") and not pName:find("unlock") then
-                    table.insert(lootPrompts, desc)
-                end
-            end
-        end
-
-        table.sort(lootPrompts, function(a, b)
-            local pa = a.Parent and (a.Parent:IsA("BasePart") and a.Parent.Position or a.Parent:GetPivot().Position) or Vector3.zero
-            local pb = b.Parent and (b.Parent:IsA("BasePart") and b.Parent.Position or b.Parent:GetPivot().Position) or Vector3.zero
-            return (pa - hrp.Position).Magnitude < (pb - hrp.Position).Magnitude
-        end)
-
-        for _, prompt in ipairs(lootPrompts) do
-            if not isAutoFarmActive or _Unloading then break end
-            if prompt and prompt.Parent then
-                local pPos = prompt.Parent:IsA("BasePart") and prompt.Parent.Position or prompt.Parent:GetPivot().Position
-                if pPos and (pPos - hrp.Position).Magnitude <= 120 and pPos.Y > -20 then
-                    local hoverPos = pPos + Vector3.new(0, 1.5, 0)
-                    local ok = flyToTarget(hoverPos, autoFarmSpeed)
-                    if not ok then break end
-                    task.wait(0.05)
-                    interactPrompt(prompt)
-                    task.wait(0.08)
-                end
-            end
-        end
-    end
-
-    if not isAutoFarmActive or _Unloading then return end
-
-    -- 5. Unlock and Open Door
-    if autoUnlockDoorsActive then
-        local doorModel = currentRoom:FindFirstChild("Door")
-        local doorPart = getDoorPart(doorModel)
-        if doorPart then
-            local isLocked = doorModel:GetAttribute("Locked") == true or doorModel:FindFirstChild("Lock") ~= nil
-            if isLocked then
-                local keyObj = nil
-                for _, obj in ipairs(currentRoom:GetDescendants()) do
-                    if obj.Name:find("Key") and obj:FindFirstChildWhichIsA("ProximityPrompt") then
-                        keyObj = obj
-                        break
-                    end
-                end
-
-                if keyObj then
-                    local keyPart = keyObj.PrimaryPart or keyObj:FindFirstChildWhichIsA("BasePart")
-                    if keyPart and keyPart.Position.Y > -20 then
-                        flyToTarget(keyPart.Position + Vector3.new(0, 1, 0), autoFarmSpeed)
-                        local prompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt")
-                        if prompt then interactPrompt(prompt) end
-                        task.wait(0.2)
-                    end
-                end
-            end
-
-            -- Fly to door
-            flyToTarget(doorPart.Position + Vector3.new(0, 1, 0), autoFarmSpeed)
-            local doorPrompt = doorModel:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if doorPrompt then interactPrompt(doorPrompt) end
-
-            task.wait(0.15)
-            -- Walk through doorway smoothly along its LookVector into next room
-            local forwardPos = doorPart.Position + (doorPart.CFrame.LookVector * 5)
-            flyToTarget(forwardPos, autoFarmSpeed)
-            task.wait(0.3)
-        end
-    end
-
-    clearPathNodes()
-end
-
-local function startAutoFarmLoop()
-    if isAutoFarmActive then return end
-    isAutoFarmActive = true
-    clearPathNodes()
-
-    -- Automatically enable Anticheat manipulation and Godmode for smooth looting
-    if autoBypassesActive then
-        if toggles.AnticheatManipulation and not toggles.AnticheatManipulation.Value then
-            pcall(function() toggles.AnticheatManipulation:SetValue(true) end)
-        end
-        if toggles.Godmode and not toggles.Godmode.Value then
-            pcall(function() toggles.Godmode:SetValue(true) end)
-        end
-    end
-
-    -- Noclip connection to prevent wall-collision physics flinging
-    if noclipFarmConn then pcall(function() noclipFarmConn:Disconnect() end) end
-    noclipFarmConn = runService.Stepped:Connect(function()
-        if isAutoFarmActive and localPlayer2 and localPlayer2.Character then
-            for _, part in ipairs(localPlayer2.Character:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
-            end
-        end
-    end)
-
-    library:Notify({ Title = "🚀 AUTO-FARM", Description = "Auto-Farm loot bot started!", Time = 3 })
-
-    task.spawn(function()
-        while isAutoFarmActive and not _Unloading do
-            local success, err = pcall(runAutoFarmStep)
-            if not success then
-                task.wait(0.5)
-            else
-                task.wait(0.1)
-            end
-        end
-    end)
-end
-
-local function stopAutoFarmLoop()
-    isAutoFarmActive = false
-    if noclipFarmConn then
-        pcall(function() noclipFarmConn:Disconnect() end)
-        noclipFarmConn = nil
-    end
-    clearPathNodes()
-    library:Notify({ Title = "AUTO-FARM", Description = "Auto-Farm stopped", Time = 3 })
-end
-
--- Hook Play Again on death or finish
-local function checkPlayAgain()
-    if not autoPlayAgainActive then return end
-    pcall(function()
-        if remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain") then
-            remotesFolder2.PlayAgain:FireServer()
-            library:Notify({ Title = "Play Again", Description = "Restarting run... 🔄", Time = 3 })
-        end
-    end)
-end
-
-if localPlayer2 then
-    localPlayer2.CharacterAdded:Connect(function()
-        task.wait(2)
-        if isAutoFarmActive then
-            clearPathNodes()
-        end
-        if autoPlayAgainActive then
-            task.delay(1, checkPlayAgain)
-        end
-    end)
-end
-
--- ============================================================================
--- DEDICATED AUTO-FARM TAB (element3.Farm)
--- ============================================================================
-local farmBoxLeft = element3.Farm:AddLeftGroupbox("Auto-Farm Bot")
-local farmBoxRight = element3.Farm:AddRightGroupbox("Automation & Solvers")
-
-farmBoxLeft:AddToggle("EnableAutoFarm", {
-    Text = "Enable Auto-Farm (Loot Bot)",
-    Default = false,
-    Tooltip = "Flies safely to all drawers, loots items, collects keys, solves rooms",
-})
-
-toggles.EnableAutoFarm:OnChanged(function(val)
-    if val then
-        startAutoFarmLoop()
-    else
-        stopAutoFarmLoop()
-    end
-end)
-
-farmBoxLeft:AddSlider("AutoFarmSpeed", {
-    Text = "Flight Speed",
-    Min = 15,
-    Max = 60,
-    Default = 30,
-    Rounding = 1,
-    Suffix = " studs/s",
-    Callback = function(val)
-        autoFarmSpeed = val
-    end,
-})
-
-farmBoxLeft:AddToggle("ShowPathNodes", {
-    Text = "Show Flight Path (Green Discs)",
-    Default = true,
-    Tooltip = "Displays green neon discs along your flight route",
-    Callback = function(val)
-        showPathNodes = val
-        if not val then clearPathNodes() end
-    end,
-})
-
-farmBoxLeft:AddToggle("AutoLootDrawers", {
-    Text = "Auto-Loot Drawers & Items",
-    Default = true,
-    Tooltip = "Automatically loots nearby drawers and desks in the room",
-    Callback = function(val)
-        autoLootDrawersActive = val
-    end,
-})
-
-farmBoxLeft:AddToggle("AutoUnlockDoors", {
-    Text = "Auto-Unlock & Open Doors",
-    Default = true,
-    Tooltip = "Finds keys and opens the next room door automatically",
-    Callback = function(val)
-        autoUnlockDoorsActive = val
-    end,
-})
-
-farmBoxRight:AddToggle("AutoRoom50", {
-    Text = "Auto Room 50 (Figure & Padlock)",
-    Default = true,
-    Tooltip = "Automatically brute-forces padlock and solves Room 50",
-    Callback = function(val)
-        autoRoom50Active = val
-    end,
-})
-
-farmBoxRight:AddToggle("AutoRoom100", {
-    Text = "Auto Room 100 (Breaker & Elevator)",
-    Default = true,
-    Tooltip = "Automatically solves breaker box and boards elevator",
-    Callback = function(val)
-        autoRoom100Active = val
-    end,
-})
-
-farmBoxRight:AddToggle("AutoSeekChase", {
-    Text = "Auto Seek Chase Bypass",
-    Default = true,
-    Tooltip = "Direct safe flight to exit door during Seek chase",
-    Callback = function(val)
-        autoSeekChaseActive = val
-    end,
-})
-
-farmBoxRight:AddToggle("AutoPlayAgain", {
-    Text = "Auto 'Play Again' On End",
-    Default = true,
-    Tooltip = "Automatically restarts run when round ends or character dies",
-    Callback = function(val)
-        autoPlayAgainActive = val
-    end,
-})
-
-farmBoxRight:AddToggle("AutoBypasses", {
-    Text = "Auto-Godmode & Anticheat",
-    Default = true,
-    Tooltip = "Automatically engages Godmode and Anticheat bypass while farming",
-    Callback = function(val)
-        autoBypassesActive = val
-    end,
-})
-
-farmBoxRight:AddButton({
-    Text = "Emergency Stop",
-    Func = function()
-        if toggles.EnableAutoFarm then
-            toggles.EnableAutoFarm:SetValue(false)
-        else
-            stopAutoFarmLoop()
-        end
-    end,
-})
-
-farmBoxRight:AddButton({
-    Text = "Trigger 'Play Again' Now",
-    Tooltip = "Instantly restarts run via PlayAgain remote",
-    Func = function()
-        checkPlayAgain()
-    end,
-})
-
 Groupboxes.Misc:AddToggle("DisplayInfo", {
   Text = "Display Info", Default = false, Tooltip = "Shows an overlay with FPS, ping, executor, and username", })
 
@@ -2623,7 +1708,7 @@ toggles.DisplayInfo:OnChanged(function(p37)
   if p37 then
     DisplayInfoFC = 0
     DisplayInfoFT = tick()
-    DisplayInfoLabel = library:AddDraggableLabel("Moro | loading...")
+    DisplayInfoLabel = library:AddDraggableLabel("moro | loading...")
 
     if val85.UILibrary == "Obsidian" then
       local label = DisplayInfoLabel.Label or DisplayInfoLabel
@@ -2650,7 +1735,7 @@ toggles.DisplayInfo:OnChanged(function(p37)
 
       local success16 = pcall(identifyexecutor) and identifyexecutor() or "Unknown"
 
-      DisplayInfoLabel:SetText(("Moro | FPS: %d | Ping: %dms | Executor: %s | User: %s"):format(
+      DisplayInfoLabel:SetText(("moro | FPS: %d | Ping: %dms | Executor: %s | User: %s"):format(
         math.floor(DisplayInfoFPS), success15, success16, localPlayer2.Name
       ))
     end)
@@ -2996,25 +2081,32 @@ function SetupBringItems()
     for index8, value13 in ipairs(drops2:GetChildren()) do
       local element6 = helper24(value13)
 
-      if element6 then
-        if element6.Anchored then
-          pcall(function() element6.Anchored = false end)
-        end
-
-        local bringItemsVelocity = element6:FindFirstChildOfClass("BodyVelocity")
-
-        if not bringItemsVelocity then
-          bringItemsVelocity = Instance.new("BodyVelocity")
-          bringItemsVelocity.Name = "BringItemsVelocity"
-          bringItemsVelocity.MaxForce = Vector3.new(9000000000, 9000000000, 9000000000)
-          bringItemsVelocity.Parent = element6
-
-          table.insert(BringItemsBVs, bringItemsVelocity)
-        end
-
-        local element7 = val100 - element6.Position
-        bringItemsVelocity.Velocity = element7.Unit * math.clamp(element7.Magnitude * 10, 0, 100)
+      if not element6 then
+        continue
       end
+
+      if element6.Anchored then
+        pcall(function() element6.Anchored = false end)
+      end
+
+      local bringItemsVelocity = element6:FindFirstChildOfClass("BodyVelocity")
+
+      if not bringItemsVelocity then
+        bringItemsVelocity = Instance.new("BodyVelocity")
+        bringItemsVelocity.Name = "BringItemsVelocity"
+        bringItemsVelocity.MaxForce = Vector3.new(9000000000, 9000000000, 9000000000)
+        bringItemsVelocity.Parent = element6
+
+        table.insert(BringItemsBVs, bringItemsVelocity)
+      end
+
+      local element7 = val100 - element6.Position
+
+      if element7.Magnitude > 2 then
+        element6.CFrame = element6.CFrame:Lerp(CFrame.new(val100), 0.4)
+      end
+
+      bringItemsVelocity.Velocity = element7 * 40
     end
   end)
 end
@@ -3065,6 +2157,46 @@ end
 
 Groupboxes.Character = element3.Main:AddLeftGroupbox("Character")
 Groupboxes.Other = element3.Main:AddRightGroupbox("Other")
+
+Groupboxes.AutoFarm = element3.AutoFarm:AddLeftGroupbox("Knob Farm")
+Groupboxes.AutoFarm_Settings = element3.AutoFarm:AddRightGroupbox("Settings")
+
+Groupboxes.AutoFarm:AddToggle("AutoFarmEnabled", {
+  Text = "Enable Knob Farm",
+  Default = false,
+  Tooltip = "Automates traversing rooms, looting gold, solving obstacles, and farming knobs",
+})
+
+Groupboxes.AutoFarm_Status = Groupboxes.AutoFarm:AddLabel("Status: Idle")
+
+Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmSpeed", {
+  Text = "Fly Speed",
+  Min = 15,
+  Max = 80,
+  Default = 45,
+  Rounding = 0,
+  Suffix = " studs/s",
+  Compact = true,
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmLootDrawers", {
+  Text = "Loot Drawers & Tables",
+  Default = true,
+  Tooltip = "Visits nearby drawers, chests, and tables to collect gold",
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmRunTo100", {
+  Text = "Farm to Door 100",
+  Default = true,
+  Tooltip = "Continues farming through the Library (50) and reaches the Electrical Room (100)",
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmPlayAgain", {
+  Text = "Auto Play Again (7s)",
+  Default = true,
+  Tooltip = "Automatically clicks Play Again 7 seconds after dying or beating the game",
+})
+
 Groupboxes.SpamBuy = element3.Exploits:AddLeftGroupbox("Pre-Run")
 
 Groupboxes.SpamBuy:AddButton({
@@ -4543,16 +3675,14 @@ function Functions.GetNearestDuckBoard()
 end
 
 function Functions.SendChat(p77)
-  pcall(function()
-    local defaultChat = (replicatedStorage:FindFirstChild("DefaultChatSystemEvents") or Instance.new("Folder")):FindFirstChild("SayMessageRequest") or Instance.new("RemoteEvent")
-    defaultChat:FireServer(p77, "All")
-  end)
+  ;((replicatedStorage:FindFirstChild("DefaultChatSystemEvents") or Instance.new("Folder")):FindFirstChild("SayMessageRequest")
+    or Instance.new("RemoteEvent")):FireServer(
+    p77, "All"
+  )
 
-  pcall(function()
-    local textChannels = TextChatService:FindFirstChild("TextChannels")
-    local rbxGeneral = textChannels and textChannels:FindFirstChild("RBXGeneral") or Instance.new("TextChannel")
-    rbxGeneral:SendAsync(p77)
-  end)
+  ;(TextChatService:FindFirstChild("TextChannels")
+      and TextChatService.TextChannels:FindFirstChild("RBXGeneral")
+    or Instance.new("TextChannel")):SendAsync(p77)
 end
 
 function Functions.GetNearestHidingSpot()
@@ -6708,7 +5838,7 @@ local function helper56(val177, val178)
 
   library:Notify({ Title = "An item has spawned", Description = val177 .. val179, Time = 4 })
 
-  if options.ItemNotifyStyle.Value == "Achievement" then
+  if options.ItemNotifyStyle.Value ~= "Obsidian" then
     task.spawn(function() val171.ShowAchievement("An item has spawned", val177, val179) end)
   end
 
@@ -7687,7 +6817,7 @@ local function helper64()
     end
 
     if not helper4(element3.Home) and not helper4(val202.MainTab) then
-      element3.Main:Show()
+      element3.Home:Show()
     end
 
     for index49, value76 in ipairs({
@@ -7789,7 +6919,7 @@ local function helper64()
     end
 
     if helper4(val202.MainTab) then
-      element3.Main:Show()
+      element3.Home:Show()
     end
   end
 
@@ -7907,7 +7037,7 @@ local function helper64()
   end
 
   if element3.Mines and not val207 and helper4(element3.Mines) then
-    element3.Main:Show()
+    element3.Home:Show()
   end
 
   if element3.FoolsHotel then
@@ -7925,7 +7055,7 @@ local function helper64()
       end
     else
       if helper4(element3.FoolsHotel) then
-        element3.Main:Show()
+        element3.Home:Show()
       end
 
       element3.FoolsHotel:SetVisible(false)
@@ -7937,7 +7067,7 @@ local function helper64()
       element3.Garden:SetVisible(true)
     else
       if helper4(element3.Garden) then
-        element3.Main:Show()
+        element3.Home:Show()
       end
 
       element3.Garden:SetVisible(false)
@@ -7949,7 +7079,7 @@ local function helper64()
       element3.Rooms:SetVisible(true)
     else
       if helper4(element3.Rooms) then
-        element3.Main:Show()
+        element3.Home:Show()
       end
 
       element3.Rooms:SetVisible(false)
@@ -7961,7 +7091,7 @@ local function helper64()
       element3.Archives:SetVisible(true)
     else
       if helper4(element3.Archives) then
-        element3.Main:Show()
+        element3.Home:Show()
       end
 
       element3.Archives:SetVisible(false)
@@ -7973,7 +7103,7 @@ local function helper64()
       element3.Stairwell:SetVisible(true)
     else
       if helper4(element3.Stairwell) then
-        element3.Main:Show()
+        element3.Home:Show()
       end
 
       element3.Stairwell:SetVisible(false)
@@ -9457,28 +8587,47 @@ toggles.AutoSolveAnchors:OnChanged(function()
     end
 
     for v458, v459 in currentRooms9:GetDescendants() do
-      if v459.Name == "MinesAnchor" and v459:IsA("Model") and not v459:GetAttribute("Activated") then
-        local sign2 = v459:FindFirstChild("Sign")
-        local textLabel4 = sign2 and sign2:FindFirstChildOfClass("TextLabel")
-        if textLabel4 and textLabel4.Text == strVal6 then
-          local primaryPart2 = v459.PrimaryPart
-          if primaryPart2 then
-            local maxActivationDistance2 = v459:FindFirstChild("ActivateEventPrompt")
-                and v459.ActivateEventPrompt.MaxActivationDistance
-              or 20
+      if v459.Name ~= "MinesAnchor" or not v459:IsA("Model") then
+        continue
+      end
 
-            if humanoidRootPart
-              and humanoidRootPart.Position
-              and (humanoidRootPart.Position - primaryPart2.Position).Magnitude
-                <= maxActivationDistance2 then
-              local anchorRemote = v459:FindFirstChild("AnchorRemote")
+      if v459:GetAttribute("Activated") then
+        continue
+      end
 
-              if anchorRemote then
-                anchorRemote:FireServer()
-              end
-            end
-          end
+      local sign2 = v459:FindFirstChild("Sign")
+
+      if not sign2 then
+        continue
+      end
+
+      local textLabel4 = sign2:FindFirstChildOfClass("TextLabel")
+
+      if not textLabel4 or textLabel4.Text ~= strVal6 then
+        continue
+      end
+
+      local primaryPart2 = v459.PrimaryPart
+
+      if not primaryPart2 then
+        continue
+      end
+
+      local maxActivationDistance2 = v459:FindFirstChild("ActivateEventPrompt")
+          and v459.ActivateEventPrompt.MaxActivationDistance
+        or 20
+
+      if humanoidRootPart
+        and humanoidRootPart.Position
+        and (humanoidRootPart.Position - primaryPart2.Position).Magnitude
+          <= maxActivationDistance2 then
+        local anchorRemote = v459:FindFirstChild("AnchorRemote")
+
+        if anchorRemote then
+          anchorRemote:InvokeServer(code2.Text)
         end
+
+        break
       end
     end
   end)
@@ -10051,7 +9200,7 @@ Groupboxes.Visuals_Notifs:AddDropdown("EntityList", {
     "Rush", "Ambush", "A-60", "A-120", "Blitz", "Eyes", "Lookman", "Monument", "Sally", "Gloombat Swarm", "Glitch Rush", "Glitch Ambush", "Drones", "Bash", "Electric Puddle", "Scribbles", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected entities (leave empty to notify all)", })
 
 Groupboxes.Visuals_Notifs:AddDropdown("NotifyStyle", {
-  Text = "Notification Style", Values = { "Lumina", "Achievement" }, Default = 1, })
+  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
 
 Groupboxes.Visuals_Notifs:AddDropdown("NotifySound", {
   Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 5, })
@@ -10074,7 +9223,7 @@ Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemList", {
     "Alarm Clock", "Aloe Vera", "Bandage", "Bandage Pack", "Battery", "Battery Pack", "Big Bomb", "Big Shield Potion", "Bomb", "Boxing Gloves", "Briefcase", "Bread", "Candle", "Candy", "Cheese", "Compass", "Crucifix", "Donut", "Flashlight", "FihFlakes", "Glitch Fragment", "Glowstick", "Golden Gun", "Gummy Flashlight", "Gween Soda", "Hiding Box", "Holy Hand Grenade", "Iron Key", "Knockbomb", "Lantern", "Laser Pointer", "Lighter", "Lockpicks", "Lotus", "Lotus Petal", "Mini Shield Potion", "Moonlight Candle", "Moonlight Smoothie", "Multitool", "Nanner", "Paper Plane", "Pizza", "Leftovers", "Rift Jar", "Shears", "Skeleton Key", "Smoothie", "Spotlight", "Starlight Barrel", "Starlight Bottle", "Starlight Vial", "Stop Sign", "Straplight", "Tablet", "Tip Jar", "Vitamins", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected items (leave empty to notify all)", })
 
 Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifyStyle", {
-  Text = "Notification Style", Values = { "Lumina", "Achievement" }, Default = 1, })
+  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
 
 Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifySound", {
   Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 4, })
@@ -10380,7 +9529,7 @@ pcall(function()
 end)
 
 val171.SoundInstance = Instance.new("Sound")
-val171.SoundInstance.Name = "MoroNotifySound"
+val171.SoundInstance.Name = "morohubnotifsound"
 val171.SoundInstance.Volume = 0.65
 
 pcall(function() val171.SoundInstance.Parent = SoundService end)
@@ -10410,11 +9559,11 @@ local function helper76(val290)
 end
 
 function val171.CustomAchievement(p196, p197, p198)
-  local cheesehubentitynotif = Instance.new("ScreenGui")
-  cheesehubentitynotif.Name = "cheesehubentitynotif"
-  cheesehubentitynotif.ResetOnSpawn = false
-  cheesehubentitynotif.IgnoreGuiInset = true
-  cheesehubentitynotif.Parent = CoreGui
+  local morohubentitynotif = Instance.new("ScreenGui")
+  morohubentitynotif.Name = "morohubentitynotif"
+  morohubentitynotif.ResetOnSpawn = false
+  morohubentitynotif.IgnoreGuiInset = true
+  morohubentitynotif.Parent = CoreGui
 
   local val292 = p198 and 110 or 90
 
@@ -10422,7 +9571,7 @@ function val171.CustomAchievement(p196, p197, p198)
   frame6.Size = UDim2.new(0, 350, 0, val292)
   frame6.AnchorPoint = Vector2.new(1, 0)
   frame6.BackgroundTransparency = 1
-  frame6.Parent = cheesehubentitynotif
+  frame6.Parent = morohubentitynotif
 
   local val293 = 72 + (#val171.ActiveAchievement + 1 - 1) * 150
   frame6.Position = UDim2.new(1, 370, 0, val293)
@@ -10515,7 +9664,7 @@ function val171.CustomAchievement(p196, p197, p198)
       end
     end
 
-    cheesehubentitynotif:Destroy()
+    morohubentitynotif:Destroy()
   end)
 end
 
@@ -10638,7 +9787,7 @@ function helper57(val297)
     val298 = element41.Alias .. " is coming, but you have godmode enabled so don't worry!"
   end
 
-  if options.NotifyStyle.Value == "Lumina" or options.NotifyStyle.Value == "Obsidian" then
+  if options.NotifyStyle.Value == "Obsidian" then
     library:Notify({ Title = "Entity detected", Description = val298, Time = 5 })
   else
     task.spawn(function()
@@ -10757,8 +9906,6 @@ runService.Heartbeat:Connect(function()
 end)
 
 AutoHide = { Last = tick(), ThreatConns = {} }
-KnobFarmConn = nil
-
 toggles.AutoClosetToggle:OnChanged(function(p207)
   if _AutoHideConnection then
     _AutoHideConnection:Disconnect()
@@ -10907,207 +10054,643 @@ localPlayer2.CharacterAdded:Connect(function()
   end
 end)
 
-obsidian2:SetFolder("moro/Data")
-obsidian2:SetLibrary(library)
 
-obsidian2.BuiltInThemes.moro = {
-  #obsidian2.BuiltInThemes + 1, {
-    FontColor = "ebebeb", MainColor = "0c0c0c", AccentColor = "ffc33f", BackgroundColor = "151518", OutlineColor = "28282a", BackgroundImage = "", }, }
+if moroWindow and moroWindow.AddSettingsTab then
+  moroWindow:AddSettingsTab()
+end
 
-pcall(function()
-  if not isfile(obsidian2.Folder .. "/themes/default.txt") then
-    writefile(obsidian2.Folder .. "/themes/default.txt", "moro")
+-- =====================================================================
+--                   AUTONOMOUS KNOB FARM ENGINE
+-- =====================================================================
+
+local KnobFarm = {
+  Active = false,
+  Thread = nil,
+  BodyVelocity = nil,
+  NoclipConn = nil,
+  CurrentTarget = nil,
+  Status = "Idle",
+  LootedObjects = {},
+  LastRoomNumber = nil,
+  OriginalGodmode = false,
+}
+
+local BlacklistedToolNames = {
+  ["Lighter"] = true, ["Flashlight"] = true, ["Lockpick"] = true, ["Vitamins"] = true,
+  ["Bandage"] = true, ["StarVial"] = true, ["StarBottle"] = true, ["StarJug"] = true,
+  ["Shakelight"] = true, ["Straplight"] = true, ["Bulklight"] = true, ["Battery"] = true,
+  ["Candle"] = true, ["Crucifix"] = true, ["CrucifixWall"] = true, ["Glowsticks"] = true,
+  ["SkeletonKey"] = true, ["Candy"] = true, ["ShieldMini"] = true, ["ShieldBig"] = true,
+  ["BandagePack"] = true, ["BatteryPack"] = true, ["RiftCandle"] = true, ["LaserPointer"] = true,
+  ["HolyGrenade"] = true, ["Shears"] = true, ["Smoothie"] = true, ["Cheese"] = true,
+  ["Bread"] = true, ["AlarmClock"] = true, ["RiftSmoothie"] = true, ["GweenSoda"] = true,
+  ["GlitchCube"] = true, ["Scanner"] = true, ["Bomb"] = true, ["Knockbomb"] = true,
+  ["Nanner"] = true, ["BigBomb"] = true, ["SnakeBox"] = true, ["GoldGun"] = true,
+  ["StopSign"] = true, ["TipJar"] = true, ["Lantern"] = true, ["LotusPetal"] = true,
+  ["Compass"] = true, ["LotusPetalPickup"] = true, ["LanternLitItem"] = true,
+  ["Multitool"] = true, ["RiftJar"] = true, ["AloeVera"] = true, ["Donut"] = true,
+  ["Lotus"] = true, ["BoxingGloves"] = true, ["Green_Herb"] = true, ["PaperPlane"] = true,
+  ["Pizza"] = true, ["FihFlakes"] = true, ["Leftovers"] = true, ["Briefcase"] = true,
+}
+
+local function IsBlacklistedItem(modelOrPart)
+  if not modelOrPart then return false end
+  local name = modelOrPart.Name
+  if BlacklistedToolNames[name] then return true end
+  if modelOrPart.Parent and BlacklistedToolNames[modelOrPart.Parent.Name] then return true end
+  return false
+end
+
+function KnobFarm.SetStatus(txt)
+  KnobFarm.Status = tostring(txt)
+  if Groupboxes.AutoFarm_Status and Groupboxes.AutoFarm_Status.SetText then
+    pcall(function() Groupboxes.AutoFarm_Status:SetText("Status: " .. tostring(txt)) end)
+  end
+end
+
+function KnobFarm.StartFlight()
+  if KnobFarm.BodyVelocity and KnobFarm.BodyVelocity.Parent then return end
+  local hrp = character and character:FindFirstChild("HumanoidRootPart")
+  if not hrp then return end
+
+  local bv = Instance.new("BodyVelocity")
+  bv.Name = "FarmBV"
+  bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+  bv.P = 1e5
+  bv.Velocity = Vector3.zero
+  bv.Parent = hrp
+  KnobFarm.BodyVelocity = bv
+
+  if not KnobFarm.NoclipConn then
+    KnobFarm.NoclipConn = runService.Stepped:Connect(function()
+      if character then
+        for _, part in ipairs(character:GetDescendants()) do
+          if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = false
+          end
+        end
+        if collisionPart then collisionPart.CanCollide = false end
+      end
+    end)
+  end
+end
+
+function KnobFarm.StopFlight()
+  if KnobFarm.BodyVelocity then
+    pcall(function() KnobFarm.BodyVelocity:Destroy() end)
+    KnobFarm.BodyVelocity = nil
+  end
+  if KnobFarm.NoclipConn then
+    KnobFarm.NoclipConn:Disconnect()
+    KnobFarm.NoclipConn = nil
+  end
+  if humanoid then
+    humanoid.PlatformStand = false
+  end
+end
+
+function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
+  if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
+  KnobFarm.StartFlight()
+
+  stopDist = stopDist or 3
+  local speed = customSpeed or (options.AutoFarmSpeed and options.AutoFarmSpeed.Value or 45)
+  maxTime = maxTime or 7
+  local startT = tick()
+
+  while toggles.AutoFarmEnabled.Value and not _Unloading do
+    if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+      return false
+    end
+    if tick() - startT > maxTime then
+      break
+    end
+
+    local currentPos = humanoidRootPart.Position
+    local delta = targetPos - currentPos
+    local dist = delta.Magnitude
+
+    if dist <= stopDist then
+      if KnobFarm.BodyVelocity then KnobFarm.BodyVelocity.Velocity = Vector3.zero end
+      return true
+    end
+
+    if KnobFarm.BodyVelocity then
+      KnobFarm.BodyVelocity.Velocity = delta.Unit * speed
+    end
+    task.wait()
+  end
+
+  if KnobFarm.BodyVelocity then KnobFarm.BodyVelocity.Velocity = Vector3.zero end
+  return false
+end
+
+function KnobFarm.PhaseThrough()
+  if not character or not humanoidRootPart then return end
+  pcall(function()
+    character:PivotTo(character:GetPivot() * CFrame.new(0, 0, 750))
+  end)
+  task.wait(0.15)
+end
+
+function KnobFarm.GetUnlootedContainers(room)
+  local list = {}
+  if not room then return list end
+
+  for _, obj in ipairs(room:GetDescendants()) do
+    if not KnobFarm.LootedObjects[obj] then
+      local name = obj.Name
+
+      if name == "GoldPile" or name == "StardustPickup" then
+        if not IsBlacklistedItem(obj) then
+          table.insert(list, { Type = "Gold", Object = obj, Pos = obj:GetPivot().Position })
+        end
+      elseif name == "DrawerContainer" or name == "ChestBox" or name == "Toolbox" then
+        if not IsBlacklistedItem(obj) then
+          table.insert(list, { Type = "Container", Object = obj, Pos = obj:GetPivot().Position })
+        end
+      end
+    end
+  end
+
+  return list
+end
+
+function KnobFarm.LootContainer(item)
+  local obj = item.Object
+  if not obj or not obj.Parent then return end
+  KnobFarm.LootedObjects[obj] = true
+
+  local targetPos = item.Pos
+  KnobFarm.SetStatus("Looting: " .. obj.Name)
+
+  KnobFarm.MoveTo(targetPos + Vector3.new(0, 1.5, 0), nil, 4, 3)
+
+  if item.Type == "Gold" then
+    local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and Functions.FirePrompt then
+      Functions.FirePrompt(prompt)
+    end
+    task.wait(0.1)
+
+  elseif item.Type == "Container" then
+    for _, prompt in ipairs(obj:GetDescendants()) do
+      if prompt:IsA("ProximityPrompt") then
+        local pName = prompt.Name
+        if not IsBlacklistedItem(prompt.Parent) and (pName == "Open" or pName == "ActivateEventPrompt" or prompt.ActionText:lower():find("open") or prompt.ActionText:lower():find("search")) then
+          if Functions.FirePrompt then
+            Functions.FirePrompt(prompt)
+          end
+        end
+      end
+    end
+    task.wait(0.2)
+
+    for _, child in ipairs(obj:GetDescendants()) do
+      if (child.Name == "GoldPile" or child.Name == "StardustPickup") and not KnobFarm.LootedObjects[child] then
+        KnobFarm.LootedObjects[child] = true
+        local p = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if p and Functions.FirePrompt then
+          Functions.FirePrompt(p)
+        end
+      end
+    end
+  end
+end
+
+function KnobFarm.HandleKeyAndDoor(room, door)
+  if not door then return end
+  local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
+
+  if lock then
+    local hasKey = character:FindFirstChild("Key") or (localPlayer2.Backpack and localPlayer2.Backpack:FindFirstChild("Key"))
+    if not hasKey then
+      local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
+      if keyObj then
+        KnobFarm.SetStatus("Collecting Key...")
+        local keyPos = keyObj:GetPivot().Position
+        KnobFarm.MoveTo(keyPos + Vector3.new(0, 1, 0), nil, 3, 5)
+        local prompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt and Functions.FirePrompt then
+          Functions.FirePrompt(prompt)
+        end
+        task.wait(0.25)
+      end
+    end
+
+    KnobFarm.SetStatus("Unlocking Door...")
+    local lockPos = lock:IsA("BasePart") and lock.Position or door:GetPivot().Position
+    KnobFarm.MoveTo(lockPos, nil, 3.5, 4)
+    local unlockPrompt = door:FindFirstChild("UnlockPrompt", true) or (lock:IsA("ProximityPrompt") and lock) or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if unlockPrompt and Functions.FirePrompt then
+      Functions.FirePrompt(unlockPrompt)
+    end
+    task.wait(0.3)
+  end
+end
+
+function KnobFarm.HandleGate(room)
+  local gate = room:FindFirstChild("Gate", true) or room:FindFirstChild("GateBars", true)
+  local lever = room:FindFirstChild("LeverForGate", true)
+
+  if gate and lever then
+    KnobFarm.SetStatus("Bypassing Gate...")
+    local gatePos = gate:GetPivot().Position
+    KnobFarm.MoveTo(gatePos, nil, 5, 4)
+
+    KnobFarm.PhaseThrough()
+    task.wait(0.15)
+
+    KnobFarm.SetStatus("Flipping Lever...")
+    local leverPos = lever:GetPivot().Position
+    KnobFarm.MoveTo(leverPos, nil, 3.5, 4)
+    local prompt = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and Functions.FirePrompt then
+      Functions.FirePrompt(prompt)
+    end
+    task.wait(0.2)
+  end
+end
+
+function KnobFarm.HandleSeek(room)
+  KnobFarm.SetStatus("Seek Chase: Flying High...")
+
+  local oldGodmode = toggles.Godmode and toggles.Godmode.Value
+  if oldGodmode then
+    toggles.Godmode:SetValue(false)
+  end
+
+  if toggles.BypassSeekObstructions then
+    toggles.BypassSeekObstructions:SetValue(true)
+  end
+
+  local door = room:FindFirstChild("Door")
+  if door then
+    local doorPos = door:GetPivot().Position
+    local highPos = Vector3.new(doorPos.X, humanoidRootPart.Position.Y + 7.5, doorPos.Z)
+    KnobFarm.MoveTo(highPos, (options.AutoFarmSpeed.Value or 45) + 5, 4, 8)
+    KnobFarm.MoveTo(doorPos, nil, 3, 3)
+  end
+
+  if oldGodmode then
+    toggles.Godmode:SetValue(true)
+  end
+end
+
+function KnobFarm.HandleRoom50(room)
+  KnobFarm.SetStatus("Room 50: Library...")
+
+  local function IsSafeFromFigure(targetPos, safeDist)
+    safeDist = safeDist or 35
+    local fig = Functions.GetNearestFigure and Functions.GetNearestFigure()
+    if fig and fig.PrimaryPart then
+      local dist = (fig.PrimaryPart.Position - targetPos).Magnitude
+      return dist >= safeDist, dist
+    end
+    return true, 999
+  end
+
+  task.wait(0.5)
+
+  local hasPaper = character:FindFirstChild("LibraryHintPaper")
+    or character:FindFirstChild("LibraryHintPaperHard")
+    or (localPlayer2.Backpack and (localPlayer2.Backpack:FindFirstChild("LibraryHintPaper") or localPlayer2.Backpack:FindFirstChild("LibraryHintPaperHard")))
+
+  if not hasPaper then
+    local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("LibraryPaper", true)
+    if paper then
+      local pPos = paper:GetPivot().Position
+      local safe = IsSafeFromFigure(pPos, 35)
+      if safe then
+        KnobFarm.SetStatus("Grabbing Library Paper...")
+        KnobFarm.MoveTo(pPos + Vector3.new(0, 1.5, 0), nil, 3, 5)
+        local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr and Functions.FirePrompt then
+          Functions.FirePrompt(pr)
+        end
+        task.wait(0.3)
+      end
+    end
+  end
+
+  local maxAttempts = 15
+  while toggles.AutoFarmEnabled.Value and not _Unloading and maxAttempts > 0 do
+    maxAttempts = maxAttempts - 1
+    local currentCode = Functions.GetLibraryCode and Functions.GetLibraryCode() or "_____"
+
+    if not currentCode:find("_") then
+      KnobFarm.SetStatus("Code Solved: " .. currentCode)
+      break
+    end
+
+    local books = {}
+    for _, b in ipairs(room:GetDescendants()) do
+      if b.Name == "LiveHintBook" and not KnobFarm.LootedObjects[b] then
+        local bPos = b:GetPivot().Position
+        local safe = IsSafeFromFigure(bPos, 35)
+        if safe then
+          table.insert(books, { Book = b, Pos = bPos, Dist = (humanoidRootPart.Position - bPos).Magnitude })
+        end
+      end
+    end
+
+    if #books == 0 then
+      KnobFarm.SetStatus("Waiting for Figure to move...")
+      local ceilingPos = humanoidRootPart.Position + Vector3.new(0, 10, 0)
+      KnobFarm.MoveTo(ceilingPos, 20, 2, 2)
+      task.wait(1.5)
+    else
+      table.sort(books, function(a, b) return a.Dist < b.Dist end)
+      local targetBook = books[1]
+      KnobFarm.LootedObjects[targetBook.Book] = true
+      KnobFarm.SetStatus("Collecting Book...")
+
+      KnobFarm.MoveTo(targetBook.Pos + Vector3.new(0, 1.5, 0), nil, 3, 5)
+      local pr = targetBook.Book:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if pr and Functions.FirePrompt then
+        Functions.FirePrompt(pr)
+      end
+      task.wait(0.3)
+    end
+  end
+
+  local padlock = room:FindFirstChild("Padlock", true)
+  if padlock then
+    KnobFarm.SetStatus("Waiting for safe moment at Padlock...")
+    local pPos = padlock:GetPivot().Position
+
+    local waitCount = 0
+    while toggles.AutoFarmEnabled.Value and waitCount < 30 do
+      waitCount = waitCount + 1
+      local safe = IsSafeFromFigure(pPos, 30)
+      if safe then break end
+      task.wait(1)
+    end
+
+    KnobFarm.SetStatus("Unlocking Padlock...")
+    KnobFarm.MoveTo(pPos, nil, 3.5, 5)
+
+    local finalCode = Functions.GetLibraryCode and Functions.GetLibraryCode()
+    if finalCode and not finalCode:find("_") and remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
+      remotesFolder2.PL:FireServer(finalCode)
+    else
+      if toggles.AutoUnlockPadlockToggle then toggles.AutoUnlockPadlockToggle:SetValue(true) end
+      if toggles.AutoLibraryBruteForce then toggles.AutoLibraryBruteForce:SetValue(true) end
+    end
+    task.wait(0.5)
+
+    local door51 = room:FindFirstChild("Door")
+    if door51 then
+      KnobFarm.MoveTo(door51:GetPivot().Position, nil, 3, 4)
+    end
+  end
+end
+
+function KnobFarm.HandleRoom100(room)
+  KnobFarm.SetStatus("Room 100: Electrical Room...")
+
+  local elKey = room:FindFirstChild("ElectricalKeyObtain", true) or room:FindFirstChild("KeyElectrical", true)
+  if elKey then
+    KnobFarm.SetStatus("Grabbing Electrical Key...")
+    KnobFarm.MoveTo(elKey:GetPivot().Position + Vector3.new(0, 1, 0), nil, 3, 5)
+    local pr = elKey:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pr and Functions.FirePrompt then
+      Functions.FirePrompt(pr)
+    end
+    task.wait(0.3)
+  end
+
+  local elDoor = room:FindFirstChild("ElectricalDoor", true) or room:FindFirstChild("ElectricalRoomDoor", true)
+  if elDoor then
+    local unlPrompt = elDoor:FindFirstChild("UnlockPrompt", true)
+    if unlPrompt then
+      KnobFarm.SetStatus("Unlocking Electrical Door...")
+      KnobFarm.MoveTo(elDoor:GetPivot().Position, nil, 3.5, 4)
+      if Functions.FirePrompt then Functions.FirePrompt(unlPrompt) end
+      task.wait(0.3)
+    end
+  end
+
+  KnobFarm.SetStatus("Collecting Fuses...")
+  local fuseCount = 0
+  for _, fuse in ipairs(room:GetDescendants()) do
+    if fuse.Name == "LiveBreakerPolePickup" or fuse.Name == "FuseObtain" then
+      if not KnobFarm.LootedObjects[fuse] then
+        KnobFarm.LootedObjects[fuse] = true
+        fuseCount = fuseCount + 1
+        KnobFarm.SetStatus("Fuse " .. fuseCount .. "/10...")
+        KnobFarm.MoveTo(fuse:GetPivot().Position + Vector3.new(0, 1, 0), nil, 3, 4)
+        local pr = fuse:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr and Functions.FirePrompt then
+          Functions.FirePrompt(pr)
+        end
+        task.wait(0.2)
+      end
+    end
+  end
+
+  local breaker = room:FindFirstChild("ElevatorBreaker", true)
+  if breaker then
+    KnobFarm.SetStatus("Solving Breaker Box...")
+    KnobFarm.MoveTo(breaker:GetPivot().Position, nil, 3.5, 5)
+
+    if toggles.AutoBreakerBox then
+      toggles.AutoBreakerBox:SetValue(true)
+    end
+
+    local pr = breaker:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pr and Functions.FirePrompt then
+      Functions.FirePrompt(pr)
+    end
+
+    local bWait = 0
+    while toggles.AutoFarmEnabled.Value and bWait < 20 do
+      bWait = bWait + 1
+      if val85 and val85.BreakerBoxFinishedNotified then
+        break
+      end
+      task.wait(1)
+    end
+  end
+
+  KnobFarm.SetStatus("Breaker complete! Flying to Elevator...")
+  local elevator = room:FindFirstChild("Elevator", true) or room:FindFirstChild("ElevatorDoor", true) or room:FindFirstChild("Door")
+  if elevator then
+    KnobFarm.MoveTo(elevator:GetPivot().Position, nil, 3, 6)
+    local pr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pr and Functions.FirePrompt then
+      Functions.FirePrompt(pr)
+    end
+  end
+end
+
+function KnobFarm.RunLoop()
+  while toggles.AutoFarmEnabled.Value and not _Unloading do
+    if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+      task.wait(1)
+      continue
+    end
+
+    local currentRoomsObj = workspace:FindFirstChild("CurrentRooms")
+    if not currentRoomsObj then
+      task.wait(1)
+      continue
+    end
+
+    local roomNum = (element2 and element2.Value) or (localPlayer2 and localPlayer2:GetAttribute("CurrentRoom")) or 0
+    local room = currentRoomsObj:FindFirstChild(tostring(roomNum))
+
+    if not room then
+      task.wait(0.5)
+      continue
+    end
+
+    if KnobFarm.LastRoomNumber ~= roomNum then
+      KnobFarm.LastRoomNumber = roomNum
+      KnobFarm.LootedObjects = {}
+      KnobFarm.SetStatus("Room " .. roomNum .. ": Exploring...")
+    end
+
+    if tonumber(roomNum) and tonumber(roomNum) >= 100 or room.Name == "100" then
+      if toggles.AutoFarmRunTo100.Value then
+        KnobFarm.HandleRoom100(room)
+      else
+        KnobFarm.SetStatus("Reached Room 100! Farm stopped.")
+        toggles.AutoFarmEnabled:SetValue(false)
+        break
+      end
+      task.wait(1)
+      continue
+    end
+
+    if tonumber(roomNum) == 50 or room.Name == "50" then
+      KnobFarm.HandleRoom50(room)
+      task.wait(1)
+      continue
+    end
+
+    local isSeek = room:FindFirstChild("Seek_Arm") or room:FindFirstChild("ChandelierObstruction")
+      or room:FindFirstChild("SeekFloodline") or room:FindFirstChild("SeekMoving")
+      or (room:GetAttribute("RawName") and tostring(room:GetAttribute("RawName")):find("Seek"))
+
+    if isSeek then
+      KnobFarm.HandleSeek(room)
+      task.wait(1)
+      continue
+    end
+
+    local gate = room:FindFirstChild("Gate", true)
+    local lever = room:FindFirstChild("LeverForGate", true)
+    if gate and lever then
+      KnobFarm.HandleGate(room)
+    end
+
+    if toggles.AutoFarmLootDrawers.Value then
+      local containers = KnobFarm.GetUnlootedContainers(room)
+      local maxLootPerRoom = 25
+      while #containers > 0 and maxLootPerRoom > 0 and toggles.AutoFarmEnabled.Value do
+        maxLootPerRoom = maxLootPerRoom - 1
+        table.sort(containers, function(a, b)
+          local da = (humanoidRootPart.Position - a.Pos).Magnitude
+          local db = (humanoidRootPart.Position - b.Pos).Magnitude
+          return da < db
+        end)
+
+        local closest = containers[1]
+        KnobFarm.LootContainer(closest)
+        task.wait(0.05)
+        containers = KnobFarm.GetUnlootedContainers(room)
+      end
+    end
+
+    local door = room:FindFirstChild("Door")
+    if door then
+      KnobFarm.HandleKeyAndDoor(room, door)
+
+      KnobFarm.SetStatus("Room " .. roomNum .. ": Entering Door...")
+      local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door:FindFirstChildWhichIsA("BasePart") or door
+      local dPos = doorPart:GetPivot().Position
+      KnobFarm.MoveTo(dPos, nil, 2.5, 5)
+
+      local waitRoom = tick()
+      while tick() - waitRoom < 4 do
+        local newRoom = (element2 and element2.Value) or (localPlayer2 and localPlayer2:GetAttribute("CurrentRoom"))
+        if newRoom and newRoom ~= roomNum then
+          break
+        end
+        task.wait(0.2)
+      end
+    else
+      task.wait(0.5)
+    end
+
+    task.wait(0.1)
+  end
+
+  KnobFarm.StopFlight()
+  KnobFarm.SetStatus("Idle")
+end
+
+toggles.AutoFarmEnabled:OnChanged(function(enabled)
+  if enabled then
+    KnobFarm.Active = true
+    if KnobFarm.Thread then task.cancel(KnobFarm.Thread) end
+    KnobFarm.Thread = task.spawn(KnobFarm.RunLoop)
+  else
+    KnobFarm.Active = false
+    KnobFarm.StopFlight()
+    if KnobFarm.Thread then
+      task.cancel(KnobFarm.Thread)
+      KnobFarm.Thread = nil
+    end
+    KnobFarm.SetStatus("Idle")
   end
 end)
 
-obsidian:SetFolder("moro/Configs")
-obsidian:SetLibrary(library)
-
-do
-  local val305 = {}
-
-  local function closureFactory2()
-    local val306 = { AddonInfo = nil, _queue = {} }
-
-    local element45 = {}
-
-    function element45.__index(object3, key16)
-      return function(p208, ...)
-        local val307 = { ... }
-
-        for i15 = 1, #val307 do
-          if type(val307[i15]) == "table" and val307[i15].Func then
-            val307[i15].Callback = val307[i15].Func
-            val307[i15].Func = nil
-            break
-          end
+-- Auto Play Again (7 seconds on Death or Win)
+local function SetupAutoPlayAgain()
+  local function onChar(char)
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then
+      hum.Died:Connect(function()
+        if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value and toggles.AutoFarmPlayAgain.Value then
+          KnobFarm.SetStatus("Dead! Restarting in 7s...")
+          task.delay(7, function()
+            if toggles.AutoFarmPlayAgain.Value then
+              pcall(function()
+                local playAgain = remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain")
+                if playAgain then
+                  playAgain:FireServer()
+                end
+              end)
+            end
+          end)
         end
-
-        table.insert(val306._queue, { method = key16, args = val307 })
-      end
+      end)
     end
-
-    val306.Groupbox = setmetatable({}, element45)
-    return val306
   end
 
-  local function iterate11()
-    for index77, value119 in ipairs(val305) do
-    end
+  if localPlayer2.Character then onChar(localPlayer2.Character) end
+  localPlayer2.CharacterAdded:Connect(onChar)
 
-    val305 = {}
-  end
-
-  val85.ClearAddonGroupboxes = iterate11
-  local userAddons
-
-  local function helper78()
-    if not userAddons then
-      return
-    end
-
-    iterate11()
-
-    if not isfolder or not makefolder or not listfiles or not readfile then
-      return
-    end
-
-    pcall(function()
-      if not isfolder("moro") then
-        makefolder("moro")
-      end
-
-      if not isfolder("moro/addons") then
-        makefolder("moro/addons")
+  local pGui = localPlayer2:FindFirstChildOfClass("PlayerGui")
+  if pGui then
+    pGui.DescendantAdded:Connect(function(desc)
+      if desc.Name == "GameOver" or desc.Name == "Death" then
+        if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value and toggles.AutoFarmPlayAgain.Value then
+          task.delay(7, function()
+            pcall(function()
+              local playAgain = remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain")
+              if playAgain then playAgain:FireServer() end
+            end)
+          end)
+        end
       end
     end)
-
-    if not isfolder("moro/addons") then
-      return
-    end
-
-    local moroAddons = listfiles("moro/addons")
-    local val308 = {}
-
-    for index78, value120 in ipairs(moroAddons) do
-      local match = value120:match("([^/\\]+)$")
-
-      if match and match:match("%.lua$") then
-        table.insert(val308, { path = value120, name = match })
-      end
-    end
-
-    if #val308 == 0 then
-      return
-    end
-
-    for index79, value121 in ipairs(val308) do
-      local val309, success25 = pcall(readfile, value121.path)
-
-      if val309 and success25 and success25 ~= "" then
-        local val310 = closureFactory2()
-
-        local val311, success26 = pcall(function()
-          local loader2 = loadstring([[
-local moro = ...
-local cheesy = moro
-]] .. success25)
-
-          if loader2 then
-            loader2(val310)
-          end
-        end)
-
-        if not val311 then
-          warn("[Addons] Error in " .. value121.name .. ": " .. tostring(success26))
-        end
-
-        if val310.AddonInfo then
-          local addonInfo = val310.AddonInfo
-          local title = addonInfo.Title or addonInfo.Name or value121.name
-          local val312, success27 = pcall(function() return userAddons:AddLeftGroupbox(title) end)
-
-          if val312 and success27 then
-            table.insert(val305, success27)
-
-            if addonInfo.Description and addonInfo.Description ~= "" then
-              success27:AddLabel({ Text = addonInfo.Description, DoesWrap = true })
-            end
-
-            for index80, value122 in ipairs(val310._queue) do
-              if success27[value122.method] then
-                pcall(success27[value122.method], success27, unpack(value122.args))
-              end
-            end
-          end
-        end
-      end
-    end
   end
-
-  RefreshAddons = function() end
-  element3.UserAddons = dummyTab
-  userAddons = dummyTab
 end
 
--- Add Lumina built-in native Settings Tab!
-if currentWindow and currentWindow.AddSettingsTab then
-  pcall(function() currentWindow:AddSettingsTab() end)
-end
-
-local addTab3 = dummyTab
-
-local menu = addTab3:AddLeftGroupbox("Menu")
-
-menu:AddToggle("ShowCustomCursor", {
-  Text = "Custom Cursor", Default = false, Callback = function(value123) library.ShowCustomCursor = value123 end, })
-
-menu:AddButton({
-  Text = "Test Notification", Tooltip = "Sends a test notification with the selected style and sound settings", Func = function()
-    val171.PlaySound()
-    library:Notify({ Title = "Test", Time = 5 })
-  end, })
-
-menu:AddLabel("Menu Keybind"):AddKeyPicker("MenuKeybind", {
-  Default = "RightShift", NoUI = true, Text = "Menu Keybind", })
-
-library.ToggleKeybind = options.MenuKeybind
-
-menu:AddDropdown("DPIScale", {
-  Text = "DPI Scale", Values = { "50%", "75%", "100%", "125%", "150%", "175%", "200%" }, Default = "100%", Callback = function(value124)
-    library:SetDPIScale(tonumber((value124:gsub("%%", ""))) or 100)
-  end, })
-
-menu:AddDivider()
-
-menu:AddDropdown("UILibrary", {
-  Text = "UI Library", Values = { "Obsidian", "Linoria" }, Default = uiLibrary == "Linoria" and 2 or 1, Callback = function(value125)
-    uiLibrary = value125
-
-    library:Notify({
-      Title = "UI Library", Description = "Re-execute the script to apply", Time = 5, })
-  end, })
-
-menu:AddDivider()
-
-menu:AddButton({
-  Text = "Refresh Addon List", Tooltip = "Reloads all .lua files from moro/addons", Func = function()
-    if RefreshAddons then
-      RefreshAddons()
-      library:Notify({ Title = "Addons", Description = "Addon list refreshed", Time = 3 })
-    end
-  end, })
-
-menu:AddButton({
-  Text = "Unload Script", Tooltip = "Completely unloads the script and cleans up everything", Func = function() library:Unload() end, })
-
-obsidian2:ApplyToGroupbox(menu)
-
-obsidian:SetIgnoreIndexes({ "MenuKeybind", "UILibrary" })
-obsidian:BuildConfigSection(addTab3)
-
-obsidian2:LoadDefault()
-obsidian:LoadAutoloadConfig()
+SetupAutoPlayAgain()
 
 if CurrentFloor == "Lobby" then
   for index81, value126 in ipairs({
@@ -11124,6 +10707,13 @@ local val313
 
 local function safeCall11()
   _Unloading = true
+
+  if KnobFarm and KnobFarm.StopFlight then
+    pcall(KnobFarm.StopFlight)
+  end
+  if KnobFarm and KnobFarm.Thread then
+    pcall(task.cancel, KnobFarm.Thread)
+  end
 
   pcall(onEvent2)
   pcall(helper40)
@@ -11231,16 +10821,6 @@ local function safeCall11()
   if _FloorConnection then
     _FloorConnection:Disconnect()
     _FloorConnection = nil
-  end
-
-  if KnobFarmConn then
-    KnobFarmConn:Disconnect()
-    KnobFarmConn = nil
-  end
-
-  if val85 then
-    val85.KnobFarmActive = false
-    val85.KnobFarmStarted = false
   end
 
   if val85 and val85.LobbyGuardConnection then
@@ -11552,13 +11132,10 @@ local function safeCall11()
     element3.Rooms:SetVisible(false)
   end
 
-  if element3.UserAddons then
-    element3.UserAddons:SetVisible(true)
-  end
 end
 
 getgenv().MoroUnload = safeCall11
-  getgenv().CheesyUnload = safeCall11
+getgenv().CheesyUnload = safeCall11
 
 library:OnUnload(function()
   _Unloading = true
@@ -11567,11 +11144,12 @@ library:OnUnload(function()
   getgenv().CheesyUnload = nil
 end)
 
-library.ScreenGui.Destroying:Once(function()
-  _Unloading = true
-  safeCall11()
-end)
-
+if library.ScreenGui then
+  library.ScreenGui.Destroying:Once(function()
+    _Unloading = true
+    safeCall11()
+  end)
+end
 do
   local connect29 = logService.MessageOut:Connect(function(p209)
     if p209 == "client teleporting" then
@@ -11591,15 +11169,11 @@ element3.FoolsHotel:SetVisible(false)
 
 library:Toggle(true)
 
-if val85.UILibrary == "Linoria" then
-  task.spawn(function()
-    task.wait(2)
-
-    library:Notify({
-      Title = "Linoria limitations", Description = "Linoria is very unstable, and all labels do not work. I recommend using obsidian if you're new, as everything is guaranteed to work", Time = 8, })
-  end)
-end
-
+library:Notify({
+  Title = "Loaded moro in " .. math.floor((tick() - LoadStart) * 1000) / 1000 .. " seconds",
+  Description = "MoroLumina UI Framework",
+  Time = 5,
+})
 if toggles.AutoInteract then
   pcall(function() toggles.AutoInteract:SetDisabled(not hasFirePrompt) end)
 end
@@ -11642,7 +11216,21 @@ end
 
 pcall(function() execName = RootEnv.identifyexecutor() end)
 
-print("==================================================")
-print("[Moro DOORS] All modules loaded, GUI is ready!")
-print("[Moro DOORS] Press RightShift to toggle menu!")
-print("==================================================")
+if hasFirePrompt and hasFireTouch and hasReplicateSignal and hasNetworkOwner and hasHookMeta then
+  library:Notify({
+    Title = "Yay", Description = "All features should work as all used functions are supported :D ("
+      .. tostring(execName) .. ")", Time = 5, })
+else
+  library:Notify({
+    Title = "Uh oh", Description = "Some features may not work as not all used functions are supported :( ("
+      .. tostring(execName) .. ")", Time = 5, })
+end
+
+pcall(function()
+  local strVal7 = string.lower(tostring(execName))
+
+  if strVal7:find("xeno", 1, true) or strVal7:find("solara", 1, true) then
+    library:Notify({
+      Title = "Executor not supported", Description = "Xeno and Solara are both very unstable and may/most likely will not work with the script, I advise using a better executor", Time = 10, })
+  end
+end)
