@@ -10056,6 +10056,46 @@ function KnobFarm.SetStatus(txt)
   end
 end
 
+local function HasLineOfSight(fromPos, toPos, ignoreList)
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  local filter = { character, workspace.CurrentCamera }
+  if ignoreList then
+    for _, item in ipairs(ignoreList) do table.insert(filter, item) end
+  end
+  rayParams.FilterDescendantsInstances = filter
+  rayParams.IgnoreWater = true
+
+  local dir = toPos - fromPos
+  local result = workspace:Raycast(fromPos, dir, rayParams)
+  if result and result.Instance then
+    if result.Instance.CanCollide and result.Instance.Transparency < 0.9 then
+      return false, result.Position
+    end
+  end
+  return true, toPos
+end
+
+local function HasLineOfSight(fromPos, toPos, ignoreList)
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  local filter = { character, workspace.CurrentCamera }
+  if ignoreList then
+    for _, item in ipairs(ignoreList) do table.insert(filter, item) end
+  end
+  rayParams.FilterDescendantsInstances = filter
+  rayParams.IgnoreWater = true
+
+  local dir = toPos - fromPos
+  local result = workspace:Raycast(fromPos, dir, rayParams)
+  if result and result.Instance then
+    if result.Instance.CanCollide and result.Instance.Transparency < 0.9 then
+      return false, result.Position
+    end
+  end
+  return true, toPos
+end
+
 function KnobFarm.StartFlight()
   if KnobFarm.BodyVelocity and KnobFarm.BodyVelocity.Parent then return end
   local hrp = character and character:FindFirstChild("HumanoidRootPart")
@@ -10068,29 +10108,12 @@ function KnobFarm.StartFlight()
   bv.Velocity = Vector3.zero
   bv.Parent = hrp
   KnobFarm.BodyVelocity = bv
-
-  if not KnobFarm.NoclipConn then
-    KnobFarm.NoclipConn = runService.Stepped:Connect(function()
-      if character then
-        for _, part in ipairs(character:GetDescendants()) do
-          if part:IsA("BasePart") and part.CanCollide then
-            part.CanCollide = false
-          end
-        end
-        if collisionPart then collisionPart.CanCollide = false end
-      end
-    end)
-  end
 end
 
 function KnobFarm.StopFlight()
   if KnobFarm.BodyVelocity then
     pcall(function() KnobFarm.BodyVelocity:Destroy() end)
     KnobFarm.BodyVelocity = nil
-  end
-  if KnobFarm.NoclipConn then
-    KnobFarm.NoclipConn:Disconnect()
-    KnobFarm.NoclipConn = nil
   end
   if humanoid then
     humanoid.PlatformStand = false
@@ -10101,24 +10124,89 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
   if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
   KnobFarm.StartFlight()
 
-  stopDist = stopDist or 3
+  stopDist = stopDist or 3.5
   local speed = customSpeed or (options.AutoFarmSpeed and options.AutoFarmSpeed.Value or 45)
-  maxTime = maxTime or 7
+  maxTime = maxTime or 12
   local startT = tick()
 
+  local hrp = humanoidRootPart
+  if not hrp then return false end
+
+  -- 1. Check if direct line-of-sight is completely clear and close
+  local distToTarget = (targetPos - hrp.Position).Magnitude
+  local clearSight = distToTarget < 12 and HasLineOfSight(hrp.Position, targetPos)
+
+  local waypoints = {}
+  if not clearSight then
+    -- Raycast down to find floor level near the target for pathfinding
+    local rayFloor = workspace:Raycast(targetPos + Vector3.new(0, 2, 0), Vector3.new(0, -30, 0))
+    local groundTarget = (rayFloor and rayFloor.Position) or targetPos
+
+    local path = pathfindingService:CreatePath({
+      AgentRadius = 2.0,
+      AgentHeight = 4.5,
+      AgentCanJump = true,
+      AgentCanClimb = false,
+      WaypointSpacing = 4,
+    })
+
+    local ok, _ = pcall(path.ComputeAsync, path, hrp.Position, groundTarget)
+    if ok and path.Status == Enum.PathStatus.Success then
+      waypoints = path:GetWaypoints()
+    end
+  end
+
+  -- 2. Follow pathfinding waypoints smoothly without hitting walls
+  if #waypoints > 1 then
+    for i = 2, #waypoints do
+      if not toggles.AutoFarmEnabled.Value or _Unloading or (tick() - startT > maxTime) then
+        break
+      end
+      if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+        return false
+      end
+
+      local wp = waypoints[i]
+      -- Fly at torso height above the waypoint to avoid floor friction
+      local wpPos = wp.Position + Vector3.new(0, 2, 0)
+      local wpStart = tick()
+
+      while toggles.AutoFarmEnabled.Value and not _Unloading do
+        if tick() - startT > maxTime or tick() - wpStart > 2.5 then
+          break -- Advance to next waypoint if taking too long
+        end
+
+        local curPos = humanoidRootPart.Position
+        local delta = wpPos - curPos
+        local d = delta.Magnitude
+
+        if d <= 3.5 then
+          break -- Arrived at waypoint
+        end
+
+        if KnobFarm.BodyVelocity then
+          KnobFarm.BodyVelocity.Velocity = delta.Unit * speed
+        end
+        task.wait()
+      end
+    end
+  end
+
+  -- 3. Final smooth approach directly to the target object
+  local finalStart = tick()
   while toggles.AutoFarmEnabled.Value and not _Unloading do
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       return false
     end
-    if tick() - startT > maxTime then
+    if tick() - startT > maxTime or tick() - finalStart > 4 then
       break
     end
 
-    local currentPos = humanoidRootPart.Position
-    local delta = targetPos - currentPos
-    local dist = delta.Magnitude
+    local curPos = humanoidRootPart.Position
+    local delta = targetPos - curPos
+    local d = delta.Magnitude
 
-    if dist <= stopDist then
+    if d <= stopDist then
       if KnobFarm.BodyVelocity then KnobFarm.BodyVelocity.Velocity = Vector3.zero end
       return true
     end
@@ -10130,7 +10218,7 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
   end
 
   if KnobFarm.BodyVelocity then KnobFarm.BodyVelocity.Velocity = Vector3.zero end
-  return false
+  return ((targetPos - humanoidRootPart.Position).Magnitude <= (stopDist + 2))
 end
 
 function KnobFarm.PhaseThrough()
