@@ -523,7 +523,10 @@ function library:CreateWindow(cfg)
 
     local winProxy = {
         _raw = MoroWindow,
+        _hasSettingsTab = false,
         AddSettingsTab = function(self)
+            if self._hasSettingsTab then return end
+            self._hasSettingsTab = true
             if MoroWindow and MoroWindow.AddSettingsTab then
                 MoroWindow:AddSettingsTab()
             end
@@ -984,10 +987,10 @@ local val83 = {
   Sunk = false,
   ActiveThreats = {},
   ThreatNames = {
-    RushMoving = true, Rush = true,
+    RushMoving = true, Rush = true, RushNew = true,
     AmbushMoving = true, Ambush = true,
     A60 = true, A60Moving = true, ["A-60"] = true,
-    A120 = true, ["A-120"] = true,
+    A120 = true, A120Moving = true, ["A-120"] = true,
     BackdoorRush = true, BlitzMoving = true, Blitz = true,
     ["RNIUSHCG=="] = true, GlitchRush = true,
     AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true,
@@ -1006,9 +1009,22 @@ local function HasActiveThreat()
   end
 
   for _, child in ipairs(workspace:GetChildren()) do
-    if val83.ThreatNames[child.Name] then
+    if val83.ThreatNames[child.Name] or child.Name:find("Rush") or child.Name:find("Ambush") or child.Name:find("Blitz") then
       val83.ActiveThreats[child] = true
       return true
+    end
+  end
+
+  local currentRooms = workspace:FindFirstChild("CurrentRooms")
+  if currentRooms then
+    for _, room in ipairs(currentRooms:GetChildren()) do
+      for _, threatName in ipairs({"RushMoving", "AmbushMoving", "A60", "A120", "BackdoorRush", "BlitzMoving"}) do
+        local found = room:FindFirstChild(threatName)
+        if found then
+          val83.ActiveThreats[found] = true
+          return true
+        end
+      end
     end
   end
 
@@ -1055,7 +1071,12 @@ local function helper8()
 end
 
 local function helper9(val84)
-  if not val84 or not val83.ThreatNames[val84.Name] then
+  if not val84 then
+    return
+  end
+
+  local name = val84.Name
+  if not val83.ThreatNames[name] and not name:find("Rush") and not name:find("Ambush") and not name:find("Blitz") then
     return
   end
 
@@ -5138,8 +5159,12 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
 
   if val155 and not val83.Sunk then
     if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
+      val83.PreSinkCFrame = humanoidRootPart.CFrame
       humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, -2.346, 0)
       humanoid.HipHeight = 0.05
+      if helper7() == 2 and not (toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value) then
+        humanoidRootPart.Anchored = true
+      end
       val83.Sunk = true
 
       if remotesFolder2 then
@@ -5154,7 +5179,15 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
 
   if not val155 and val83.Sunk then
     if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
-      humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 2.346, 0)
+      if helper7() == 2 and not (toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value) then
+        humanoidRootPart.Anchored = false
+      end
+      if val83.PreSinkCFrame then
+        humanoidRootPart.CFrame = val83.PreSinkCFrame
+        val83.PreSinkCFrame = nil
+      else
+        humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 2.346, 0)
+      end
       humanoid.HipHeight = 2.396
       val83.Sunk = false
     end
@@ -5226,7 +5259,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
       root4.C1 = val85.OriginalC1 * CFrame.new(0, val155 and -2.346 or 0, 0)
     end
 
-    local val156 = val155 and 2.328 or 0.18
+    local val156 = val155 and (val83.Sunk and -0.18 or 2.328) or 0.18
 
     if collision2 then
       collision2.Position = humanoidRootPart.Position + Vector3.new(0, val156, 0)
@@ -10122,11 +10155,6 @@ localPlayer2.CharacterAdded:Connect(function()
   end
 end)
 
-
-if moroWindow and moroWindow.AddSettingsTab then
-  moroWindow:AddSettingsTab()
-end
-
 -- =====================================================================
 --                   AUTONOMOUS KNOB FARM ENGINE
 -- =====================================================================
@@ -10377,7 +10405,7 @@ function KnobFarm.StartFlight()
   end
 
   if humanoid then
-    humanoid.PlatformStand = true
+    humanoid.PlatformStand = false
   end
 end
 
@@ -10395,8 +10423,133 @@ function KnobFarm.StopFlight()
   end
 end
 
+function KnobFarm.GetMainGame()
+  local pGui = localPlayer2 and localPlayer2:FindFirstChildOfClass("PlayerGui")
+  local mainUI = pGui and pGui:FindFirstChild("MainUI")
+  local initiator = mainUI and mainUI:FindFirstChild("Initiator")
+  local mainGame = initiator and initiator:FindFirstChild("Main_Game")
+  if mainGame then
+    local ok, mg = pcall(require, mainGame)
+    if ok and mg then
+      return mg
+    end
+  end
+  return nil
+end
+
+function KnobFarm.SetCrouched(shouldCrouch, force)
+  local isCurrentCrouched = (character and character:GetAttribute("Crouching")) == true
+  if not force and KnobFarm.CurrentCrouchState == shouldCrouch and isCurrentCrouched == shouldCrouch then
+    return
+  end
+  KnobFarm.CurrentCrouchState = shouldCrouch
+
+  -- 1. Main_Game client crouch (animations, camera, hitboxes)
+  pcall(function()
+    local mg = KnobFarm.GetMainGame()
+    if mg and type(mg.crouch) == "function" then
+      mg.crouch(shouldCrouch)
+    end
+  end)
+
+  -- 2. Character attribute
+  if character then
+    pcall(function()
+      character:SetAttribute("Crouching", shouldCrouch)
+    end)
+  end
+
+  -- 3. Crouch remote replication
+  pcall(function()
+    if remotesFolder2 and remotesFolder2:FindFirstChild("Crouch") then
+      remotesFolder2.Crouch:FireServer(shouldCrouch, true)
+    end
+  end)
+
+  -- 4. Humanoid state safety
+  if humanoid then
+    pcall(function()
+      humanoid.PlatformStand = false
+      if humanoid.Sit then
+        humanoid.Sit = false
+      end
+    end)
+  end
+end
+
+function KnobFarm.HandleThreat()
+  if not HasActiveThreat() then return false end
+
+  KnobFarm.SetStatus("Threat detected (Rush)! Safe underground...")
+  KnobFarm.StopFlight()
+
+  local hrp = character and character:FindFirstChild("HumanoidRootPart")
+  if not hrp then return false end
+
+  -- Determine floor level below current position
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  rayParams.FilterDescendantsInstances = { character, workspace.CurrentCamera }
+  rayParams.IgnoreWater = true
+
+  local floorRay = workspace:Raycast(hrp.Position, Vector3.new(0, -35, 0), rayParams)
+  local floorY = floorRay and floorRay.Position.Y or (hrp.Position.Y - 2.5)
+  local safeReturnPos = Vector3.new(hrp.Position.X, floorY + 2.0, hrp.Position.Z)
+  local buriedCFrame = CFrame.new(hrp.Position.X, floorY - 5.5, hrp.Position.Z)
+
+  hrp.CFrame = buriedCFrame
+  hrp.AssemblyLinearVelocity = Vector3.zero
+  hrp.AssemblyAngularVelocity = Vector3.zero
+  hrp.Anchored = true
+
+  if remotesFolder2 and remotesFolder2:FindFirstChild("Crouch") then
+    remotesFolder2.Crouch:FireServer(true, true)
+  end
+
+  -- Wait while threat is actively in workspace
+  while HasActiveThreat() and toggles.AutoFarmEnabled.Value and not _Unloading do
+    if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then break end
+    hrp.CFrame = buriedCFrame
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.Anchored = true
+    task.wait(0.15)
+  end
+
+  -- Safe buffer (Rush trail and Ambush rebound wait)
+  local bufferStart = tick()
+  local bufferTime = 2.5
+  while (tick() - bufferStart < bufferTime) and toggles.AutoFarmEnabled.Value and not _Unloading do
+    if HasActiveThreat() then
+      bufferStart = tick()
+      while HasActiveThreat() and toggles.AutoFarmEnabled.Value and not _Unloading do
+        if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then break end
+        hrp.CFrame = buriedCFrame
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.Anchored = true
+        task.wait(0.15)
+      end
+    end
+    task.wait(0.15)
+  end
+
+  -- Restore player above floor safely
+  if character and humanoidRootPart and humanoid and humanoid.Health > 0 then
+    hrp.Anchored = false
+    hrp.CFrame = CFrame.new(safeReturnPos)
+    KnobFarm.SetStatus("Threat cleared! Resuming farm...")
+    task.wait(0.2)
+    return true
+  end
+
+  return false
+end
+
 function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
+  if HasActiveThreat() then
+    KnobFarm.HandleThreat()
+    if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
+  end
   KnobFarm.StartFlight()
 
   stopDist = stopDist or 3.5
@@ -10433,6 +10586,11 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
       local lastPosT = tick()
 
       while toggles.AutoFarmEnabled.Value and not _Unloading do
+        if HasActiveThreat() then
+          KnobFarm.HandleThreat()
+          break
+        end
+
         if tick() - startT > maxTime or tick() - wpStart > 2.0 then
           break
         end
@@ -10471,6 +10629,11 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   local lastPosT = tick()
 
   while toggles.AutoFarmEnabled.Value and not _Unloading do
+    if HasActiveThreat() then
+      KnobFarm.HandleThreat()
+      break
+    end
+
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       return false
     end
@@ -10676,6 +10839,7 @@ function KnobFarm.HandleSeek(room)
 end
 
 function KnobFarm.HandleRoom50(room)
+  KnobFarm.SetCrouched(false, true)
   KnobFarm.SetStatus("Room 50: Library...")
 
   local function GetSafeCeilingPos()
@@ -10776,6 +10940,7 @@ function KnobFarm.HandleRoom50(room)
 end
 
 function KnobFarm.HandleRoom100(room)
+  KnobFarm.SetCrouched(false, true)
   KnobFarm.SetStatus("Room 100: Electrical Room...")
 
   local elKey = room:FindFirstChild("ElectricalKey", true) or room:FindFirstChild("Key", true)
@@ -10856,6 +11021,10 @@ end
 
 function KnobFarm.RunLoop()
   while toggles.AutoFarmEnabled.Value and not _Unloading do
+    if HasActiveThreat() then
+      KnobFarm.HandleThreat()
+    end
+
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       task.wait(1)
       continue
@@ -10885,6 +11054,7 @@ function KnobFarm.RunLoop()
     end
 
     if tonumber(roomNum) and tonumber(roomNum) >= 100 or room.Name == "100" then
+      KnobFarm.SetCrouched(false)
       if toggles.AutoFarmRunTo100.Value then
         KnobFarm.HandleRoom100(room)
       else
@@ -10897,10 +11067,14 @@ function KnobFarm.RunLoop()
     end
 
     if tonumber(roomNum) == 50 or room.Name == "50" then
+      KnobFarm.SetCrouched(false)
       KnobFarm.HandleRoom50(room)
       task.wait(1)
       continue
     end
+
+    -- In all other rooms (1-49, 51-99), keep the character sitting/crouched
+    KnobFarm.SetCrouched(true)
 
     local isSeek = room:FindFirstChild("Seek_Arm") or room:FindFirstChild("ChandelierObstruction")
       or room:FindFirstChild("SeekFloodline") or room:FindFirstChild("SeekMoving")
@@ -10922,6 +11096,9 @@ function KnobFarm.RunLoop()
       local containers = KnobFarm.GetUnlootedContainers(room)
       local maxLootPerRoom = 25
       while #containers > 0 and maxLootPerRoom > 0 and toggles.AutoFarmEnabled.Value do
+        if HasActiveThreat() then
+          KnobFarm.HandleThreat()
+        end
         maxLootPerRoom = maxLootPerRoom - 1
         table.sort(containers, function(a, b)
           local da = (humanoidRootPart.Position - a.Pos).Magnitude
@@ -10938,6 +11115,10 @@ function KnobFarm.RunLoop()
 
     local door = room:FindFirstChild("Door")
     if door then
+      if HasActiveThreat() then
+        KnobFarm.HandleThreat()
+      end
+
       -- 1. Disable collision on door so it never blocks us
       DisableDoorCollision(door)
 
@@ -10991,20 +11172,36 @@ function KnobFarm.RunLoop()
   end
 
   KnobFarm.StopFlight()
+  KnobFarm.SetCrouched(false, true)
   KnobFarm.SetStatus("Idle")
 end
 
 toggles.AutoFarmEnabled:OnChanged(function(enabled)
   if enabled then
     KnobFarm.Active = true
+    KnobFarm.OriginalGodmode = toggles.Godmode and toggles.Godmode.Value or false
+    if toggles.Godmode and not toggles.Godmode.Value then
+      toggles.Godmode:SetValue(true)
+    end
+    local curRoom = (element2 and element2.Value) or (localPlayer2 and localPlayer2:GetAttribute("CurrentRoom")) or 0
+    local curNum = tonumber(curRoom)
+    if curNum == 50 or (curNum and curNum >= 100) then
+      KnobFarm.SetCrouched(false, true)
+    else
+      KnobFarm.SetCrouched(true, true)
+    end
     if KnobFarm.Thread then task.cancel(KnobFarm.Thread) end
     KnobFarm.Thread = task.spawn(KnobFarm.RunLoop)
   else
     KnobFarm.Active = false
     KnobFarm.StopFlight()
+    KnobFarm.SetCrouched(false, true)
     if KnobFarm.Thread then
       task.cancel(KnobFarm.Thread)
       KnobFarm.Thread = nil
+    end
+    if toggles.Godmode and toggles.Godmode.Value ~= KnobFarm.OriginalGodmode then
+      toggles.Godmode:SetValue(KnobFarm.OriginalGodmode)
     end
     KnobFarm.SetStatus("Idle")
   end
@@ -11028,6 +11225,14 @@ local function SetupAutoPlayAgain()
               end)
             end
           end)
+        end
+      end)
+    end
+
+    if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value then
+      task.delay(1, function()
+        if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value and toggles.Godmode and not toggles.Godmode.Value then
+          toggles.Godmode:SetValue(true)
         end
       end)
     end
@@ -11073,6 +11278,9 @@ local function safeCall11()
 
   if KnobFarm and KnobFarm.StopFlight then
     pcall(KnobFarm.StopFlight)
+  end
+  if KnobFarm and KnobFarm.SetCrouched then
+    pcall(KnobFarm.SetCrouched, false, true)
   end
   if KnobFarm and KnobFarm.Thread then
     pcall(task.cancel, KnobFarm.Thread)
