@@ -981,8 +981,49 @@ local toggles = library.Toggles
 local options = library.Options
 
 local val83 = {
-  Sunk = false, ActiveThreats = {}, ThreatNames = {
-    RushMoving = true, Rush = true, AmbushMoving = true, Ambush = true, A60 = true, A60Moving = true, ["A-60"] = true, BackdoorRush = true, BlitzMoving = true, Blitz = true, ["RNIUSHCG=="] = true, GlitchRush = true, AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true, CustomEntity = true, BashMoving = true, }, }
+  Sunk = false,
+  ActiveThreats = {},
+  ThreatNames = {
+    RushMoving = true, Rush = true,
+    AmbushMoving = true, Ambush = true,
+    A60 = true, A60Moving = true, ["A-60"] = true,
+    A120 = true, ["A-120"] = true,
+    BackdoorRush = true, BlitzMoving = true, Blitz = true,
+    ["RNIUSHCG=="] = true, GlitchRush = true,
+    AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true,
+    CustomEntity = true, BashMoving = true, Bash = true,
+    DronesStampede = true, JeffTheKiller = true,
+  },
+}
+
+local function HasActiveThreat()
+  for threat, _ in pairs(val83.ActiveThreats) do
+    if threat and threat.Parent and threat:IsDescendantOf(workspace) then
+      return true
+    else
+      val83.ActiveThreats[threat] = nil
+    end
+  end
+
+  for _, child in ipairs(workspace:GetChildren()) do
+    if val83.ThreatNames[child.Name] then
+      val83.ActiveThreats[child] = true
+      return true
+    end
+  end
+
+  if rawget(_G, "Functions") or Functions then
+    local fn = rawget(_G, "Functions") or Functions
+    if fn and fn.GetNearestEntity then
+      local ok, nearest = pcall(fn.GetNearestEntity)
+      if ok and nearest and nearest.Parent then
+        return true
+      end
+    end
+  end
+
+  return false
+end
 
 local function helper7()
   local value6 = options.GodmodeMethod and options.GodmodeMethod.Value
@@ -1003,8 +1044,11 @@ local function helper8()
     return false
   end
 
-  if helper7() == 1 then
+  local method = helper7()
+  if method == 1 then
     return true
+  elseif method == 2 then
+    return HasActiveThreat()
   end
 
   return false
@@ -1021,9 +1065,16 @@ local function helper9(val84)
 
   val83.ActiveThreats[val84] = true
 
-  val84.AncestryChanged:Connect(function(p28, p29)
-    if not p29 then
-      val83.ActiveThreats[val84] = nil
+  pcall(function()
+    val84.AncestryChanged:Connect(function(p28, p29)
+      if not p29 or not val84:IsDescendantOf(workspace) then
+        val83.ActiveThreats[val84] = nil
+      end
+    end)
+    if val84.Destroying then
+      val84.Destroying:Connect(function()
+        val83.ActiveThreats[val84] = nil
+      end)
     end
   end)
 end
@@ -5597,7 +5648,7 @@ end
 toggles.InfiniteJumps:OnChanged(helper16)
 
 ESPCategories = {
-  Entities = {}, Doors = {}, Objectives = {}, Items = {}, Chests = {}, HidingSpots = {}, Ladders = {}, }
+  Entities = {}, Doors = {}, Keys = {}, Objectives = {}, Items = {}, Gold = {}, Chests = {}, HidingSpots = {}, Ladders = {}, }
 
 ESPBlacklist = {}
 ESPCleanup = {}
@@ -5609,7 +5660,7 @@ local function helper54(val164)
   end
 
   for index40, value58 in ipairs({
-    "Entities", "Doors", "Objectives", "Items", "Chests", "HidingSpots", "Ladders", }) do
+    "Entities", "Doors", "Keys", "Objectives", "Items", "Gold", "Chests", "HidingSpots", "Ladders", }) do
     local val165 = value58 .. "Tracers"
 
     if toggles[val165] and toggles[val165].Value and TableFind(ESPCategories[value58], val164) then
@@ -5722,10 +5773,10 @@ function FunctionGetDoorNumber(val168)
 end
 
 ESPToggleKeys = {
-  Entities = "EntitiesESP", Doors = "DoorsESP", Objectives = "ObjectivesESP", Items = "ItemsESP", Chests = "ChestsESP", HidingSpots = "HidingSpotsESP", Ladders = "LaddersESP", }
+  Entities = "EntitiesESP", Doors = "DoorsESP", Keys = "KeysESP", Objectives = "ObjectivesESP", Items = "ItemsESP", Gold = "GoldESP", Chests = "ChestsESP", HidingSpots = "HidingSpotsESP", Ladders = "LaddersESP", }
 
 local val169 = {
-  Entities = "EntitiesESPColor", Doors = "DoorsESPColor", Objectives = "ObjectivesESPColor", Items = "ItemsESPColor", Chests = "ChestsESPColor", HidingSpots = "HidingSpotsESPColor", Ladders = "LaddersESPColor", }
+  Entities = "EntitiesESPColor", Doors = "DoorsESPColor", Keys = "KeysESPColor", Objectives = "ObjectivesESPColor", Items = "ItemsESPColor", Gold = "GoldESPColor", Chests = "ChestsESPColor", HidingSpots = "HidingSpotsESPColor", Ladders = "LaddersESPColor", }
 
 function GetESPTarget(val170, p103)
   return val170
@@ -5735,11 +5786,21 @@ local val171 = {
   PlaySound = nil, ShowAchievement = nil, ActiveItem = 0, SoundAssets = nil, SoundInstance = nil, ActiveAchievement = nil, ActiveEntity = 0, }
 
 local function helper55(val173, val172, val174)
-  if not toggles[ESPToggleKeys[val172]].Value then
+  local isEnabled = toggles[ESPToggleKeys[val172]] and toggles[ESPToggleKeys[val172]].Value
+  if not isEnabled then
+    if val172 == "Keys" and toggles.ObjectivesESP and toggles.ObjectivesESP.Value then
+      isEnabled = true
+    elseif val172 == "Gold" and toggles.ItemsESP and toggles.ItemsESP.Value then
+      isEnabled = true
+    end
+  end
+
+  if not isEnabled then
     return
   end
 
-  local value59 = options[val169[val172]].Value
+  local colorOpt = options[val169[val172]]
+  local value59 = colorOpt and colorOpt.Value or (val172 == "Gold" and Color3.fromRGB(255, 215, 0) or (val172 == "Keys" and Color3.fromRGB(0, 191, 255) or (val172 == "Items" and Color3.fromRGB(170, 85, 255) or Color3.fromRGB(255, 255, 255))))
   local value60 = toggles.ESPShowText.Value and val174 or ""
   local object2 = GetESPTarget(val173, val172)
   local val175 = val173:GetAttribute("ParentRoom") ~= nil
@@ -5747,8 +5808,17 @@ local function helper55(val173, val172, val174)
 end
 
 local function iterate4(val176)
-  for index41, value61 in ipairs(ESPCategories[val176]) do
+  for index41, value61 in ipairs(ESPCategories[val176] or {}) do
     Functions.RemoveESP(GetESPTarget(value61, val176))
+  end
+  if val176 == "Items" and not (toggles.GoldESP and toggles.GoldESP.Value) then
+    for index41, value61 in ipairs(ESPCategories.Gold or {}) do
+      Functions.RemoveESP(GetESPTarget(value61, "Gold"))
+    end
+  elseif val176 == "Objectives" and not (toggles.KeysESP and toggles.KeysESP.Value) then
+    for index41, value61 in ipairs(ESPCategories.Keys or {}) do
+      Functions.RemoveESP(GetESPTarget(value61, "Keys"))
+    end
   end
 end
 
@@ -6072,11 +6142,18 @@ local function helper58(val180)
 
     return
   elseif name6 == "GoldPile" and val180:GetAttribute("GoldValue") then
-    val181 = "Items"
+    val181 = "Gold"
     locked = "Gold Pile [" .. val180:GetAttribute("GoldValue") .. "]"
   elseif name6 == "StardustPickup" then
     val181 = "Objectives"
     locked = "Stardust"
+  elseif (name6 == "SkeletonKey" or name6 == "IronKey" or name6 == "KeyIron" or name6 == "IronKeyForCrypt") and val180:FindFirstChild("ModulePrompt") then
+    val181 = "Keys"
+    locked = val103[name6] or "Key"
+
+    if not val180:IsDescendantOf(localPlayer2) and val180.Parent.Name ~= "Drops" then
+      helper56(locked, val180)
+    end
   elseif val103[name6] and val180:FindFirstChild("ModulePrompt") then
     val181 = "Items"
     locked = val103[name6]
@@ -6124,7 +6201,11 @@ local function helper58(val180)
     local val186 = {
       KeyObtain = "Key", ElectricalKeyObtain = "Electrical Key", MinesGenerator = "Generator", FuseObtain = "Fuse", LiveHintBook = "Book", LiveBreakerPolePickup = "Fuse Breaker", LibraryHintPaper = "Library Paper", PickupItem = "Hint Paper", CringlePresent = "Present", LeverForGate = "Gate Lever", MinesGateButton = "Gate Button", GardenGateButton = "Gate Button", MinesAnchor = "Anchor", WaterPump = "Water Pump", TimerLever = "Timer Lever", VineGuillotine = "Vine Guillotine", }
 
-    val181 = "Objectives"
+    if name6 == "KeyObtain" or name6 == "ElectricalKeyObtain" then
+      val181 = "Keys"
+    else
+      val181 = "Objectives"
+    end
     locked = val186[name6]
 
     if name6 == "KeyObtain" then
@@ -6190,6 +6271,20 @@ local function helper59(val187, val188)
     return "Door " .. (parentRoom2 and tostring(parentRoom2) or "")
   end
 
+  if val188 == "Gold" then
+    local gVal = val187:GetAttribute("GoldValue")
+    return gVal and ("Gold Pile [" .. tostring(gVal) .. "]") or "Gold"
+  end
+
+  if val188 == "Keys" then
+    local keyNames = {
+      KeyObtain = "Key", ElectricalKeyObtain = "Electrical Key",
+      KeyObtainFake = "Fake Key", SkeletonKey = "Skeleton Key",
+      IronKey = "Iron Key", KeyIron = "Iron Key", IronKeyForCrypt = "Iron Key"
+    }
+    return keyNames[name7] or "Key"
+  end
+
   if val188 == "Items" then
     return name7 == "Green_Herb" and "Green Herb" or val103[name7] or name7
   end
@@ -6223,7 +6318,7 @@ local function iterate5(val191)
   local value69 = val191 == "Entities" and options.EntitiesESPAllowed
     and options.EntitiesESPAllowed.Value
 
-  for index43, value70 in ipairs(ESPCategories[val191]) do
+  for index43, value70 in ipairs(ESPCategories[val191] or {}) do
     local val192 = true
 
     if value69 and next(value69) ~= nil then
@@ -6247,6 +6342,26 @@ local function iterate5(val191)
       end
     end
   end
+
+  if val191 == "Items" and (toggles.GoldESP and toggles.GoldESP.Value or toggles.ItemsESP and toggles.ItemsESP.Value) then
+    for index43, value70 in ipairs(ESPCategories.Gold or {}) do
+      local val193 = GetESPTarget(value70, "Gold")
+      if val193 then
+        local val194 = value70:GetAttribute("ParentRoom") ~= nil
+        local gColor = options.GoldESPColor and options.GoldESPColor.Value or Color3.fromRGB(255, 215, 0)
+        Functions.AddESP({ Object = val193, Text = value67 and helper59(value70, "Gold") or "", Color = gColor }, val194)
+      end
+    end
+  elseif val191 == "Objectives" and (toggles.KeysESP and toggles.KeysESP.Value or toggles.ObjectivesESP and toggles.ObjectivesESP.Value) then
+    for index43, value70 in ipairs(ESPCategories.Keys or {}) do
+      local val193 = GetESPTarget(value70, "Keys")
+      if val193 then
+        local val194 = value70:GetAttribute("ParentRoom") ~= nil
+        local kColor = options.KeysESPColor and options.KeysESPColor.Value or Color3.fromRGB(0, 191, 255)
+        Functions.AddESP({ Object = val193, Text = value67 and helper59(value70, "Keys") or "", Color = kColor }, val194)
+      end
+    end
+  end
 end
 
 local function helper60(val195, text3)
@@ -6254,7 +6369,16 @@ local function helper60(val195, text3)
   local val197 = val169[val195]
 
   local val198 = {
-    Entities = Color3.fromRGB(255, 0, 0), Doors = Color3.fromRGB(0, 255, 0), Objectives = Color3.fromRGB(121, 31, 255), Items = Color3.fromRGB(0, 200, 255), Chests = Color3.fromRGB(210, 150, 100), HidingSpots = Color3.fromRGB(255, 99, 225), Ladders = Color3.fromRGB(255, 255, 0), }
+    Entities = Color3.fromRGB(255, 0, 0),
+    Doors = Color3.fromRGB(0, 255, 0),
+    Keys = Color3.fromRGB(0, 191, 255),
+    Objectives = Color3.fromRGB(121, 31, 255),
+    Items = Color3.fromRGB(170, 85, 255),
+    Gold = Color3.fromRGB(255, 215, 0),
+    Chests = Color3.fromRGB(210, 150, 100),
+    HidingSpots = Color3.fromRGB(255, 99, 225),
+    Ladders = Color3.fromRGB(255, 255, 0),
+  }
 
   Groupboxes.Visuals_ESP:AddToggle(val196, { Text = text3, Default = false })
 
@@ -6290,8 +6414,10 @@ Groupboxes.Visuals_ESP:AddDropdown("EntitiesESPAllowed", {
     "Rush", "Ambush", "A-60", "A-120", "Eyes", "Lookman", "Figure", "Backdoor Rush", "Backdoor Lookman", "Groundskeeper", "Gloombat Swarm", "Glitch Rush", "Glitch Ambush", "Frozen Ambush", "Monument", "Jeff the Killer", "Sally", "Dupe", "Giggle", "Snare", "Gloombat Eggs", "Grumble", "Bash", "Drones", "Electric Puddle", "Teller", "Scribbles", "Noise", "Creak", }, Multi = true, AllowNull = true, Tooltip = "Only show ESP for selected entities (leave empty to show all)", })
 
 helper60("Doors", "Doors")
+helper60("Keys", "Keys")
 helper60("Objectives", "Objectives")
 helper60("Items", "Items")
+helper60("Gold", "Coins")
 helper60("Chests", "Chests")
 helper60("HidingSpots", "Hiding Spots")
 
@@ -9063,13 +9189,13 @@ end)
 Groupboxes.Visuals_Settings:AddToggle("ESPRainbow", { Text = "Rainbow ESP", Default = false })
 Groupboxes.Visuals_Settings:AddDivider()
 
-TracerCategories = { "Entities", "Doors", "Objectives", "Items", "Chests", "HidingSpots" }
+TracerCategories = { "Entities", "Doors", "Keys", "Objectives", "Items", "Gold", "Chests", "HidingSpots" }
 
 for index71, value108 in ipairs(TracerCategories) do
   local val274 = value108
   local val275 = val274 .. "Tracers"
   local val276 = ESPToggleKeys[val274]
-  local val277 = val274 == "HidingSpots" and "Hiding Spots" or val274
+  local val277 = val274 == "HidingSpots" and "Hiding Spots" or (val274 == "Gold" and "Coins" or val274)
   Groupboxes.Visuals_Settings:AddToggle(val275, { Text = val277 .. " Tracers", Default = false })
 
   toggles[val275]:OnChanged(function(p165)
@@ -10070,36 +10196,160 @@ local function HasLineOfSight(fromPos, toPos, ignoreList)
   return true, toPos
 end
 
+local function DisableDoorCollision(doorInstance)
+  if not doorInstance then return end
+  for _, part in ipairs(doorInstance:GetDescendants()) do
+    if part:IsA("BasePart") and (part.Name == "Door" or part.Name == "Hidden" or part.Name == "Collision") then
+      part.CanCollide = false
+    end
+  end
+end
+
+local function OpenDoorRemotes(doorInstance)
+  if not doorInstance then return end
+  local clientOpen = doorInstance:FindFirstChild("ClientOpen")
+  if clientOpen then
+    pcall(function()
+      if clientOpen:IsA("RemoteFunction") then
+        clientOpen:InvokeServer()
+      elseif clientOpen:IsA("RemoteEvent") then
+        clientOpen:FireServer()
+      end
+    end)
+  end
+
+  for _, pr in ipairs(doorInstance:GetDescendants()) do
+    if pr:IsA("ProximityPrompt") and Functions.FirePrompt then
+      Functions.FirePrompt(pr)
+    end
+  end
+end
+
 local function GetClearFlightVelocity(fromPos, targetDir, speed, filter)
   local rayParams = RaycastParams.new()
   rayParams.FilterType = Enum.RaycastFilterType.Exclude
   rayParams.FilterDescendantsInstances = filter
   rayParams.IgnoreWater = true
 
-  local checkDist = 4.0
+  local checkDist = 4.5
   local hit = workspace:Raycast(fromPos, targetDir * checkDist, rayParams)
   if not hit or not hit.Instance or not hit.Instance.CanCollide then
     return targetDir * speed
   end
 
-  -- Obstacle detected in front! Try steering angles (left, right, up)
-  local candidateAngles = {
-    CFrame.Angles(0, math.rad(45), 0),
-    CFrame.Angles(0, math.rad(-45), 0),
-    CFrame.Angles(0, math.rad(75), 0),
-    CFrame.Angles(0, math.rad(-75), 0),
-    CFrame.Angles(math.rad(30), 0, 0),
-  }
-
-  for _, rot in ipairs(candidateAngles) do
-    local altDir = (rot * targetDir).Unit
-    local altHit = workspace:Raycast(fromPos, altDir * checkDist, rayParams)
-    if not altHit or not altHit.Instance or not altHit.Instance.CanCollide then
-      return altDir * speed
+  -- Obstacle / wall detected in front!
+  local normal = hit.Normal
+  -- Calculate tangent velocity along the wall surface (Wall Sliding)
+  local slideDir = targetDir - (targetDir:Dot(normal) * normal)
+  if slideDir.Magnitude > 0.15 then
+    local slideHit = workspace:Raycast(fromPos, slideDir.Unit * checkDist, rayParams)
+    if not slideHit or not slideHit.Instance or not slideHit.Instance.CanCollide then
+      return slideDir.Unit * speed
     end
   end
 
-  return targetDir * speed
+  -- If tangent is blocked, slide perpendicular (left/right along wall)
+  local rightWall = normal:Cross(Vector3.yAxis).Unit
+  local leftWall = -rightWall
+
+  local firstChoice = (rightWall:Dot(targetDir) >= 0) and rightWall or leftWall
+  local secondChoice = (firstChoice == rightWall) and leftWall or rightWall
+
+  local h1 = workspace:Raycast(fromPos, firstChoice * checkDist, rayParams)
+  if not h1 or not h1.Instance or not h1.Instance.CanCollide then
+    return firstChoice * speed
+  end
+
+  local h2 = workspace:Raycast(fromPos, secondChoice * checkDist, rayParams)
+  if not h2 or not h2.Instance or not h2.Instance.CanCollide then
+    return secondChoice * speed
+  end
+
+  -- Last resort: lift up slightly above obstacle
+  local upDir = Vector3.new(0, 1, 0)
+  local hUp = workspace:Raycast(fromPos, upDir * 4, rayParams)
+  if not hUp or not hUp.Instance or not hUp.Instance.CanCollide then
+    return (targetDir + Vector3.new(0, 1.2, 0)).Unit * speed
+  end
+
+  return targetDir * (speed * 0.3)
+end
+
+local function ComputePathWaypoints(startPos, endPos, room)
+  local filter = { character, workspace.CurrentCamera }
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  rayParams.FilterDescendantsInstances = filter
+  rayParams.IgnoreWater = true
+
+  -- Raycast down to find floor level
+  local startFloor = workspace:Raycast(startPos + Vector3.new(0, 2, 0), Vector3.new(0, -60, 0), rayParams)
+  local navStart = startFloor and (startFloor.Position + Vector3.new(0, 1.2, 0)) or startPos
+
+  -- Determine floor level for destination:
+  -- In Doors, destination is often a drawer/table/counter.
+  -- Using startFloor Y level or raycasting with target model excluded gives the actual walkable floor!
+  local destFloor = workspace:Raycast(endPos + Vector3.new(0, 2, 0), Vector3.new(0, -60, 0), rayParams)
+  local floorY = (destFloor and destFloor.Position.Y) or (startFloor and startFloor.Position.Y) or (startPos.Y - 2.5)
+  local navDest = Vector3.new(endPos.X, floorY + 1.2, endPos.Z)
+
+  -- Offset destination slightly towards start so we land on walkable floor in front of furniture
+  local toDest = (navDest - navStart)
+  if toDest.Magnitude > 3.5 then
+    navDest = navDest - toDest.Unit * 2.0
+  end
+
+  -- Attempt 1: Standard agent size with jumping enabled (for door sills, steps, carpets)
+  local path = pathfindingService:CreatePath({
+    AgentRadius = 1.4,
+    AgentHeight = 3.0,
+    AgentCanJump = true,
+    AgentCanClimb = false,
+    WaypointSpacing = 3,
+    Costs = { Door = 1, StuckPart = 10 },
+  })
+
+  local ok, _ = pcall(path.ComputeAsync, path, navStart, navDest)
+  if ok and path.Status == Enum.PathStatus.Success then
+    local wps = path:GetWaypoints()
+    if #wps > 1 then return wps end
+  end
+
+  -- Attempt 2: Narrow agent size (for narrow Doors corridors, tight doorways)
+  local pathNarrow = pathfindingService:CreatePath({
+    AgentRadius = 0.8,
+    AgentHeight = 2.0,
+    AgentCanJump = true,
+    AgentCanClimb = false,
+    WaypointSpacing = 3,
+  })
+
+  local ok2, _ = pcall(pathNarrow.ComputeAsync, pathNarrow, navStart, navDest)
+  if ok2 and pathNarrow.Status == Enum.PathStatus.Success then
+    local wps = pathNarrow:GetWaypoints()
+    if #wps > 1 then return wps end
+  end
+
+  -- Attempt 3: Route via room center if moving within a room
+  if room and room:IsA("Model") then
+    local roomCenter = room:GetPivot().Position
+    local navCenter = Vector3.new(roomCenter.X, floorY + 1.2, roomCenter.Z)
+
+    local okC1, _ = pcall(pathNarrow.ComputeAsync, pathNarrow, navStart, navCenter)
+    if okC1 and pathNarrow.Status == Enum.PathStatus.Success then
+      local wpsCenter = pathNarrow:GetWaypoints()
+      local okC2, _ = pcall(pathNarrow.ComputeAsync, pathNarrow, navCenter, navDest)
+      if okC2 and pathNarrow.Status == Enum.PathStatus.Success then
+        local wpsDest = pathNarrow:GetWaypoints()
+        local merged = {}
+        for _, wp in ipairs(wpsCenter) do table.insert(merged, wp) end
+        for i = 2, #wpsDest do table.insert(merged, wpsDest[i]) end
+        if #merged > 1 then return merged end
+      end
+    end
+  end
+
+  return nil
 end
 
 function KnobFarm.StartFlight()
@@ -10145,7 +10395,7 @@ function KnobFarm.StopFlight()
   end
 end
 
-function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
+function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
   KnobFarm.StartFlight()
 
@@ -10158,40 +10408,16 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
   if not hrp then return false end
 
   local filter = { character, workspace.CurrentCamera }
-  local rayParams = RaycastParams.new()
-  rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  rayParams.FilterDescendantsInstances = filter
-  rayParams.IgnoreWater = true
-
-  -- 1. Check if direct line-of-sight is completely clear and close
   local distToTarget = (targetPos - hrp.Position).Magnitude
-  local clearSight = distToTarget < 12 and HasLineOfSight(hrp.Position, targetPos)
+  local clearSight = distToTarget < 14 and HasLineOfSight(hrp.Position, targetPos)
 
-  local waypoints = {}
+  local waypoints
   if not clearSight then
-    -- Project both positions down to walkable floor for PathfindingService
-    local startFloor = workspace:Raycast(hrp.Position, Vector3.new(0, -40, 0), rayParams)
-    local navStart = startFloor and (startFloor.Position + Vector3.new(0, 1, 0)) or hrp.Position
-
-    local destFloor = workspace:Raycast(targetPos + Vector3.new(0, 2, 0), Vector3.new(0, -40, 0), rayParams)
-    local navDest = destFloor and (destFloor.Position + Vector3.new(0, 1, 0)) or targetPos
-
-    local path = pathfindingService:CreatePath({
-      AgentRadius = 1.5,
-      AgentHeight = 3.5,
-      AgentCanJump = false,
-      AgentCanClimb = false,
-      WaypointSpacing = 3,
-    })
-
-    local ok, _ = pcall(path.ComputeAsync, path, navStart, navDest)
-    if ok and path.Status == Enum.PathStatus.Success then
-      waypoints = path:GetWaypoints()
-    end
+    waypoints = ComputePathWaypoints(hrp.Position, targetPos, targetRoom)
   end
 
-  -- 2. Follow pathfinding waypoints smoothly without hitting walls
-  if #waypoints > 1 then
+  -- Follow waypoints if a path was found
+  if waypoints and #waypoints > 1 then
     for i = 2, #waypoints do
       if not toggles.AutoFarmEnabled.Value or _Unloading or (tick() - startT > maxTime) then
         break
@@ -10201,12 +10427,13 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
       end
 
       local wp = waypoints[i]
-      -- Fly at torso height above the waypoint to avoid floor friction
       local wpPos = wp.Position + Vector3.new(0, 2.5, 0)
       local wpStart = tick()
+      local lastPos = humanoidRootPart.Position
+      local lastPosT = tick()
 
       while toggles.AutoFarmEnabled.Value and not _Unloading do
-        if tick() - startT > maxTime or tick() - wpStart > 2.5 then
+        if tick() - startT > maxTime or tick() - wpStart > 2.0 then
           break
         end
 
@@ -10215,6 +10442,14 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
         local d = delta.Magnitude
 
         if d <= 3.5 then
+          break
+        end
+
+        -- Anti-stuck: if stuck in a doorway/corner for 0.65s, advance to next waypoint
+        if (curPos - lastPos).Magnitude > 0.4 then
+          lastPos = curPos
+          lastPosT = tick()
+        elseif tick() - lastPosT > 0.65 then
           break
         end
 
@@ -10230,13 +10465,16 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
     end
   end
 
-  -- 3. Final smooth approach directly to the target object
+  -- Final smooth approach directly to target with wall sliding
   local finalStart = tick()
+  local lastPos = humanoidRootPart.Position
+  local lastPosT = tick()
+
   while toggles.AutoFarmEnabled.Value and not _Unloading do
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       return false
     end
-    if tick() - startT > maxTime or tick() - finalStart > 4 then
+    if tick() - startT > maxTime or tick() - finalStart > 3.5 then
       break
     end
 
@@ -10247,6 +10485,18 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime)
     if d <= stopDist then
       if KnobFarm.BodyVelocity then KnobFarm.BodyVelocity.Velocity = Vector3.zero end
       return true
+    end
+
+    if (curPos - lastPos).Magnitude > 0.4 then
+      lastPos = curPos
+      lastPosT = tick()
+    elseif tick() - lastPosT > 0.8 then
+      -- Stuck on target geometry, nudge slightly upwards
+      if KnobFarm.BodyVelocity then
+        KnobFarm.BodyVelocity.Velocity = Vector3.new(0, speed * 0.5, 0)
+      end
+      task.wait(0.15)
+      lastPosT = tick()
     end
 
     if KnobFarm.BodyVelocity then
@@ -10300,7 +10550,7 @@ function KnobFarm.GetUnlootedContainers(room)
   return list
 end
 
-function KnobFarm.LootContainer(item)
+function KnobFarm.LootContainer(item, room)
   local obj = item.Object
   if not obj or not obj.Parent then return end
   KnobFarm.LootedObjects[obj] = true
@@ -10308,7 +10558,7 @@ function KnobFarm.LootContainer(item)
   local targetPos = item.Pos
   KnobFarm.SetStatus("Looting: " .. obj.Name)
 
-  KnobFarm.MoveTo(targetPos + Vector3.new(0, 1.5, 0), nil, 4, 3)
+  KnobFarm.MoveTo(targetPos + Vector3.new(0, 1.5, 0), nil, 4, 3, room)
 
   if item.Type == "Gold" then
     local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -10353,7 +10603,7 @@ function KnobFarm.HandleKeyAndDoor(room, door)
       if keyObj then
         KnobFarm.SetStatus("Collecting Key...")
         local keyPos = keyObj:GetPivot().Position
-        KnobFarm.MoveTo(keyPos + Vector3.new(0, 1, 0), nil, 3, 5)
+        KnobFarm.MoveTo(keyPos + Vector3.new(0, 1, 0), nil, 3, 5, room)
         local prompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
         if prompt and Functions.FirePrompt then
           Functions.FirePrompt(prompt)
@@ -10362,9 +10612,15 @@ function KnobFarm.HandleKeyAndDoor(room, door)
       end
     end
 
+    -- Equip key tool if in backpack
+    if localPlayer2.Backpack and localPlayer2.Backpack:FindFirstChild("Key") and humanoid then
+      pcall(function() humanoid:EquipTool(localPlayer2.Backpack.Key) end)
+      task.wait(0.1)
+    end
+
     KnobFarm.SetStatus("Unlocking Door...")
     local lockPos = lock:IsA("BasePart") and lock.Position or door:GetPivot().Position
-    KnobFarm.MoveTo(lockPos, nil, 3.5, 4)
+    KnobFarm.MoveTo(lockPos, nil, 3.5, 4, room)
     local unlockPrompt = door:FindFirstChild("UnlockPrompt", true) or (lock:IsA("ProximityPrompt") and lock) or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
     if unlockPrompt and Functions.FirePrompt then
       Functions.FirePrompt(unlockPrompt)
@@ -10380,14 +10636,14 @@ function KnobFarm.HandleGate(room)
   if gate and lever then
     KnobFarm.SetStatus("Bypassing Gate...")
     local gatePos = gate:GetPivot().Position
-    KnobFarm.MoveTo(gatePos, nil, 5, 4)
+    KnobFarm.MoveTo(gatePos, nil, 5, 4, room)
 
     KnobFarm.PhaseThrough()
     task.wait(0.15)
 
     KnobFarm.SetStatus("Flipping Lever...")
     local leverPos = lever:GetPivot().Position
-    KnobFarm.MoveTo(leverPos, nil, 3.5, 4)
+    KnobFarm.MoveTo(leverPos, nil, 3.5, 4, room)
     local prompt = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
     if prompt and Functions.FirePrompt then
       Functions.FirePrompt(prompt)
@@ -10404,19 +10660,17 @@ function KnobFarm.HandleSeek(room)
     toggles.Godmode:SetValue(false)
   end
 
-  if toggles.BypassSeekObstructions then
-    toggles.BypassSeekObstructions:SetValue(true)
-  end
-
   local door = room:FindFirstChild("Door")
   if door then
+    DisableDoorCollision(door)
     local doorPos = door:GetPivot().Position
-    local highPos = Vector3.new(doorPos.X, humanoidRootPart.Position.Y + 7.5, doorPos.Z)
-    KnobFarm.MoveTo(highPos, (options.AutoFarmSpeed.Value or 45) + 5, 4, 8)
-    KnobFarm.MoveTo(doorPos, nil, 3, 3)
+    local highPos = Vector3.new(doorPos.X, humanoidRootPart.Position.Y + 8, doorPos.Z)
+
+    KnobFarm.MoveTo(highPos, (options.AutoFarmSpeed.Value or 45) + 5, 4, 8, room)
+    KnobFarm.MoveTo(doorPos + Vector3.new(0, 1, 0), nil, 3, 3, room)
   end
 
-  if oldGodmode then
+  if oldGodmode and toggles.Godmode then
     toggles.Godmode:SetValue(true)
   end
 end
@@ -10424,45 +10678,32 @@ end
 function KnobFarm.HandleRoom50(room)
   KnobFarm.SetStatus("Room 50: Library...")
 
-  local function IsSafeFromFigure(targetPos, safeDist)
-    safeDist = safeDist or 35
-    local fig = Functions.GetNearestFigure and Functions.GetNearestFigure()
-    if fig and fig.PrimaryPart then
-      local dist = (fig.PrimaryPart.Position - targetPos).Magnitude
-      return dist >= safeDist, dist
-    end
-    return true, 999
+  local function GetSafeCeilingPos()
+    local roomPivot = room:GetPivot().Position
+    return Vector3.new(roomPivot.X, roomPivot.Y + 14, roomPivot.Z)
   end
 
-  task.wait(0.5)
+  local ceilingPos = GetSafeCeilingPos()
 
-  local hasPaper = character:FindFirstChild("LibraryHintPaper")
-    or character:FindFirstChild("LibraryHintPaperHard")
-    or (localPlayer2.Backpack and (localPlayer2.Backpack:FindFirstChild("LibraryHintPaper") or localPlayer2.Backpack:FindFirstChild("LibraryHintPaperHard")))
-
-  if not hasPaper then
-    local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("LibraryPaper", true)
-    if paper then
-      local pPos = paper:GetPivot().Position
-      local safe = IsSafeFromFigure(pPos, 35)
-      if safe then
-        KnobFarm.SetStatus("Grabbing Library Paper...")
-        KnobFarm.MoveTo(pPos + Vector3.new(0, 1.5, 0), nil, 3, 5)
-        local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr and Functions.FirePrompt then
-          Functions.FirePrompt(pr)
-        end
-        task.wait(0.3)
-      end
+  local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("HintPaper", true)
+  if paper and not KnobFarm.LootedObjects[paper] then
+    KnobFarm.SetStatus("Grabbing Library Paper...")
+    local pPos = paper:GetPivot().Position
+    KnobFarm.MoveTo(pPos + Vector3.new(0, 1.5, 0), nil, 3, 5, room)
+    local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pr and Functions.FirePrompt then
+      Functions.FirePrompt(pr)
     end
+    KnobFarm.LootedObjects[paper] = true
+    task.wait(0.2)
   end
 
-  local maxAttempts = 15
-  while toggles.AutoFarmEnabled.Value and not _Unloading and maxAttempts > 0 do
-    maxAttempts = maxAttempts - 1
-    local currentCode = Functions.GetLibraryCode and Functions.GetLibraryCode() or "_____"
+  local booksCollected = 0
+  local currentCode = (options and options.LibraryPadlockCode and options.LibraryPadlockCode.Value) or ""
 
-    if not currentCode:find("_") then
+  while #currentCode < 5 and booksCollected < 8 and toggles.AutoFarmEnabled.Value and not _Unloading do
+    currentCode = (options and options.LibraryPadlockCode and options.LibraryPadlockCode.Value) or ""
+    if #currentCode == 5 and not currentCode:find("_") then
       KnobFarm.SetStatus("Code Solved: " .. currentCode)
       break
     end
@@ -10470,137 +10711,142 @@ function KnobFarm.HandleRoom50(room)
     local books = {}
     for _, b in ipairs(room:GetDescendants()) do
       if b.Name == "LiveHintBook" and not KnobFarm.LootedObjects[b] then
-        local bPos = b:GetPivot().Position
-        local safe = IsSafeFromFigure(bPos, 35)
-        if safe then
-          table.insert(books, { Book = b, Pos = bPos, Dist = (humanoidRootPart.Position - bPos).Magnitude })
-        end
+        table.insert(books, { Book = b, Pos = b:GetPivot().Position })
       end
     end
 
-    if #books == 0 then
-      KnobFarm.SetStatus("Waiting for Figure to move...")
-      local ceilingPos = humanoidRootPart.Position + Vector3.new(0, 10, 0)
-      KnobFarm.MoveTo(ceilingPos, 20, 2, 2)
-      task.wait(1.5)
-    else
-      table.sort(books, function(a, b) return a.Dist < b.Dist end)
-      local targetBook = books[1]
-      KnobFarm.LootedObjects[targetBook.Book] = true
-      KnobFarm.SetStatus("Collecting Book...")
+    if #books == 0 then break end
 
-      KnobFarm.MoveTo(targetBook.Pos + Vector3.new(0, 1.5, 0), nil, 3, 5)
-      local pr = targetBook.Book:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if pr and Functions.FirePrompt then
-        Functions.FirePrompt(pr)
+    local figure = workspace:FindFirstChild("FigureRig", true) or room:FindFirstChild("FigureRig", true)
+    if figure and figure:FindFirstChild("HumanoidRootPart") then
+      local fPos = figure.HumanoidRootPart.Position
+      if (fPos - humanoidRootPart.Position).Magnitude < 25 then
+        KnobFarm.SetStatus("Waiting for Figure to move...")
+        KnobFarm.MoveTo(ceilingPos, 20, 2, 2, room)
+        task.wait(1)
+        continue
       end
-      task.wait(0.3)
     end
+
+    local targetBook = books[1]
+    KnobFarm.LootedObjects[targetBook.Book] = true
+    KnobFarm.SetStatus("Collecting Book...")
+    KnobFarm.MoveTo(targetBook.Pos + Vector3.new(0, 1.5, 0), nil, 3, 5, room)
+    local p = targetBook.Book:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if p and Functions.FirePrompt then
+      Functions.FirePrompt(p)
+    end
+    booksCollected = booksCollected + 1
+    task.wait(0.2)
   end
 
   local padlock = room:FindFirstChild("Padlock", true)
   if padlock then
-    KnobFarm.SetStatus("Waiting for safe moment at Padlock...")
     local pPos = padlock:GetPivot().Position
-
-    local waitCount = 0
-    while toggles.AutoFarmEnabled.Value and waitCount < 30 do
-      waitCount = waitCount + 1
-      local safe = IsSafeFromFigure(pPos, 30)
-      if safe then break end
-      task.wait(1)
+    local figure = workspace:FindFirstChild("FigureRig", true) or room:FindFirstChild("FigureRig", true)
+    if figure and figure:FindFirstChild("HumanoidRootPart") then
+      local fPos = figure.HumanoidRootPart.Position
+      if (fPos - pPos).Magnitude < 30 then
+        KnobFarm.SetStatus("Waiting for safe moment at Padlock...")
+        KnobFarm.MoveTo(ceilingPos, 20, 2, 3, room)
+        local waitT = tick()
+        while tick() - waitT < 6 do
+          fPos = figure.HumanoidRootPart.Position
+          if (fPos - pPos).Magnitude >= 30 then break end
+          task.wait(0.5)
+        end
+      end
     end
 
     KnobFarm.SetStatus("Unlocking Padlock...")
-    KnobFarm.MoveTo(pPos, nil, 3.5, 5)
-
-    local finalCode = Functions.GetLibraryCode and Functions.GetLibraryCode()
+    KnobFarm.MoveTo(pPos, nil, 3.5, 5, room)
+    local finalCode = (options and options.LibraryPadlockCode and options.LibraryPadlockCode.Value) or ""
     if finalCode and not finalCode:find("_") and remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
       remotesFolder2.PL:FireServer(finalCode)
-    else
-      if toggles.AutoUnlockPadlockToggle then toggles.AutoUnlockPadlockToggle:SetValue(true) end
-      if toggles.AutoLibraryBruteForce then toggles.AutoLibraryBruteForce:SetValue(true) end
     end
     task.wait(0.5)
+  end
 
-    local door51 = room:FindFirstChild("Door")
-    if door51 then
-      KnobFarm.MoveTo(door51:GetPivot().Position, nil, 3, 4)
-    end
+  local door51 = room:FindFirstChild("Door")
+  if door51 then
+    DisableDoorCollision(door51)
+    OpenDoorRemotes(door51)
+    KnobFarm.MoveTo(door51:GetPivot().Position + Vector3.new(0, 1, 0), nil, 3, 4, room)
   end
 end
 
 function KnobFarm.HandleRoom100(room)
   KnobFarm.SetStatus("Room 100: Electrical Room...")
 
-  local elKey = room:FindFirstChild("ElectricalKeyObtain", true) or room:FindFirstChild("KeyElectrical", true)
-  if elKey then
+  local elKey = room:FindFirstChild("ElectricalKey", true) or room:FindFirstChild("Key", true)
+  if elKey and not KnobFarm.LootedObjects[elKey] then
     KnobFarm.SetStatus("Grabbing Electrical Key...")
-    KnobFarm.MoveTo(elKey:GetPivot().Position + Vector3.new(0, 1, 0), nil, 3, 5)
+    KnobFarm.MoveTo(elKey:GetPivot().Position + Vector3.new(0, 1, 0), nil, 3, 5, room)
     local pr = elKey:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pr and Functions.FirePrompt then
+      Functions.FirePrompt(pr)
+    end
+    KnobFarm.LootedObjects[elKey] = true
+    task.wait(0.2)
+  end
+
+  local elDoor = room:FindFirstChild("ElectricalDoor", true)
+  if elDoor then
+    DisableDoorCollision(elDoor)
+    KnobFarm.SetStatus("Unlocking Electrical Door...")
+    KnobFarm.MoveTo(elDoor:GetPivot().Position, nil, 3.5, 4, room)
+    local pr = elDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
     if pr and Functions.FirePrompt then
       Functions.FirePrompt(pr)
     end
     task.wait(0.3)
   end
 
-  local elDoor = room:FindFirstChild("ElectricalDoor", true) or room:FindFirstChild("ElectricalRoomDoor", true)
-  if elDoor then
-    local unlPrompt = elDoor:FindFirstChild("UnlockPrompt", true)
-    if unlPrompt then
-      KnobFarm.SetStatus("Unlocking Electrical Door...")
-      KnobFarm.MoveTo(elDoor:GetPivot().Position, nil, 3.5, 4)
-      if Functions.FirePrompt then Functions.FirePrompt(unlPrompt) end
-      task.wait(0.3)
-    end
-  end
-
   KnobFarm.SetStatus("Collecting Fuses...")
   local fuseCount = 0
   for _, fuse in ipairs(room:GetDescendants()) do
-    if fuse.Name == "LiveBreakerPolePickup" or fuse.Name == "FuseObtain" then
+    if fuse.Name == "Fuse" or fuse.Name == "FuseBoxItem" then
       if not KnobFarm.LootedObjects[fuse] then
         KnobFarm.LootedObjects[fuse] = true
         fuseCount = fuseCount + 1
         KnobFarm.SetStatus("Fuse " .. fuseCount .. "/10...")
-        KnobFarm.MoveTo(fuse:GetPivot().Position + Vector3.new(0, 1, 0), nil, 3, 4)
+        KnobFarm.MoveTo(fuse:GetPivot().Position + Vector3.new(0, 1, 0), nil, 3, 4, room)
         local pr = fuse:FindFirstChildWhichIsA("ProximityPrompt", true)
         if pr and Functions.FirePrompt then
           Functions.FirePrompt(pr)
         end
         task.wait(0.2)
+        if fuseCount >= 10 then break end
       end
     end
   end
 
-  local breaker = room:FindFirstChild("ElevatorBreaker", true)
+  local breaker = room:FindFirstChild("BreakerBox", true) or room:FindFirstChild("BreakerSwitch", true)
   if breaker then
     KnobFarm.SetStatus("Solving Breaker Box...")
-    KnobFarm.MoveTo(breaker:GetPivot().Position, nil, 3.5, 5)
-
-    if toggles.AutoBreakerBox then
-      toggles.AutoBreakerBox:SetValue(true)
-    end
-
+    KnobFarm.MoveTo(breaker:GetPivot().Position, nil, 3.5, 5, room)
     local pr = breaker:FindFirstChildWhichIsA("ProximityPrompt", true)
     if pr and Functions.FirePrompt then
       Functions.FirePrompt(pr)
     end
 
-    local bWait = 0
-    while toggles.AutoFarmEnabled.Value and bWait < 20 do
-      bWait = bWait + 1
-      if val85 and val85.BreakerBoxFinishedNotified then
-        break
-      end
-      task.wait(1)
+    if toggles and toggles.AutoBreakerBox and not toggles.AutoBreakerBox.Value then
+      toggles.AutoBreakerBox:SetValue(true)
+    end
+
+    local waitBreaker = tick()
+    while tick() - waitBreaker < 15 and toggles.AutoFarmEnabled.Value do
+      local complete = room:GetAttribute("BreakerComplete") or (breaker and breaker:GetAttribute("Solved"))
+      if complete then break end
+      task.wait(0.5)
     end
   end
 
   KnobFarm.SetStatus("Breaker complete! Flying to Elevator...")
   local elevator = room:FindFirstChild("Elevator", true) or room:FindFirstChild("ElevatorDoor", true) or room:FindFirstChild("Door")
   if elevator then
-    KnobFarm.MoveTo(elevator:GetPivot().Position, nil, 3, 6)
+    DisableDoorCollision(elevator)
+    KnobFarm.MoveTo(elevator:GetPivot().Position, nil, 3, 6, room)
     local pr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
     if pr and Functions.FirePrompt then
       Functions.FirePrompt(pr)
@@ -10628,6 +10874,9 @@ function KnobFarm.RunLoop()
       task.wait(0.5)
       continue
     end
+
+    -- Pre-disable door collisions across current room so pathfinding & flight are never blocked
+    DisableDoorCollision(room)
 
     if KnobFarm.LastRoomNumber ~= roomNum then
       KnobFarm.LastRoomNumber = roomNum
@@ -10681,7 +10930,7 @@ function KnobFarm.RunLoop()
         end)
 
         local closest = containers[1]
-        KnobFarm.LootContainer(closest)
+        KnobFarm.LootContainer(closest, room)
         task.wait(0.05)
         containers = KnobFarm.GetUnlootedContainers(room)
       end
@@ -10689,20 +10938,50 @@ function KnobFarm.RunLoop()
 
     local door = room:FindFirstChild("Door")
     if door then
+      -- 1. Disable collision on door so it never blocks us
+      DisableDoorCollision(door)
+
+      -- 2. Unlock door if locked
       KnobFarm.HandleKeyAndDoor(room, door)
 
-      KnobFarm.SetStatus("Room " .. roomNum .. ": Entering Door...")
+      -- 3. Approach door
+      KnobFarm.SetStatus("Room " .. roomNum .. ": Opening Door...")
       local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door:FindFirstChildWhichIsA("BasePart") or door
       local dPos = doorPart:GetPivot().Position
-      KnobFarm.MoveTo(dPos, nil, 2.5, 5)
+      KnobFarm.MoveTo(dPos, nil, 3.5, 5, room)
 
+      -- 4. Open door via remote and prompt
+      OpenDoorRemotes(door)
+      DisableDoorCollision(door)
+      task.wait(0.15)
+
+      -- 5. Fly THROUGH the doorway into the next room
+      KnobFarm.SetStatus("Room " .. roomNum .. ": Entering Next Room...")
+      local nextRoomNum = tostring(tonumber(roomNum) + 1)
+      local nextRoom = currentRoomsObj:FindFirstChild(nextRoomNum)
+
+      local throughTarget
+      if nextRoom then
+        local roomStart = nextRoom:FindFirstChild("RoomStart") or nextRoom:FindFirstChild("Door") or nextRoom:FindFirstChildWhichIsA("BasePart")
+        throughTarget = roomStart and roomStart:GetPivot().Position or (dPos + (nextRoom:GetPivot().Position - dPos).Unit * 12)
+      else
+        local roomCenter = room:GetPivot().Position
+        local dirOut = (dPos - roomCenter)
+        dirOut = Vector3.new(dirOut.X, 0, dirOut.Z).Unit
+        throughTarget = dPos + dirOut * 12 + Vector3.new(0, 1.5, 0)
+      end
+
+      -- Fly past the threshold into room N+1
+      KnobFarm.MoveTo(throughTarget, nil, 3.0, 4, room)
+
+      -- 6. Await room attribute update
       local waitRoom = tick()
       while tick() - waitRoom < 4 do
         local newRoom = (element2 and element2.Value) or (localPlayer2 and localPlayer2:GetAttribute("CurrentRoom"))
-        if newRoom and newRoom ~= roomNum then
+        if newRoom and tostring(newRoom) ~= tostring(roomNum) then
           break
         end
-        task.wait(0.2)
+        task.wait(0.15)
       end
     else
       task.wait(0.5)
