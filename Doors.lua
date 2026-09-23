@@ -1662,43 +1662,6 @@ else
   Greeting = "Good evening"
 end
 
-Groupboxes.HomeWelcome = element3.Home:AddLeftGroupbox("Welcome")
-
-Groupboxes.HomeWelcome:AddLabel({
-  Text = "<font size=\"28\">" .. Greeting .. ", " .. localPlayer2.Name .. "</font>", DoesWrap = true, })
-
-avatarImage = Groupboxes.HomeWelcome:AddImage("AvatarPreview", {
-  Image = "rbxasset://textures/ui/GuiImagePlaceholder.png", Height = 100, })
-
-avatarImage:SetVisible(false)
-
-local val88, success13 = pcall(function()
-  return players:GetUserThumbnailAsync(
-    localPlayer2.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420
-  )
-end)
-
-if val88 and success13 then
-  avatarImage:SetImage(success13)
-  avatarImage:SetVisible(true)
-else
-  local val89, success14 = pcall(function()
-    local jsonDecode2 = httpService:JSONDecode((game:HttpGet("https://thumbnails.roblox.com/workspace/users/avatar-headshot?userIds="
-      .. localPlayer2.UserId .. "&size=420x420&format=Png&isCircular=false")))
-
-    if jsonDecode2 and jsonDecode2.data and jsonDecode2.data[1] then
-      return jsonDecode2.data[1].imageUrl
-    end
-
-    return nil
-  end)
-
-  if val89 and success14 then
-    avatarImage:SetImage(success14)
-    avatarImage:SetVisible(true)
-  end
-end
-
 RootEnv = nil
 pcall(function() RootEnv = getfenv(0) end)
 
