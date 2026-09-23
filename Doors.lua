@@ -984,62 +984,8 @@ local toggles = library.Toggles
 local options = library.Options
 
 local val83 = {
-  Sunk = false,
-  ActiveThreats = {},
-  ThreatNames = {
-    RushMoving = true, Rush = true, RushNew = true,
-    AmbushMoving = true, Ambush = true,
-    A60 = true, A60Moving = true, ["A-60"] = true,
-    A120 = true, A120Moving = true, ["A-120"] = true,
-    BackdoorRush = true, BlitzMoving = true, Blitz = true,
-    ["RNIUSHCG=="] = true, GlitchRush = true,
-    AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true,
-    CustomEntity = true, BashMoving = true, Bash = true,
-    DronesStampede = true, JeffTheKiller = true,
-  },
-}
-
-local function HasActiveThreat()
-  for threat, _ in pairs(val83.ActiveThreats) do
-    if threat and threat.Parent and threat:IsDescendantOf(workspace) then
-      return true
-    else
-      val83.ActiveThreats[threat] = nil
-    end
-  end
-
-  for _, child in ipairs(workspace:GetChildren()) do
-    if val83.ThreatNames[child.Name] or child.Name:find("Rush") or child.Name:find("Ambush") or child.Name:find("Blitz") then
-      val83.ActiveThreats[child] = true
-      return true
-    end
-  end
-
-  local currentRooms = workspace:FindFirstChild("CurrentRooms")
-  if currentRooms then
-    for _, room in ipairs(currentRooms:GetChildren()) do
-      for _, threatName in ipairs({"RushMoving", "AmbushMoving", "A60", "A120", "BackdoorRush", "BlitzMoving"}) do
-        local found = room:FindFirstChild(threatName)
-        if found then
-          val83.ActiveThreats[found] = true
-          return true
-        end
-      end
-    end
-  end
-
-  if rawget(_G, "Functions") or Functions then
-    local fn = rawget(_G, "Functions") or Functions
-    if fn and fn.GetNearestEntity then
-      local ok, nearest = pcall(fn.GetNearestEntity)
-      if ok and nearest and nearest.Parent then
-        return true
-      end
-    end
-  end
-
-  return false
-end
+  Sunk = false, ActiveThreats = {}, ThreatNames = {
+    RushMoving = true, Rush = true, AmbushMoving = true, Ambush = true, A60 = true, A60Moving = true, ["A-60"] = true, BackdoorRush = true, BlitzMoving = true, Blitz = true, ["RNIUSHCG=="] = true, GlitchRush = true, AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true, CustomEntity = true, BashMoving = true, }, }
 
 local function helper7()
   local value6 = options.GodmodeMethod and options.GodmodeMethod.Value
@@ -1060,23 +1006,15 @@ local function helper8()
     return false
   end
 
-  local method = helper7()
-  if method == 1 then
+  if helper7() == 1 then
     return true
-  elseif method == 2 then
-    return HasActiveThreat()
   end
 
   return false
 end
 
 local function helper9(val84)
-  if not val84 then
-    return
-  end
-
-  local name = val84.Name
-  if not val83.ThreatNames[name] and not name:find("Rush") and not name:find("Ambush") and not name:find("Blitz") then
+  if not val84 or not val83.ThreatNames[val84.Name] then
     return
   end
 
@@ -1086,16 +1024,9 @@ local function helper9(val84)
 
   val83.ActiveThreats[val84] = true
 
-  pcall(function()
-    val84.AncestryChanged:Connect(function(p28, p29)
-      if not p29 or not val84:IsDescendantOf(workspace) then
-        val83.ActiveThreats[val84] = nil
-      end
-    end)
-    if val84.Destroying then
-      val84.Destroying:Connect(function()
-        val83.ActiveThreats[val84] = nil
-      end)
+  val84.AncestryChanged:Connect(function(p28, p29)
+    if not p29 then
+      val83.ActiveThreats[val84] = nil
     end
   end)
 end
@@ -5159,12 +5090,8 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
 
   if val155 and not val83.Sunk then
     if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
-      val83.PreSinkCFrame = humanoidRootPart.CFrame
       humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, -2.346, 0)
       humanoid.HipHeight = 0.05
-      if helper7() == 2 and not (toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value) then
-        humanoidRootPart.Anchored = true
-      end
       val83.Sunk = true
 
       if remotesFolder2 then
@@ -5179,15 +5106,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
 
   if not val155 and val83.Sunk then
     if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
-      if helper7() == 2 and not (toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value) then
-        humanoidRootPart.Anchored = false
-      end
-      if val83.PreSinkCFrame then
-        humanoidRootPart.CFrame = val83.PreSinkCFrame
-        val83.PreSinkCFrame = nil
-      else
-        humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 2.346, 0)
-      end
+      humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 2.346, 0)
       humanoid.HipHeight = 2.396
       val83.Sunk = false
     end
@@ -5259,7 +5178,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
       root4.C1 = val85.OriginalC1 * CFrame.new(0, val155 and -2.346 or 0, 0)
     end
 
-    local val156 = val155 and (val83.Sunk and -0.18 or 2.328) or 0.18
+    local val156 = val155 and 2.328 or 0.18
 
     if collision2 then
       collision2.Position = humanoidRootPart.Position + Vector3.new(0, val156, 0)
@@ -10477,79 +10396,8 @@ function KnobFarm.SetCrouched(shouldCrouch, force)
   end
 end
 
-function KnobFarm.HandleThreat()
-  if not HasActiveThreat() then return false end
-
-  KnobFarm.SetStatus("Threat detected (Rush)! Safe underground...")
-  KnobFarm.StopFlight()
-
-  local hrp = character and character:FindFirstChild("HumanoidRootPart")
-  if not hrp then return false end
-
-  -- Determine floor level below current position
-  local rayParams = RaycastParams.new()
-  rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  rayParams.FilterDescendantsInstances = { character, workspace.CurrentCamera }
-  rayParams.IgnoreWater = true
-
-  local floorRay = workspace:Raycast(hrp.Position, Vector3.new(0, -35, 0), rayParams)
-  local floorY = floorRay and floorRay.Position.Y or (hrp.Position.Y - 2.5)
-  local safeReturnPos = Vector3.new(hrp.Position.X, floorY + 2.0, hrp.Position.Z)
-  local buriedCFrame = CFrame.new(hrp.Position.X, floorY - 5.5, hrp.Position.Z)
-
-  hrp.CFrame = buriedCFrame
-  hrp.AssemblyLinearVelocity = Vector3.zero
-  hrp.AssemblyAngularVelocity = Vector3.zero
-  hrp.Anchored = true
-
-  if remotesFolder2 and remotesFolder2:FindFirstChild("Crouch") then
-    remotesFolder2.Crouch:FireServer(true, true)
-  end
-
-  -- Wait while threat is actively in workspace
-  while HasActiveThreat() and toggles.AutoFarmEnabled.Value and not _Unloading do
-    if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then break end
-    hrp.CFrame = buriedCFrame
-    hrp.AssemblyLinearVelocity = Vector3.zero
-    hrp.Anchored = true
-    task.wait(0.15)
-  end
-
-  -- Safe buffer (Rush trail and Ambush rebound wait)
-  local bufferStart = tick()
-  local bufferTime = 2.5
-  while (tick() - bufferStart < bufferTime) and toggles.AutoFarmEnabled.Value and not _Unloading do
-    if HasActiveThreat() then
-      bufferStart = tick()
-      while HasActiveThreat() and toggles.AutoFarmEnabled.Value and not _Unloading do
-        if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then break end
-        hrp.CFrame = buriedCFrame
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.Anchored = true
-        task.wait(0.15)
-      end
-    end
-    task.wait(0.15)
-  end
-
-  -- Restore player above floor safely
-  if character and humanoidRootPart and humanoid and humanoid.Health > 0 then
-    hrp.Anchored = false
-    hrp.CFrame = CFrame.new(safeReturnPos)
-    KnobFarm.SetStatus("Threat cleared! Resuming farm...")
-    task.wait(0.2)
-    return true
-  end
-
-  return false
-end
-
 function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
-  if HasActiveThreat() then
-    KnobFarm.HandleThreat()
-    if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
-  end
   KnobFarm.StartFlight()
 
   stopDist = stopDist or 3.5
@@ -10586,11 +10434,6 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
       local lastPosT = tick()
 
       while toggles.AutoFarmEnabled.Value and not _Unloading do
-        if HasActiveThreat() then
-          KnobFarm.HandleThreat()
-          break
-        end
-
         if tick() - startT > maxTime or tick() - wpStart > 2.0 then
           break
         end
@@ -10629,11 +10472,6 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   local lastPosT = tick()
 
   while toggles.AutoFarmEnabled.Value and not _Unloading do
-    if HasActiveThreat() then
-      KnobFarm.HandleThreat()
-      break
-    end
-
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       return false
     end
@@ -11021,10 +10859,6 @@ end
 
 function KnobFarm.RunLoop()
   while toggles.AutoFarmEnabled.Value and not _Unloading do
-    if HasActiveThreat() then
-      KnobFarm.HandleThreat()
-    end
-
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       task.wait(1)
       continue
@@ -11096,9 +10930,6 @@ function KnobFarm.RunLoop()
       local containers = KnobFarm.GetUnlootedContainers(room)
       local maxLootPerRoom = 25
       while #containers > 0 and maxLootPerRoom > 0 and toggles.AutoFarmEnabled.Value do
-        if HasActiveThreat() then
-          KnobFarm.HandleThreat()
-        end
         maxLootPerRoom = maxLootPerRoom - 1
         table.sort(containers, function(a, b)
           local da = (humanoidRootPart.Position - a.Pos).Magnitude
@@ -11115,10 +10946,6 @@ function KnobFarm.RunLoop()
 
     local door = room:FindFirstChild("Door")
     if door then
-      if HasActiveThreat() then
-        KnobFarm.HandleThreat()
-      end
-
       -- 1. Disable collision on door so it never blocks us
       DisableDoorCollision(door)
 
@@ -11180,6 +11007,10 @@ toggles.AutoFarmEnabled:OnChanged(function(enabled)
   if enabled then
     KnobFarm.Active = true
     KnobFarm.OriginalGodmode = toggles.Godmode and toggles.Godmode.Value or false
+    KnobFarm.OriginalGodmodeMethod = options.GodmodeMethod and options.GodmodeMethod.Value
+    if options.GodmodeMethod and options.GodmodeMethod.Value ~= "Always enabled" then
+      options.GodmodeMethod:SetValue("Always enabled")
+    end
     if toggles.Godmode and not toggles.Godmode.Value then
       toggles.Godmode:SetValue(true)
     end
@@ -11202,6 +11033,9 @@ toggles.AutoFarmEnabled:OnChanged(function(enabled)
     end
     if toggles.Godmode and toggles.Godmode.Value ~= KnobFarm.OriginalGodmode then
       toggles.Godmode:SetValue(KnobFarm.OriginalGodmode)
+    end
+    if options.GodmodeMethod and KnobFarm.OriginalGodmodeMethod and options.GodmodeMethod.Value ~= KnobFarm.OriginalGodmodeMethod then
+      options.GodmodeMethod:SetValue(KnobFarm.OriginalGodmodeMethod)
     end
     KnobFarm.SetStatus("Idle")
   end
@@ -11231,8 +11065,13 @@ local function SetupAutoPlayAgain()
 
     if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value then
       task.delay(1, function()
-        if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value and toggles.Godmode and not toggles.Godmode.Value then
-          toggles.Godmode:SetValue(true)
+        if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value then
+          if options.GodmodeMethod and options.GodmodeMethod.Value ~= "Always enabled" then
+            options.GodmodeMethod:SetValue("Always enabled")
+          end
+          if toggles.Godmode and not toggles.Godmode.Value then
+            toggles.Godmode:SetValue(true)
+          end
         end
       end)
     end
