@@ -10138,12 +10138,39 @@ local HidingSpotNames = {
   Rooms_Locker_Fridge = true, Bed = true, Double_Bed = true, CircularVent = true, Dumpster = true,
 }
 
+local function GetInstancePosition(inst)
+  if not inst then return nil end
+  if inst:IsA("BasePart") then
+    return inst.Position
+  elseif inst:IsA("Model") then
+    return inst:GetPivot().Position
+  elseif inst:IsA("Attachment") then
+    return inst.WorldPosition
+  else
+    local p = inst.Parent
+    while p and p ~= workspace do
+      if p:IsA("BasePart") then
+        return p.Position
+      elseif p:IsA("Model") then
+        return p:GetPivot().Position
+      elseif p:IsA("Attachment") then
+        return p.WorldPosition
+      end
+      p = p.Parent
+    end
+  end
+  return nil
+end
+
 local function IsBlacklistedItem(modelOrPart)
   if not modelOrPart then return false end
   local name = modelOrPart.Name
   if HidingSpotNames[name] or name:match("^HidingSpot%d+$") then return true end
   if modelOrPart.Parent and (HidingSpotNames[modelOrPart.Parent.Name] or modelOrPart.Parent.Name:match("^HidingSpot%d+$")) then return true end
   if name == "DoorFake" or name == "FakeDoor" or name == "GlitchCube" or name == "TrackLever" then return true end
+  if name:find("Crouch") or name:find("Luggage") then return true end
+  if modelOrPart.Parent and (modelOrPart.Parent.Name:find("Crouch") or modelOrPart.Parent.Name:find("Luggage")) then return true end
+  if modelOrPart:FindFirstAncestor("Luggage_Cart_Crouch") then return true end
   if modelOrPart.Parent and (modelOrPart.Parent.Name == "DoorFake" or modelOrPart.Parent.Name == "FakeDoor") then return true end
   if modelOrPart:GetAttribute("JeffShop") or (modelOrPart.Parent and modelOrPart.Parent:GetAttribute("JeffShop")) then return true end
   local drops = workspace:FindFirstChild("Drops")
@@ -10781,8 +10808,8 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
               if prompt:IsA("ProximityPrompt") and not KnobFarm.LootedPrompts[prompt] then
                 local pObj = prompt.Parent
                 if pObj and not IsBlacklistedItem(pObj) then
-                  local pPos = pObj:IsA("BasePart") and pObj.Position or pObj:GetPivot().Position
-                  if (pPos - curPos).Magnitude <= 10 then
+                  local pPos = GetInstancePosition(pObj)
+                  if pPos and (pPos - curPos).Magnitude <= 10 then
                     local aText = prompt.ActionText:lower()
                     local oText = prompt.ObjectText:lower()
                     local oName = pObj.Name:lower()
@@ -10919,24 +10946,33 @@ function KnobFarm.GetUnlootedContainers(room)
           isIgnored = true
         end
 
+        -- Crouch/hide/crawl obstacles (e.g. luggage carts)
+        if action:find("crouch") or action:find("crawl") or action:find("hide")
+          or pName:find("Crouch") or parentName:find("Crouch") or parentName:find("Luggage")
+          or (parent.Parent and (parent.Parent.Name:find("Crouch") or parent.Parent.Name:find("Luggage"))) then
+          isIgnored = true
+        end
+
         -- Everything else in a room is LOOT! (Drawers, chests, gold, items, pickups, keys, books, fuses)
         if not isIgnored then
-          seenPrompts[prompt] = true
-          local pos = parent:IsA("BasePart") and parent.Position or parent:GetPivot().Position
+          local pos = GetInstancePosition(parent)
+          if pos then
+            seenPrompts[prompt] = true
 
-          local isGold = (parentName == "GoldPile" or parentName == "TinyGold" or parentName == "Gold"
-            or action:find("gold") or objText:find("gold") or parent:GetAttribute("GoldValue"))
-          local isContainer = (parentName:find("Drawer") or parentName:find("Chest") or parentName:find("Desk")
-            or parentName:find("Box") or objText:find("drawer") or objText:find("chest") or action:find("open") or action:find("search"))
+            local isGold = (parentName == "GoldPile" or parentName == "TinyGold" or parentName == "Gold"
+              or action:find("gold") or objText:find("gold") or parent:GetAttribute("GoldValue"))
+            local isContainer = (parentName:find("Drawer") or parentName:find("Chest") or parentName:find("Desk")
+              or parentName:find("Box") or objText:find("drawer") or objText:find("chest") or action:find("open") or action:find("search"))
 
-          local lootType = isGold and "Gold" or (isContainer and "Container" or "Item")
+            local lootType = isGold and "Gold" or (isContainer and "Container" or "Item")
 
-          table.insert(list, {
-            Type = lootType,
-            Object = parent,
-            Prompt = prompt,
-            Pos = pos
-          })
+            table.insert(list, {
+              Type = lootType,
+              Object = parent,
+              Prompt = prompt,
+              Pos = pos
+            })
+          end
         end
       end
     end
@@ -10951,14 +10987,17 @@ function KnobFarm.GetUnlootedContainers(room)
         or obj:GetAttribute("GoldValue") then
         local pr = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
         if not pr or (pr and not seenPrompts[pr] and not KnobFarm.LootedPrompts[pr]) then
-          seenObjects[obj] = true
-          if pr then seenPrompts[pr] = true end
-          table.insert(list, {
-            Type = "Gold",
-            Object = obj,
-            Prompt = pr,
-            Pos = obj:IsA("BasePart") and obj.Position or obj:GetPivot().Position
-          })
+          local pos = GetInstancePosition(obj)
+          if pos then
+            seenObjects[obj] = true
+            if pr then seenPrompts[pr] = true end
+            table.insert(list, {
+              Type = "Gold",
+              Object = obj,
+              Prompt = pr,
+              Pos = pos
+            })
+          end
         end
       end
     end
@@ -11032,8 +11071,8 @@ function KnobFarm.LootContainer(item, room)
       for _, nearby in ipairs(room:GetDescendants()) do
         if (nearby.Name == "GoldPile" or nearby.Name == "TinyGold" or nearby.Name == "Gold" or nearby.Name == "StardustPickup" or val103[nearby.Name] or nearby:GetAttribute("GoldValue"))
           and not KnobFarm.LootedObjects[nearby] then
-          local pPos = nearby:IsA("BasePart") and nearby.Position or nearby:GetPivot().Position
-          if (pPos - targetPos).Magnitude <= 5.5 then
+          local pPos = GetInstancePosition(nearby)
+          if pPos and (pPos - targetPos).Magnitude <= 5.5 then
             KnobFarm.LootedObjects[nearby] = true
             local p = nearby:FindFirstChildWhichIsA("ProximityPrompt", true)
             if p then
@@ -11077,7 +11116,7 @@ function KnobFarm.HandleKeyAndDoor(room, door)
 
       if keyObj then
         KnobFarm.SetStatus("Collecting Key...")
-        local keyPos = keyObj:IsA("BasePart") and keyObj.Position or keyObj:GetPivot().Position
+        local keyPos = GetInstancePosition(keyObj) or (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
         local safeKeyPos = FindWalkableFloorNear(keyPos, room, 3.5) or keyPos
         KnobFarm.MoveTo(safeKeyPos, nil, 2.5, 6.0, room)
         local prompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -11097,7 +11136,7 @@ function KnobFarm.HandleKeyAndDoor(room, door)
     end
 
     KnobFarm.SetStatus("Unlocking Door...")
-    local lockPos = lock:IsA("BasePart") and lock.Position or door:GetPivot().Position
+    local lockPos = GetInstancePosition(lock) or (door and door:IsA("Model") and door:GetPivot().Position) or (lock:IsA("BasePart") and lock.Position)
     local safeLockPos = FindWalkableFloorNear(lockPos, room, 3.0) or lockPos
     KnobFarm.MoveTo(safeLockPos, nil, 2.5, 5.0, room)
     local unlockPrompt = door:FindFirstChild("UnlockPrompt", true)
