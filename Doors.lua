@@ -10195,12 +10195,17 @@ local function GetFloorY(pos, fallbackY, maxDown)
   local startY = (fallbackY or pos.Y) + 5
   local origin = Vector3.new(pos.X, startY, pos.Z)
   local params = RaycastParams.new()
-  params.FilterType = RaycastFilterType.Exclude
+  pcall(function()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+  end)
   local filter = {}
   local char = GetCharacter()
   if char then table.insert(filter, char) end
   params.FilterDescendantsInstances = filter
-  local res = workspace:Raycast(origin, Vector3.new(0, -maxDown, 0), params)
+  local res
+  pcall(function()
+    res = workspace:Raycast(origin, Vector3.new(0, -maxDown, 0), params)
+  end)
   if res and res.Position then
     return res.Position.Y
   end
