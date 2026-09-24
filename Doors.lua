@@ -985,7 +985,38 @@ local options = library.Options
 
 local val83 = {
   Sunk = false, ActiveThreats = {}, ThreatNames = {
-    RushMoving = true, Rush = true, AmbushMoving = true, Ambush = true, A60 = true, A60Moving = true, ["A-60"] = true, BackdoorRush = true, BlitzMoving = true, Blitz = true, ["RNIUSHCG=="] = true, GlitchRush = true, AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true, CustomEntity = true, BashMoving = true, }, }
+    RushMoving = true, Rush = true, AmbushMoving = true, Ambush = true, A60 = true, A60Moving = true, ["A-60"] = true, A120 = true, A120Moving = true, ["A-120"] = true, BackdoorRush = true, BlitzMoving = true, Blitz = true, ["RNIUSHCG=="] = true, GlitchRush = true, AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true, CustomEntity = true, BashMoving = true, }, }
+
+local function HasActiveThreat()
+  if val83 and val83.ActiveThreats then
+    for threat, active in pairs(val83.ActiveThreats) do
+      if active and threat and threat.Parent then
+        return true, threat
+      end
+    end
+  end
+
+  local threatCheckList = {
+    "RushMoving", "Rush", "AmbushMoving", "Ambush", "BlitzMoving", "Blitz",
+    "A60Moving", "A60", "A-60", "A120Moving", "A-120", "BackdoorRush",
+    "GlitchRush", "GlitchAmbush", "FrozenAmbush", "BashMoving"
+  }
+
+  for _, n in ipairs(threatCheckList) do
+    local obj = workspace:FindFirstChild(n)
+    if obj then return true, obj end
+  end
+
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms then
+    for _, n in ipairs(threatCheckList) do
+      local obj = curRooms:FindFirstChild(n, true)
+      if obj then return true, obj end
+    end
+  end
+
+  return false, nil
+end
 
 local function helper7()
   local value6 = options.GodmodeMethod and options.GodmodeMethod.Value
@@ -1006,8 +1037,16 @@ local function helper8()
     return false
   end
 
+  if KnobFarm and KnobFarm.ThreatGodmode then
+    return true
+  end
+
   if helper7() == 1 then
     return true
+  end
+
+  if helper7() == 2 then
+    return HasActiveThreat()
   end
 
   return false
@@ -10396,8 +10435,156 @@ function KnobFarm.SetCrouched(shouldCrouch, force)
   end
 end
 
+local function IsOnStairs(pos)
+  local filter = { character, workspace.CurrentCamera }
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  rayParams.FilterDescendantsInstances = filter
+  rayParams.IgnoreWater = true
+
+  local hit = workspace:Raycast(pos + Vector3.new(0, 1.5, 0), Vector3.new(0, -6.5, 0), rayParams)
+  if not hit or not hit.Instance then return false, hit end
+
+  local partName = hit.Instance.Name:lower()
+  local modelName = hit.Instance.Parent and hit.Instance.Parent.Name:lower() or ""
+  if partName:find("stair") or partName:find("step") or modelName:find("stair") or modelName:find("step") then
+    return true, hit
+  end
+
+  if hit.Normal.Y < 0.92 then
+    return true, hit
+  end
+
+  return false, hit
+end
+
+function KnobFarm.EnsureNotOnStairs()
+  local hrp = character and character:FindFirstChild("HumanoidRootPart")
+  if not hrp then return end
+
+  local onStairs, curHit = IsOnStairs(hrp.Position)
+  if not onStairs then
+    if curHit then
+      hrp.CFrame = CFrame.new(hrp.Position.X, curHit.Position.Y + 1.2, hrp.Position.Z)
+    end
+    return
+  end
+
+  KnobFarm.SetStatus("On stairs! Moving to flat floor...")
+  local look = hrp.CFrame.LookVector
+  local right = hrp.CFrame.RightVector
+
+  local testOffsets = {
+    look * 5,
+    -look * 5,
+    look * 8,
+    -look * 8,
+    right * 5,
+    -right * 5,
+    look * 12,
+    -look * 12,
+    right * 8,
+    -right * 8,
+  }
+
+  for _, offset in ipairs(testOffsets) do
+    local testPos = hrp.Position + offset
+    local isStairs, hit = IsOnStairs(testPos)
+    if not isStairs and hit and hit.Normal.Y >= 0.95 then
+      local targetFlat = Vector3.new(testPos.X, hit.Position.Y + 1.2, testPos.Z)
+      local t0 = tick()
+      while (hrp.Position - targetFlat).Magnitude > 0.8 and tick() - t0 < 0.4 do
+        if KnobFarm.BodyVelocity then
+          KnobFarm.BodyVelocity.Velocity = (targetFlat - hrp.Position).Unit * 25
+        end
+        task.wait()
+      end
+      hrp.CFrame = CFrame.new(targetFlat)
+      if KnobFarm.BodyVelocity then
+        KnobFarm.BodyVelocity.Velocity = Vector3.zero
+      end
+      break
+    end
+  end
+end
+
+function KnobFarm.CheckAndHandleThreat()
+  local hasThreat, threatObj = HasActiveThreat()
+  if not hasThreat then
+    return false
+  end
+
+  local hrp = character and character:FindFirstChild("HumanoidRootPart")
+  if not hrp or not humanoid or humanoid.Health <= 0 then
+    return false
+  end
+
+  KnobFarm.SetStatus("Threat detected! Stopping safely...")
+
+  -- 1. Stop movement immediately
+  if KnobFarm.BodyVelocity then
+    KnobFarm.BodyVelocity.Velocity = Vector3.zero
+  end
+
+  -- 2. "главное не на ступеньках лестницы" - Ensure we are NOT on stairs
+  KnobFarm.EnsureNotOnStairs()
+
+  -- Make sure character is crouched flat on the floor
+  KnobFarm.SetCrouched(true, true)
+
+  -- 3. Remember if Godmode was already turned on by the user
+  local userHadGodmode = toggles.Godmode and toggles.Godmode.Value or false
+
+  -- 4. Enable Godmode
+  KnobFarm.ThreatGodmode = true
+  if toggles.Godmode and not toggles.Godmode.Value then
+    toggles.Godmode:SetValue(true)
+  end
+
+  KnobFarm.SetStatus("Monster active! Godmode ON, waiting...")
+
+  -- 5. Wait for the monster to disappear
+  while HasActiveThreat() and toggles.AutoFarmEnabled.Value and not _Unloading do
+    if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+      break
+    end
+    task.wait(0.1)
+  end
+
+  -- Safe buffer for Rush trail / Ambush rebound
+  local bufferStart = tick()
+  while (tick() - bufferStart < 1.5) and toggles.AutoFarmEnabled.Value and not _Unloading do
+    if HasActiveThreat() then
+      bufferStart = tick()
+      while HasActiveThreat() and toggles.AutoFarmEnabled.Value and not _Unloading do
+        if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+          break
+        end
+        task.wait(0.1)
+      end
+    end
+    task.wait(0.1)
+  end
+
+  -- 6. "выключает годмод и летит дальше"
+  KnobFarm.ThreatGodmode = false
+  if toggles.Godmode and not userHadGodmode then
+    toggles.Godmode:SetValue(false)
+  end
+
+  KnobFarm.SetStatus("Monster gone! Resuming farm...")
+  task.wait(0.2)
+  return true
+end
+
 function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   if not toggles.AutoFarmEnabled.Value or _Unloading then return false end
+  if HasActiveThreat() then
+    KnobFarm.CheckAndHandleThreat()
+    if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+      return false
+    end
+  end
   KnobFarm.StartFlight()
 
   stopDist = stopDist or 3.5
@@ -10409,6 +10596,13 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   if not hrp then return false end
 
   local filter = { character, workspace.CurrentCamera }
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  rayParams.FilterDescendantsInstances = filter
+  rayParams.IgnoreWater = true
+
+  local targetHeight = (KnobFarm.CurrentCrouchState and 1.2 or 2.6)
+
   local distToTarget = (targetPos - hrp.Position).Magnitude
   local clearSight = distToTarget < 14 and HasLineOfSight(hrp.Position, targetPos)
 
@@ -10428,21 +10622,29 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
       end
 
       local wp = waypoints[i]
-      local wpPos = wp.Position + Vector3.new(0, 2.5, 0)
+      local wpPos = Vector3.new(wp.Position.X, wp.Position.Y, wp.Position.Z)
       local wpStart = tick()
       local lastPos = humanoidRootPart.Position
       local lastPosT = tick()
 
       while toggles.AutoFarmEnabled.Value and not _Unloading do
+        if HasActiveThreat() then
+          KnobFarm.CheckAndHandleThreat()
+          if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+            return false
+          end
+        end
+
         if tick() - startT > maxTime or tick() - wpStart > 2.0 then
           break
         end
 
         local curPos = humanoidRootPart.Position
         local delta = wpPos - curPos
-        local d = delta.Magnitude
+        local horizDelta = Vector3.new(delta.X, 0, delta.Z)
+        local horizDist = horizDelta.Magnitude
 
-        if d <= 3.5 then
+        if horizDist <= 3.0 then
           break
         end
 
@@ -10454,12 +10656,21 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
           break
         end
 
+        -- Floor clamping: always stay pressed to the floor
+        local floorRay = workspace:Raycast(curPos + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), rayParams)
+        local floorY = floorRay and floorRay.Position.Y or (curPos.Y - targetHeight)
+        local desiredY = floorY + targetHeight
+        local yDiff = desiredY - curPos.Y
+        local vy = math.clamp(yDiff * 25, -speed, speed)
+
+        local horizDir = horizDist > 0.05 and horizDelta.Unit or Vector3.zero
+        local clearHoriz = GetClearFlightVelocity(curPos, horizDir, speed, filter)
+
         if KnobFarm.BodyVelocity then
-          local clearVel = GetClearFlightVelocity(curPos, delta.Unit, speed, filter)
-          KnobFarm.BodyVelocity.Velocity = clearVel
+          KnobFarm.BodyVelocity.Velocity = Vector3.new(clearHoriz.X, vy, clearHoriz.Z)
         end
-        if KnobFarm.BodyGyro and delta.Magnitude > 0.5 then
-          KnobFarm.BodyGyro.CFrame = CFrame.lookAt(curPos, curPos + Vector3.new(delta.X, 0, delta.Z))
+        if KnobFarm.BodyGyro and horizDist > 0.5 then
+          KnobFarm.BodyGyro.CFrame = CFrame.lookAt(curPos, curPos + Vector3.new(horizDir.X, 0, horizDir.Z))
         end
         task.wait()
       end
@@ -10471,7 +10682,18 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
   local lastPos = humanoidRootPart.Position
   local lastPosT = tick()
 
+  local destFloorRay = workspace:Raycast(targetPos + Vector3.new(0, 2, 0), Vector3.new(0, -25, 0), rayParams)
+  local destFloorY = destFloorRay and destFloorRay.Position.Y or (targetPos.Y - targetHeight)
+  local targetNavPos = Vector3.new(targetPos.X, destFloorY + targetHeight, targetPos.Z)
+
   while toggles.AutoFarmEnabled.Value and not _Unloading do
+    if HasActiveThreat() then
+      KnobFarm.CheckAndHandleThreat()
+      if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
+        return false
+      end
+    end
+
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       return false
     end
@@ -10480,10 +10702,11 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
     end
 
     local curPos = humanoidRootPart.Position
-    local delta = targetPos - curPos
-    local d = delta.Magnitude
+    local delta = targetNavPos - curPos
+    local horizDelta = Vector3.new(delta.X, 0, delta.Z)
+    local horizDist = horizDelta.Magnitude
 
-    if d <= stopDist then
+    if horizDist <= stopDist and math.abs(delta.Y) <= 3.0 then
       if KnobFarm.BodyVelocity then KnobFarm.BodyVelocity.Velocity = Vector3.zero end
       return true
     end
@@ -10492,20 +10715,28 @@ function KnobFarm.MoveTo(targetPos, customSpeed, stopDist, maxTime, targetRoom)
       lastPos = curPos
       lastPosT = tick()
     elseif tick() - lastPosT > 0.8 then
-      -- Stuck on target geometry, nudge slightly upwards
       if KnobFarm.BodyVelocity then
-        KnobFarm.BodyVelocity.Velocity = Vector3.new(0, speed * 0.5, 0)
+        KnobFarm.BodyVelocity.Velocity = Vector3.new(0, 15, 0)
       end
-      task.wait(0.15)
+      task.wait(0.12)
       lastPosT = tick()
     end
 
+    -- Floor clamping: always stay pressed to the floor
+    local floorRay = workspace:Raycast(curPos + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), rayParams)
+    local floorY = floorRay and floorRay.Position.Y or (curPos.Y - targetHeight)
+    local desiredY = floorY + targetHeight
+    local yDiff = desiredY - curPos.Y
+    local vy = math.clamp(yDiff * 25, -speed, speed)
+
+    local horizDir = horizDist > 0.05 and horizDelta.Unit or Vector3.zero
+    local clearHoriz = GetClearFlightVelocity(curPos, horizDir, speed, filter)
+
     if KnobFarm.BodyVelocity then
-      local clearVel = GetClearFlightVelocity(curPos, delta.Unit, speed, filter)
-      KnobFarm.BodyVelocity.Velocity = clearVel
+      KnobFarm.BodyVelocity.Velocity = Vector3.new(clearHoriz.X, vy, clearHoriz.Z)
     end
-    if KnobFarm.BodyGyro and delta.Magnitude > 0.5 then
-      KnobFarm.BodyGyro.CFrame = CFrame.lookAt(curPos, curPos + Vector3.new(delta.X, 0, delta.Z))
+    if KnobFarm.BodyGyro and horizDist > 0.5 then
+      KnobFarm.BodyGyro.CFrame = CFrame.lookAt(curPos, curPos + Vector3.new(horizDir.X, 0, horizDir.Z))
     end
     task.wait()
   end
@@ -10859,6 +11090,10 @@ end
 
 function KnobFarm.RunLoop()
   while toggles.AutoFarmEnabled.Value and not _Unloading do
+    if HasActiveThreat() then
+      KnobFarm.CheckAndHandleThreat()
+    end
+
     if not character or not humanoidRootPart or not humanoid or humanoid.Health <= 0 then
       task.wait(1)
       continue
@@ -10930,6 +11165,9 @@ function KnobFarm.RunLoop()
       local containers = KnobFarm.GetUnlootedContainers(room)
       local maxLootPerRoom = 25
       while #containers > 0 and maxLootPerRoom > 0 and toggles.AutoFarmEnabled.Value do
+        if HasActiveThreat() then
+          KnobFarm.CheckAndHandleThreat()
+        end
         maxLootPerRoom = maxLootPerRoom - 1
         table.sort(containers, function(a, b)
           local da = (humanoidRootPart.Position - a.Pos).Magnitude
@@ -10946,6 +11184,9 @@ function KnobFarm.RunLoop()
 
     local door = room:FindFirstChild("Door")
     if door then
+      if HasActiveThreat() then
+        KnobFarm.CheckAndHandleThreat()
+      end
       -- 1. Disable collision on door so it never blocks us
       DisableDoorCollision(door)
 
@@ -11006,14 +11247,6 @@ end
 toggles.AutoFarmEnabled:OnChanged(function(enabled)
   if enabled then
     KnobFarm.Active = true
-    KnobFarm.OriginalGodmode = toggles.Godmode and toggles.Godmode.Value or false
-    KnobFarm.OriginalGodmodeMethod = options.GodmodeMethod and options.GodmodeMethod.Value
-    if options.GodmodeMethod and options.GodmodeMethod.Value ~= "Always enabled" then
-      options.GodmodeMethod:SetValue("Always enabled")
-    end
-    if toggles.Godmode and not toggles.Godmode.Value then
-      toggles.Godmode:SetValue(true)
-    end
     local curRoom = (element2 and element2.Value) or (localPlayer2 and localPlayer2:GetAttribute("CurrentRoom")) or 0
     local curNum = tonumber(curRoom)
     if curNum == 50 or (curNum and curNum >= 100) then
@@ -11021,6 +11254,21 @@ toggles.AutoFarmEnabled:OnChanged(function(enabled)
     else
       KnobFarm.SetCrouched(true, true)
     end
+    -- Snap firmly to floor level on start
+    pcall(function()
+      if character and humanoidRootPart then
+        local filter = { character, workspace.CurrentCamera }
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        rayParams.FilterDescendantsInstances = filter
+        rayParams.IgnoreWater = true
+        local hit = workspace:Raycast(humanoidRootPart.Position + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), rayParams)
+        if hit then
+          local targetH = (KnobFarm.CurrentCrouchState and 1.2 or 2.6)
+          humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position.X, hit.Position.Y + targetH, humanoidRootPart.Position.Z)
+        end
+      end
+    end)
     if KnobFarm.Thread then task.cancel(KnobFarm.Thread) end
     KnobFarm.Thread = task.spawn(KnobFarm.RunLoop)
   else
@@ -11031,11 +11279,11 @@ toggles.AutoFarmEnabled:OnChanged(function(enabled)
       task.cancel(KnobFarm.Thread)
       KnobFarm.Thread = nil
     end
-    if toggles.Godmode and toggles.Godmode.Value ~= KnobFarm.OriginalGodmode then
-      toggles.Godmode:SetValue(KnobFarm.OriginalGodmode)
-    end
-    if options.GodmodeMethod and KnobFarm.OriginalGodmodeMethod and options.GodmodeMethod.Value ~= KnobFarm.OriginalGodmodeMethod then
-      options.GodmodeMethod:SetValue(KnobFarm.OriginalGodmodeMethod)
+    if KnobFarm.ThreatGodmode then
+      KnobFarm.ThreatGodmode = false
+      if toggles.Godmode then
+        toggles.Godmode:SetValue(false)
+      end
     end
     KnobFarm.SetStatus("Idle")
   end
@@ -11066,11 +11314,12 @@ local function SetupAutoPlayAgain()
     if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value then
       task.delay(1, function()
         if toggles.AutoFarmEnabled and toggles.AutoFarmEnabled.Value then
-          if options.GodmodeMethod and options.GodmodeMethod.Value ~= "Always enabled" then
-            options.GodmodeMethod:SetValue("Always enabled")
-          end
-          if toggles.Godmode and not toggles.Godmode.Value then
-            toggles.Godmode:SetValue(true)
+          local curRoom = (element2 and element2.Value) or (localPlayer2 and localPlayer2:GetAttribute("CurrentRoom")) or 0
+          local curNum = tonumber(curRoom)
+          if curNum == 50 or (curNum and curNum >= 100) then
+            KnobFarm.SetCrouched(false, true)
+          else
+            KnobFarm.SetCrouched(true, true)
           end
         end
       end)
