@@ -10147,6 +10147,14 @@ if not val85.HotelNodesFolder then
   val85.HotelNodesFolder.Parent = workspace
 end
 
+function KnobFarm.SetStatus(txt)
+  pcall(function()
+    if Groupboxes and Groupboxes.AutoFarm_Status then
+      Groupboxes.AutoFarm_Status:SetText("Status: " .. tostring(txt))
+    end
+  end)
+end
+
 local currentNodes = {}
 
 local function ClearPathNodes()
@@ -10227,10 +10235,6 @@ local function SetCrouched(state)
     local char = localPlayer2 and localPlayer2.Character
     if char then
       char:SetAttribute("Crouching", state)
-      local hum = char:FindFirstChildOfClass("Humanoid")
-      if hum then
-        hum.HipHeight = state and 0.05 or 2.0
-      end
     end
     if remotesFolder2 and remotesFolder2:FindFirstChild("Crouch") then
       remotesFolder2.Crouch:FireServer(state, true)
@@ -10332,11 +10336,43 @@ local function IsDoorOpen(door)
   if p and p.Enabled then
     return false
   end
-  local openSound = door:FindFirstChild("Open", true)
-  if openSound and openSound:IsA("Sound") and openSound.TimePosition > 0 then
-    return true
+  return true
+end
+
+local function GetPlayerPhysicalRoomNum()
+  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+  if not roomsFolder then return 0 end
+
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then return 0 end
+
+  local bestNum = 0
+  local bestDist = math.huge
+
+  for _, r in ipairs(roomsFolder:GetChildren()) do
+    local n = tonumber(r.Name)
+    if n then
+      local pos = nil
+      local ok, piv = pcall(function() return r:GetPivot().Position end)
+      if ok and piv then
+        pos = piv
+      else
+        local prim = r.PrimaryPart or r:FindFirstChildWhichIsA("BasePart", true)
+        if prim then pos = prim.Position end
+      end
+
+      if pos then
+        local dist = (root.Position - pos).Magnitude
+        if dist < bestDist then
+          bestDist = dist
+          bestNum = n
+        end
+      end
+    end
   end
-  return false
+
+  return bestNum
 end
 
 local function GetCurrentRoom()
@@ -10347,6 +10383,10 @@ local function GetCurrentRoom()
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return nil end
 
+  local physicalRoom = GetPlayerPhysicalRoomNum()
+  local minRoom = math.max(KnobFarm.CurrentRoomNum or 0, physicalRoom)
+  KnobFarm.CurrentRoomNum = minRoom
+
   local rooms = {}
   for _, r in ipairs(roomsFolder:GetChildren()) do
     local n = tonumber(r.Name)
@@ -10356,11 +10396,11 @@ local function GetCurrentRoom()
   end
   table.sort(rooms, function(a, b) return a.num < b.num end)
 
-  local minRoom = KnobFarm.CurrentRoomNum or 0
+  if #rooms == 0 then return nil end
 
   for _, item in ipairs(rooms) do
     if item.num >= minRoom then
-      local door = item.model:FindFirstChild("Door")
+      local door = item.model:FindFirstChild("Door") or item.model:FindFirstChild("Door", true)
       if door and not IsDoorOpen(door) then
         KnobFarm.CurrentRoomNum = item.num
         return item.model
@@ -10368,19 +10408,15 @@ local function GetCurrentRoom()
     end
   end
 
-  if #rooms > 0 then
-    local highest = rooms[#rooms]
-    KnobFarm.CurrentRoomNum = math.max(minRoom, highest.num)
-    return highest.model
-  end
-
-  return nil
+  local latest = rooms[#rooms]
+  KnobFarm.CurrentRoomNum = math.max(minRoom, latest.num)
+  return latest.model
 end
 
 local function GetRoomTarget(room)
   if not room then return nil, nil, nil end
 
-  local exitDoor = room:FindFirstChild("Door")
+  local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
   if not exitDoor then return nil, nil, nil end
 
   -- 1. Check for closed Gate with a Lever in this room
@@ -10426,13 +10462,18 @@ local function GetRoomTarget(room)
   -- 4. Target is Exit Door
   local hinge = exitDoor:FindFirstChild("Hinge") or exitDoor:FindFirstChildWhichIsA("BasePart", true)
   local doorPos = hinge and hinge.Position or GetInstancePosition(exitDoor)
-  return exitDoor, doorPos, "Door"
+  return exitDoor, GetFloorPosition(doorPos), "Door"
 end
 
 local function FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
+  if not waypoints or #waypoints == 0 then return end
   RenderPathNodes(waypoints)
 
   local wpIndex = 2
+  if #waypoints < 2 then
+    wpIndex = 1
+  end
+
   local completed = false
   local startTime = tick()
   local lastProgressTime = tick()
@@ -10499,8 +10540,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     local lookIndex = math.min(#waypoints, wpIndex + 1)
     local targetPoint = (waypoints[lookIndex] and waypoints[lookIndex].Position) or targetPos
 
-    -- Near the end of the path, steer directly towards targetPos
-    if wpIndex >= #waypoints - 1 then
+    if wpIndex >= #waypoints then
       targetPoint = targetPos
     end
 
@@ -10683,109 +10723,128 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
 end
 
 function KnobFarm.RunLoop()
-  KnobFarm.SetStatus("AutoWalk Active")
+  local ok, err = pcall(function()
+    KnobFarm.SetStatus("AutoWalk Active")
 
-  while KnobFarm.Active and not _Unloading do
-    task.wait(0.04)
+    while KnobFarm.Active and not _Unloading do
+      task.wait(0.04)
 
-    local char = localPlayer2 and localPlayer2.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local root = char and char:FindFirstChild("HumanoidRootPart")
+      local char = localPlayer2 and localPlayer2.Character
+      local hum = char and char:FindFirstChildOfClass("Humanoid")
+      local root = char and char:FindFirstChild("HumanoidRootPart")
 
-    if not char or not hum or not root then
-      task.wait(0.5)
-      continue
-    end
+      if not char or not hum or not root then
+        task.wait(0.5)
+        continue
+      end
 
-    if hum.Health <= 0 then
-      KnobFarm.SetStatus("Dead. Waiting...")
-      ClearPathNodes()
-      if toggles.AutoFarmPlayAgain and toggles.AutoFarmPlayAgain.Value then
-        task.wait(7.0)
+      if hum.Health <= 0 then
+        KnobFarm.SetStatus("Dead. Waiting...")
+        ClearPathNodes()
+        if toggles.AutoFarmPlayAgain and toggles.AutoFarmPlayAgain.Value then
+          task.wait(7.0)
+          pcall(function()
+            if remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain") then
+              remotesFolder2.PlayAgain:FireServer()
+            end
+          end)
+        end
+        task.wait(1.0)
+        continue
+      end
+
+      -- Check if in-game rooms exist (if not, we are in Lobby)
+      local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+      if not roomsFolder or #roomsFolder:GetChildren() == 0 then
+        KnobFarm.SetStatus("Waiting for rooms...")
+        ClearPathNodes()
+        task.wait(1.0)
+        continue
+      end
+
+      -- Keep player crouched (на корточках)
+      SetCrouched(true)
+
+      local room = GetCurrentRoom()
+      if not room then
+        KnobFarm.SetStatus("Waiting for room...")
+        task.wait(0.4)
+        continue
+      end
+
+      local roomNum = tonumber(room.Name) or -1
+      local isBoss = (roomNum == 50 or roomNum == 100 or workspace:FindFirstChild("SeekMoving") ~= nil or room:FindFirstChild("SeekMoving") ~= nil)
+      KnobFarm.DisableGodmodeForBoss = isBoss
+
+      local target, targetPos, targetType = GetRoomTarget(room)
+
+      if not target or not targetPos then
+        KnobFarm.SetStatus("Searching path...")
+        task.wait(0.3)
+        continue
+      end
+
+      KnobFarm.SetStatus("Walking to " .. targetType .. " (Room " .. tostring(roomNum) .. ")")
+
+      -- Pathfinding with Crouched Agent Dimensions (Height = 2.0, Radius = 1.2 to easily clear doorways)
+      local path = pathfindingService:CreatePath({
+        AgentCanJump = true,
+        AgentCanClimb = false,
+        WaypointSpacing = 4,
+        AgentRadius = 1.2,
+        AgentHeight = 2.0,
+        Costs = { StuckPart = 8 },
+      })
+
+      local success, _ = pcall(function()
+        path:ComputeAsync(root.Position, targetPos)
+      end)
+
+      if not success or path.Status ~= Enum.PathStatus.Success then
+        -- Fallback with smaller radius to pass through any tight doors
+        path = pathfindingService:CreatePath({
+          AgentCanJump = true,
+          AgentCanClimb = false,
+          WaypointSpacing = 4,
+          AgentRadius = 0.8,
+          AgentHeight = 1.5,
+          Costs = { StuckPart = 8 },
+        })
         pcall(function()
-          if remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain") then
-            remotesFolder2.PlayAgain:FireServer()
-          end
+          path:ComputeAsync(root.Position, targetPos)
         end)
       end
-      task.wait(1.0)
-      continue
-    end
 
-    -- Check if in-game rooms exist (if not, we are in Lobby)
-    local roomsFolder = workspace:FindFirstChild("CurrentRooms")
-    if not roomsFolder or #roomsFolder:GetChildren() == 0 then
-      KnobFarm.SetStatus("Waiting for rooms...")
-      ClearPathNodes()
-      task.wait(1.0)
-      continue
-    end
-
-    -- Keep player crouched (на корточках)
-    SetCrouched(true)
-
-    local room = GetCurrentRoom()
-    if not room then
-      KnobFarm.SetStatus("Waiting for room...")
-      task.wait(0.4)
-      continue
-    end
-
-    local roomNum = tonumber(room.Name) or -1
-    local isBoss = (roomNum == 50 or roomNum == 100 or workspace:FindFirstChild("SeekMoving") ~= nil or room:FindFirstChild("SeekMoving") ~= nil)
-    KnobFarm.DisableGodmodeForBoss = isBoss
-
-    local target, targetPos, targetType = GetRoomTarget(room)
-
-    if not target or not targetPos then
-      KnobFarm.SetStatus("Searching path...")
-      task.wait(0.3)
-      continue
-    end
-
-    KnobFarm.SetStatus("Walking to " .. targetType .. " (Room " .. tostring(roomNum) .. ")")
-
-    -- Pathfinding with Crouched Agent Dimensions (Height = 2.4 to crawl under obstacles)
-    local path = pathfindingService:CreatePath({
-      AgentCanJump = true,
-      AgentCanClimb = false,
-      WaypointSpacing = 4,
-      AgentRadius = 1.8,
-      AgentHeight = 2.4,
-      Costs = { StuckPart = 8 },
-    })
-
-    local success, _ = pcall(function()
-      path:ComputeAsync(root.Position, targetPos)
-    end)
-
-    if success and path.Status == Enum.PathStatus.Success then
-      local waypoints = path:GetWaypoints()
-      FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
-    else
-      -- Fallback direct walk towards target if path calculation failed
-      local curHum = localPlayer2 and localPlayer2.Character and localPlayer2.Character:FindFirstChildOfClass("Humanoid")
-      local curRoot = localPlayer2 and localPlayer2.Character and localPlayer2.Character:FindFirstChild("HumanoidRootPart")
-      if curHum and curRoot then
-        local toT = Vector3.new(targetPos.X - curRoot.Position.X, 0, targetPos.Z - curRoot.Position.Z)
-        if toT.Magnitude > 0.1 then
-          curHum:Move(toT.Unit, false)
-        end
+      if path and path.Status == Enum.PathStatus.Success then
+        local waypoints = path:GetWaypoints()
+        FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
+      else
+        -- Direct linear waypoints fallback so character never gets stuck
+        local waypoints = {
+          { Position = root.Position, Action = Enum.PathWaypointAction.Walk },
+          { Position = targetPos, Action = Enum.PathWaypointAction.Walk },
+        }
+        FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
       end
-      task.wait(0.3)
     end
+  end)
+
+  if not ok then
+    warn("[KnobFarm Error]:", err)
+    KnobFarm.SetStatus("Error: " .. tostring(err))
+  else
+    KnobFarm.SetStatus("Idle")
   end
 
   ClearPathNodes()
   SetCrouched(false)
-  KnobFarm.SetStatus("Idle")
 end
 
 function KnobFarm.Start()
   if KnobFarm.Active then return end
   KnobFarm.Active = true
-  KnobFarm.CurrentRoomNum = 0
-  KnobFarm.SetStatus("Started")
+  KnobFarm.CurrentRoomNum = GetPlayerPhysicalRoomNum()
+  KnobFarm.SetStatus("Started (Room " .. tostring(KnobFarm.CurrentRoomNum) .. ")")
   SetCrouched(true)
 
   -- Speedhack setup: if farm walkspeed slider is set and higher than current walkspeed, apply it
