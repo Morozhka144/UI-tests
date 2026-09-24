@@ -10124,6 +10124,8 @@ end)
 KnobFarm = KnobFarm or {}
 KnobFarm.Active = false
 KnobFarm.Thread = nil
+KnobFarm.MoveConn = nil
+KnobFarm.DisableGodmodeForBoss = false
 KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
 KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
 
@@ -10173,6 +10175,21 @@ local function RenderPathNodes(waypoints)
     node.Color = Color3.fromRGB(0, 255, 0)
     node.Material = Enum.Material.Neon
   end
+end
+
+local function SetCrouched(state)
+  pcall(function()
+    local char = localPlayer2 and localPlayer2.Character
+    if char then
+      char:SetAttribute("Crouching", state)
+    end
+    if remotesFolder2 and remotesFolder2:FindFirstChild("Crouch") then
+      remotesFolder2.Crouch:FireServer(state, true)
+    end
+    if collisionPart then
+      collisionPart.CollisionGroup = state and "PlayerCrouching" or "Player"
+    end
+  end)
 end
 
 local function GetInstancePosition(inst)
@@ -10238,28 +10255,27 @@ local function GetCurrentRoom()
   local roomsFolder = workspace:FindFirstChild("CurrentRooms")
   if not roomsFolder then return nil end
 
-  local latest = replicatedStorage:FindFirstChild("GameData")
-    and replicatedStorage.GameData:FindFirstChild("LatestRoom")
-  if not latest then
-    latest = replicatedStorage:FindFirstChild("FloorReplicated")
-      and replicatedStorage.FloorReplicated:FindFirstChild("LatestRoom")
-  end
-
-  if latest and latest.Value then
-    local rm = roomsFolder:FindFirstChild(tostring(latest.Value))
-    if rm then return rm end
-  end
-
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return nil end
 
+  -- 1. Try localPlayer CurrentRoom attribute
+  local attrRoom = localPlayer2:GetAttribute("CurrentRoom")
+  if attrRoom then
+    local rm = roomsFolder:FindFirstChild(tostring(attrRoom))
+    if rm and rm:FindFirstChild("Door") then
+      return rm
+    end
+  end
+
+  -- 2. Find room with the closest Door or Center to root.Position
   local closest = nil
   local cDist = math.huge
   for _, r in ipairs(roomsFolder:GetChildren()) do
-    local p = GetInstancePosition(r)
-    if p then
-      local d = (p - root.Position).Magnitude
+    local door = r:FindFirstChild("Door")
+    local refPos = door and GetInstancePosition(door) or GetInstancePosition(r)
+    if refPos then
+      local d = (refPos - root.Position).Magnitude
       if d < cDist then
         cDist = d
         closest = r
@@ -10348,12 +10364,17 @@ function KnobFarm.RunLoop()
       continue
     end
 
-    if CurrentFloor == "Lobby" or CurrentFloor == nil then
-      KnobFarm.SetStatus("In Lobby. Waiting for elevator...")
+    -- Check if in-game rooms exist (if not, we are in Lobby)
+    local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+    if not roomsFolder or #roomsFolder:GetChildren() == 0 then
+      KnobFarm.SetStatus("Waiting for rooms...")
       ClearPathNodes()
       task.wait(1.0)
       continue
     end
+
+    -- Keep player crouched (на корточках)
+    SetCrouched(true)
 
     local room = GetCurrentRoom()
     if not room then
@@ -10376,13 +10397,13 @@ function KnobFarm.RunLoop()
 
     KnobFarm.SetStatus("Walking to " .. targetType .. " (Room " .. tostring(roomNum) .. ")")
 
-    -- PathfindingService navigation
+    -- Pathfinding with Crouched Agent Dimensions (Height = 2.4 to crawl under obstacles)
     local path = pathfindingService:CreatePath({
       AgentCanJump = true,
       AgentCanClimb = false,
       WaypointSpacing = 3,
-      AgentRadius = 1.8,
-      AgentHeight = 4.5,
+      AgentRadius = 1.4,
+      AgentHeight = 2.4,
       Costs = { StuckPart = 8 },
     })
 
@@ -10401,17 +10422,37 @@ function KnobFarm.RunLoop()
         local wpStart = tick()
         local reached = false
 
+        -- RenderStepped continuous MoveTo (prevents PlayerModule WASD cancellation!)
+        local moveConn
+        moveConn = runService.RenderStepped:Connect(function()
+          if not KnobFarm.Active or _Unloading then
+            reached = true
+            return
+          end
+          local curRoot = localPlayer2 and localPlayer2.Character and localPlayer2.Character:FindFirstChild("HumanoidRootPart")
+          local curHum = localPlayer2 and localPlayer2.Character and localPlayer2.Character:FindFirstChildOfClass("Humanoid")
+          if not curRoot or not curHum then
+            reached = true
+            return
+          end
+
+          -- Maintain crouch
+          if curRoot.Parent and curRoot.Parent:GetAttribute("Crouching") ~= true then
+            SetCrouched(true)
+          end
+
+          curHum:MoveTo(wp.Position)
+
+          local hDist = (Vector3.new(curRoot.Position.X, 0, curRoot.Position.Z) - Vector3.new(wp.Position.X, 0, wp.Position.Z)).Magnitude
+          if hDist < 3.2 then
+            reached = true
+          end
+        end)
+
         while not reached and KnobFarm.Active and not _Unloading do
           local curRoot = localPlayer2 and localPlayer2.Character and localPlayer2.Character:FindFirstChild("HumanoidRootPart")
           local curHum = localPlayer2 and localPlayer2.Character and localPlayer2.Character:FindFirstChildOfClass("Humanoid")
           if not curRoot or not curHum then break end
-
-          -- Check distance to waypoint
-          local hDist = (Vector3.new(curRoot.Position.X, 0, curRoot.Position.Z) - Vector3.new(wp.Position.X, 0, wp.Position.Z)).Magnitude
-          if hDist < 3.2 then
-            reached = true
-            break
-          end
 
           -- Check if close enough to interact with target directly
           local tDist = (curRoot.Position - targetPos).Magnitude
@@ -10461,6 +10502,15 @@ function KnobFarm.RunLoop()
                 Functions.ForceFirePrompt(dPr)
               end
 
+              -- Disable door model collision so character can walk straight through doorway
+              pcall(function()
+                for _, dp in ipairs(target:GetDescendants()) do
+                  if dp:IsA("BasePart") and dp.Name == "Door" then
+                    dp.CanCollide = false
+                  end
+                end
+              end)
+
               local hinge = target:FindFirstChild("Hinge") or target:FindFirstChildWhichIsA("BasePart", true)
               if hinge then
                 curHum:MoveTo(hinge.Position + hinge.CFrame.LookVector * 6)
@@ -10485,8 +10535,12 @@ function KnobFarm.RunLoop()
             break
           end
 
-          curHum:MoveTo(wp.Position)
-          task.wait(0.04)
+          task.wait(0.03)
+        end
+
+        if moveConn then
+          moveConn:Disconnect()
+          moveConn = nil
         end
 
         if reached and (targetType == "Key" and PlayerHasKey()) then
@@ -10494,7 +10548,7 @@ function KnobFarm.RunLoop()
         end
       end
     else
-      -- Fallback if path failed (straight step towards target)
+      -- Fallback if path failed: move towards target directly
       local curHum = localPlayer2 and localPlayer2.Character and localPlayer2.Character:FindFirstChildOfClass("Humanoid")
       if curHum then
         curHum:MoveTo(targetPos)
@@ -10504,6 +10558,7 @@ function KnobFarm.RunLoop()
   end
 
   ClearPathNodes()
+  SetCrouched(false)
   KnobFarm.SetStatus("Idle")
 end
 
@@ -10511,6 +10566,7 @@ function KnobFarm.Start()
   if KnobFarm.Active then return end
   KnobFarm.Active = true
   KnobFarm.SetStatus("Started")
+  SetCrouched(true)
   KnobFarm.Thread = task.spawn(KnobFarm.RunLoop)
 end
 
@@ -10522,6 +10578,7 @@ function KnobFarm.Stop()
     KnobFarm.Thread = nil
   end
   ClearPathNodes()
+  SetCrouched(false)
   local char = localPlayer2 and localPlayer2.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -10532,7 +10589,7 @@ function KnobFarm.Stop()
 end
 
 KnobFarm.StopFlight = function() end
-KnobFarm.SetCrouched = function() end
+KnobFarm.SetCrouched = SetCrouched
 
 -- Connect UI toggle
 if toggles and toggles.AutoFarmEnabled then
