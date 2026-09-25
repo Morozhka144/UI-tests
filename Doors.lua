@@ -7741,7 +7741,7 @@ end
 -- ========================================================
 Groupboxes.ArchivesGeneralAddons = element3.Archives:AddRightGroupbox("General Addons")
 
--- 3. Auto Door Skip (Fast Loot + Auto Key/Gate)
+-- 3. Auto Door Skip (Fast Loot + Auto Key/Gate + Threat Wait)
 do
   Groupboxes.ArchivesGeneralAddons:AddToggle("AutoDoorSkip", {
     Text = "Auto Door Skip",
@@ -7755,13 +7755,28 @@ do
     Default = true,
   })
 
-  Groupboxes.ArchivesGeneralAddons:AddSlider("AutoSkipLootDelay", {
-    Text = "Fast Loot Delay",
-    Tooltip = "Delay between looting each container/item.",
-    Min = 0.02,
-    Max = 0.3,
-    Default = 0.08,
+  Groupboxes.ArchivesGeneralAddons:AddSlider("AutoSkipDrawerWait", {
+    Text = "Drawer Open Wait",
+    Tooltip = "Time to wait for drawer to physically slide open and spawn gold/items.",
+    Min = 0.15,
+    Max = 0.6,
+    Default = 0.35,
     Rounding = 2,
+  })
+
+  Groupboxes.ArchivesGeneralAddons:AddSlider("AutoSkipLootDelay", {
+    Text = "Pickup Delay",
+    Tooltip = "Delay after picking up loose items/gold.",
+    Min = 0.05,
+    Max = 0.3,
+    Default = 0.1,
+    Rounding = 2,
+  })
+
+  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipWaitThreats", {
+    Text = "Wait For Rush/Ambush/Blitz",
+    Tooltip = "Pauses movement and waits for Rush/Ambush/Blitz to despawn, especially before Seek chase.",
+    Default = true,
   })
 
   Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipUnlock", {
@@ -7769,6 +7784,86 @@ do
     Tooltip = "Automatically teleports to keys and pulls gate levers if the door is locked.",
     Default = true,
   })
+
+  local function safeFirePrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    pcall(function()
+      prompt.HoldDuration = 0
+      prompt.RequiresLineOfSight = false
+      prompt.MaxActivationDistance = 30
+      prompt.Enabled = true
+    end)
+    if fireproximityprompt then
+      pcall(fireproximityprompt, prompt, 0, true)
+      pcall(fireproximityprompt, prompt)
+    end
+    if Functions and Functions.ForceFirePrompt then
+      pcall(Functions.ForceFirePrompt, prompt)
+    end
+  end
+
+  local function HasRushAmbushBlitz()
+    local threatNames = {
+      RushMoving = true, Rush = true,
+      AmbushMoving = true, Ambush = true,
+      BlitzMoving = true, Blitz = true,
+      ["RNIUSHCG=="] = true, AR0xMBUSH = true,
+      GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
+    }
+
+    if val83 and val83.ActiveThreats then
+      for threat, active in pairs(val83.ActiveThreats) do
+        if active and threat and threat.Parent and threatNames[threat.Name] then
+          return true, threat
+        end
+      end
+    end
+
+    for name in pairs(threatNames) do
+      local obj = workspace:FindFirstChild(name)
+      if obj then return true, obj end
+    end
+
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if curRooms then
+      for name in pairs(threatNames) do
+        local obj = curRooms:FindFirstChild(name, true)
+        if obj then return true, obj end
+      end
+    end
+
+    return false, nil
+  end
+
+  local function isSeekUpcoming(currentRoom, currentRoomNum)
+    if currentRoom then
+      if currentRoom:FindFirstChild("TriggerEventCollision", true)
+        or currentRoom:FindFirstChild("Seek_Arm", true)
+        or currentRoom:FindFirstChild("SeekTrigger", true)
+        or currentRoom:FindFirstChild("Seeking", true)
+        or currentRoom:FindFirstChild("ChaseStartTrigger", true) then
+        return true
+      end
+    end
+
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if curRooms and currentRoomNum then
+      local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
+      if nextRoom then
+        if nextRoom:FindFirstChild("TriggerEventCollision", true)
+          or nextRoom:FindFirstChild("Seek_Arm", true)
+          or nextRoom:FindFirstChild("SeekTrigger", true)
+          or nextRoom:FindFirstChild("Seeking", true)
+          or nextRoom:FindFirstChild("ChaseStartTrigger", true)
+          or nextRoom:FindFirstChild("SeekMoving", true)
+          or nextRoom:FindFirstChild("SeekMovingNewClone", true) then
+          return true
+        end
+      end
+    end
+
+    return false
+  end
 
   local function getPromptPos(prompt)
     local parent = prompt.Parent
@@ -7811,6 +7906,7 @@ do
     if action:find("open") or action:find("search") or action:find("loot") or action:find("take") or action:find("grab")
       or objText:find("drawer") or objText:find("chest") or objText:find("desk") or objText:find("box")
       or parentName:find("Drawer") or parentName:find("Chest") or parentName:find("Desk") or parentName:find("Box")
+      or parentName:find("Dresser") or parentName:find("Nightstand") or parentName:find("Table")
       or parentName:find("Gold") or parentName:find("TinyGold") or parent:GetAttribute("GoldValue") then
       return true
     end
@@ -7818,7 +7914,20 @@ do
     return false
   end
 
-  local function fastLootRoom(room, delayTime)
+  local function isContainerPrompt(prompt)
+    if not prompt then return false end
+    local action = prompt.ActionText:lower()
+    local objText = prompt.ObjectText:lower()
+    local parent = prompt.Parent
+    local parentName = parent and parent.Name or ""
+    return parentName:find("Drawer") ~= nil or parentName:find("Chest") ~= nil
+      or parentName:find("Desk") ~= nil or parentName:find("Box") ~= nil
+      or parentName:find("Dresser") ~= nil or parentName:find("Nightstand") ~= nil
+      or action:find("open") ~= nil or action:find("search") ~= nil
+      or objText:find("drawer") ~= nil or objText:find("chest") ~= nil
+  end
+
+  local function fastLootRoom(room, drawerWait, pickupDelay)
     local lootedPrompts = {}
     local char = localPlayer2.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -7833,26 +7942,62 @@ do
 
     for _, pr in ipairs(prompts) do
       if not (toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then break end
+
+      -- Check for threats before each loot teleport
+      if toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value then
+        while HasRushAmbushBlitz() do
+          task.wait(0.3)
+        end
+      end
+
       if pr and pr.Parent and pr.Enabled and not lootedPrompts[pr] then
         local pos = getPromptPos(pr)
         if pos then
-          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.5, 0))
-          if fireproximityprompt then
-            fireproximityprompt(pr)
-          end
+          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+          safeFirePrompt(pr)
           lootedPrompts[pr] = true
-          task.wait(delayTime or 0.08)
 
-          local parent = pr.Parent
-          if parent then
-            for _, subPr in ipairs(parent:GetDescendants()) do
-              if subPr:IsA("ProximityPrompt") and subPr.Enabled and not lootedPrompts[subPr] and subPr ~= pr then
-                if fireproximityprompt then
-                  fireproximityprompt(subPr)
+          local isContainer = isContainerPrompt(pr)
+
+          if isContainer then
+            -- Stay positioned in front of drawer/container while it slides open
+            task.wait(drawerWait or 0.35)
+
+            -- Deep-poll for spawned gold / items inside drawer
+            local parent = pr.Parent
+            if parent then
+              for poll = 1, 3 do
+                for _, subPr in ipairs(parent:GetDescendants()) do
+                  if subPr:IsA("ProximityPrompt") and subPr.Enabled and not lootedPrompts[subPr] and subPr ~= pr then
+                    local a = subPr.ActionText:lower()
+                    if a ~= "close" and not a:find("open") then
+                      safeFirePrompt(subPr)
+                      lootedPrompts[subPr] = true
+                    end
+                  end
                 end
-                lootedPrompts[subPr] = true
+
+                -- Also check nearby within 5 studs of container
+                for _, nearby in ipairs(room:GetDescendants()) do
+                  if (nearby.Name == "GoldPile" or nearby.Name == "TinyGold" or nearby.Name == "Gold" or nearby:GetAttribute("GoldValue"))
+                    and not lootedPrompts[nearby] then
+                    local nPos = getPromptPos(nearby)
+                    if nPos and (nPos - pos).Magnitude <= 5.5 then
+                      local nPr = nearby:FindFirstChildWhichIsA("ProximityPrompt", true)
+                      if nPr and nPr.Enabled and not lootedPrompts[nPr] then
+                        safeFirePrompt(nPr)
+                        lootedPrompts[nPr] = true
+                        lootedPrompts[nearby] = true
+                      end
+                    end
+                  end
+                end
+
+                task.wait(0.1)
               end
             end
+          else
+            task.wait(pickupDelay or 0.1)
           end
         end
       end
@@ -7870,8 +8015,8 @@ do
         if leverPart then
           root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
           local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
-          if pr and fireproximityprompt then
-            fireproximityprompt(pr)
+          if pr then
+            safeFirePrompt(pr)
           end
           task.wait(0.2)
         end
@@ -7918,10 +8063,10 @@ do
       if keyObj then
         local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
         if keyPos then
-          root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.5, 0))
+          root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
           local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
-          if keyPrompt and fireproximityprompt then
-            fireproximityprompt(keyPrompt)
+          if keyPrompt then
+            safeFirePrompt(keyPrompt)
           end
           task.wait(0.25)
         end
@@ -7941,8 +8086,8 @@ do
     local lockPart = (lock:IsA("BasePart") and lock) or lock:FindFirstChildWhichIsA("BasePart", true) or door:FindFirstChild("Door") or door.PrimaryPart
     if lockPart then
       root.CFrame = lockPart.CFrame * CFrame.new(0, 0, 2.5)
-      if lockPrompt and fireproximityprompt then
-        fireproximityprompt(lockPrompt)
+      if lockPrompt then
+        safeFirePrompt(lockPrompt)
       end
       task.wait(0.2)
     end
@@ -7958,8 +8103,8 @@ do
       root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
     end
     local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if prompt and fireproximityprompt then
-      fireproximityprompt(prompt)
+    if prompt then
+      safeFirePrompt(prompt)
     end
   end
 
@@ -7982,10 +8127,22 @@ do
           local door = currentRoom:FindFirstChild("Door")
           if not door then return end
 
+          -- Check if next room is Seek or if Rush/Ambush/Blitz is active
+          local seekUpcoming = isSeekUpcoming(currentRoom, tonumber(roomNum))
+          if seekUpcoming or (toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value) then
+            if HasRushAmbushBlitz() then
+              while HasRushAmbushBlitz() do
+                task.wait(0.3)
+              end
+              task.wait(0.5)
+            end
+          end
+
           if lastProcessedRoom ~= roomNum then
             if toggles.AutoSkipFastLoot and toggles.AutoSkipFastLoot.Value then
-              local delayTime = (options.AutoSkipLootDelay and options.AutoSkipLootDelay.Value) or 0.08
-              fastLootRoom(currentRoom, delayTime)
+              local drawerWait = (options.AutoSkipDrawerWait and options.AutoSkipDrawerWait.Value) or 0.35
+              local pickupDelay = (options.AutoSkipLootDelay and options.AutoSkipLootDelay.Value) or 0.1
+              fastLootRoom(currentRoom, drawerWait, pickupDelay)
             end
 
             if toggles.AutoSkipUnlock and toggles.AutoSkipUnlock.Value then
@@ -8000,6 +8157,16 @@ do
               if lock then
                 handleKeyAndUnlock(currentRoom, door)
               end
+            end
+          end
+
+          -- Before opening door, make sure threats didn't appear while looting
+          if seekUpcoming or (toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value) then
+            if HasRushAmbushBlitz() then
+              while HasRushAmbushBlitz() do
+                task.wait(0.3)
+              end
+              task.wait(0.5)
             end
           end
 
