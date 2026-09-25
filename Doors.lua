@@ -7741,43 +7741,272 @@ end
 -- ========================================================
 Groupboxes.ArchivesGeneralAddons = element3.Archives:AddRightGroupbox("General Addons")
 
--- 3. Auto Door Skip
+-- 3. Auto Door Skip (Fast Loot + Auto Key/Gate)
 do
   Groupboxes.ArchivesGeneralAddons:AddToggle("AutoDoorSkip", {
     Text = "Auto Door Skip",
-    Tooltip = "Automatically teleports to next room's door and opens it as rooms generate.",
+    Tooltip = "Automatically clears room (loots containers, takes keys, pulls levers) and opens next door.",
     Default = false,
   })
+
+  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipFastLoot", {
+    Text = "Fast Loot (Тумбочки / Золото)",
+    Tooltip = "Teleports to each drawer, container, desk, and gold pile before opening the door.",
+    Default = true,
+  })
+
+  Groupboxes.ArchivesGeneralAddons:AddSlider("AutoSkipLootDelay", {
+    Text = "Fast Loot Delay",
+    Tooltip = "Delay between looting each container/item.",
+    Min = 0.02,
+    Max = 0.3,
+    Default = 0.08,
+    Rounding = 2,
+  })
+
+  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipUnlock", {
+    Text = "Auto Key & Gate",
+    Tooltip = "Automatically teleports to keys and pulls gate levers if the door is locked.",
+    Default = true,
+  })
+
+  local function getPromptPos(prompt)
+    local parent = prompt.Parent
+    if not parent then return nil end
+    if parent:IsA("BasePart") then
+      return parent.Position
+    elseif parent:IsA("Attachment") then
+      return parent.WorldPosition
+    elseif parent:IsA("Model") then
+      return parent:GetPivot().Position
+    end
+    local part = prompt:FindFirstAncestorWhichIsA("BasePart")
+    if part then return part.Position end
+    return nil
+  end
+
+  local function isLootPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
+    local action = prompt.ActionText:lower()
+    local objText = prompt.ObjectText:lower()
+    local parent = prompt.Parent
+    if not parent then return false end
+    local parentName = parent.Name
+
+    if parentName == "Door" or parentName == "Padlock" or parentName == "Lock"
+      or parent:FindFirstAncestor("Door") or parentName == "DoorFake" or parentName == "FakeDoor" then
+      return false
+    end
+
+    if parentName == "LeverForGate" or parentName == "TrackLever" then
+      return false
+    end
+
+    if action == "close" then return false end
+
+    if (action:find("hide") or action:find("crouch") or action:find("crawl")) and not action:find("loot") then
+      return false
+    end
+
+    if action:find("open") or action:find("search") or action:find("loot") or action:find("take") or action:find("grab")
+      or objText:find("drawer") or objText:find("chest") or objText:find("desk") or objText:find("box")
+      or parentName:find("Drawer") or parentName:find("Chest") or parentName:find("Desk") or parentName:find("Box")
+      or parentName:find("Gold") or parentName:find("TinyGold") or parent:GetAttribute("GoldValue") then
+      return true
+    end
+
+    return false
+  end
+
+  local function fastLootRoom(room, delayTime)
+    local lootedPrompts = {}
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local prompts = {}
+    for _, pr in ipairs(room:GetDescendants()) do
+      if isLootPrompt(pr) and not lootedPrompts[pr] then
+        table.insert(prompts, pr)
+      end
+    end
+
+    for _, pr in ipairs(prompts) do
+      if not (toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then break end
+      if pr and pr.Parent and pr.Enabled and not lootedPrompts[pr] then
+        local pos = getPromptPos(pr)
+        if pos then
+          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.5, 0))
+          if fireproximityprompt then
+            fireproximityprompt(pr)
+          end
+          lootedPrompts[pr] = true
+          task.wait(delayTime or 0.08)
+
+          local parent = pr.Parent
+          if parent then
+            for _, subPr in ipairs(parent:GetDescendants()) do
+              if subPr:IsA("ProximityPrompt") and subPr.Enabled and not lootedPrompts[subPr] and subPr ~= pr then
+                if fireproximityprompt then
+                  fireproximityprompt(subPr)
+                end
+                lootedPrompts[subPr] = true
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  local function handleGate(room)
+    local gate = room:FindFirstChild("Gate", true)
+    local lever = room:FindFirstChild("LeverForGate", true)
+    if gate and lever then
+      local char = localPlayer2.Character
+      local root = char and char:FindFirstChild("HumanoidRootPart")
+      if root then
+        local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
+        if leverPart then
+          root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
+          local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if pr and fireproximityprompt then
+            fireproximityprompt(pr)
+          end
+          task.wait(0.2)
+        end
+      end
+    end
+  end
+
+  local function handleKeyAndUnlock(room, door)
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root then return end
+
+    local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
+    if not lock then return end
+
+    local function getKeyTool()
+      if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
+      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
+      for _, item in ipairs(char:GetChildren()) do
+        if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+      end
+      if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+          if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+        end
+      end
+      return nil
+    end
+
+    local keyTool = getKeyTool()
+    if not keyTool then
+      local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
+      if not keyObj then
+        for _, pr in ipairs(room:GetDescendants()) do
+          if pr:IsA("ProximityPrompt") and (pr.ObjectText:lower():find("key") or pr.Name:lower():find("key")) then
+            keyObj = pr.Parent
+            break
+          end
+        end
+      end
+
+      if keyObj then
+        local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
+        if keyPos then
+          root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.5, 0))
+          local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if keyPrompt and fireproximityprompt then
+            fireproximityprompt(keyPrompt)
+          end
+          task.wait(0.25)
+        end
+      end
+      keyTool = getKeyTool()
+    end
+
+    if keyTool and hum and keyTool.Parent ~= char then
+      pcall(function() hum:EquipTool(keyTool) end)
+      task.wait(0.15)
+    end
+
+    local lockPrompt = door:FindFirstChild("UnlockPrompt", true)
+      or (lock:IsA("ProximityPrompt") and lock)
+      or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+    local lockPart = (lock:IsA("BasePart") and lock) or lock:FindFirstChildWhichIsA("BasePart", true) or door:FindFirstChild("Door") or door.PrimaryPart
+    if lockPart then
+      root.CFrame = lockPart.CFrame * CFrame.new(0, 0, 2.5)
+      if lockPrompt and fireproximityprompt then
+        fireproximityprompt(lockPrompt)
+      end
+      task.wait(0.2)
+    end
+  end
+
+  local function openRoomDoor(door)
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not door then return end
+
+    local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
+    if doorPart then
+      root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
+    end
+    local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and fireproximityprompt then
+      fireproximityprompt(prompt)
+    end
+  end
+
+  local lastProcessedRoom = nil
 
   task.spawn(function()
     while task.wait(0.1) do
       if toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
         pcall(function()
-          local char = localPlayer2.Character
-          local root = char and char:FindFirstChild("HumanoidRootPart")
-          if not root then return end
-
           local rep = game:GetService("ReplicatedStorage")
           local gameData = rep:FindFirstChild("GameData")
           local latestRoom = gameData and gameData:FindFirstChild("LatestRoom")
           if not latestRoom then return end
 
+          local roomNum = tostring(latestRoom.Value)
           local currentRooms = workspace:FindFirstChild("CurrentRooms")
-          local currentRoom = currentRooms and currentRooms:FindFirstChild(tostring(latestRoom.Value))
-          if currentRoom then
-            local door = currentRoom:FindFirstChild("Door")
-            if door then
-              local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
-              if doorPart and root then
-                root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
-              end
-              local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
-              if prompt and fireproximityprompt then
-                fireproximityprompt(prompt)
+          local currentRoom = currentRooms and currentRooms:FindFirstChild(roomNum)
+          if not currentRoom then return end
+
+          local door = currentRoom:FindFirstChild("Door")
+          if not door then return end
+
+          if lastProcessedRoom ~= roomNum then
+            if toggles.AutoSkipFastLoot and toggles.AutoSkipFastLoot.Value then
+              local delayTime = (options.AutoSkipLootDelay and options.AutoSkipLootDelay.Value) or 0.08
+              fastLootRoom(currentRoom, delayTime)
+            end
+
+            if toggles.AutoSkipUnlock and toggles.AutoSkipUnlock.Value then
+              handleGate(currentRoom)
+              handleKeyAndUnlock(currentRoom, door)
+            end
+
+            lastProcessedRoom = roomNum
+          else
+            if toggles.AutoSkipUnlock and toggles.AutoSkipUnlock.Value then
+              local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
+              if lock then
+                handleKeyAndUnlock(currentRoom, door)
               end
             end
           end
+
+          openRoomDoor(door)
         end)
+      else
+        lastProcessedRoom = nil
       end
     end
   end)
