@@ -8445,7 +8445,7 @@ Groupboxes.ArchivesMain:AddToggle("AntiRansom", {
 Groupboxes.ArchivesMain:AddToggle("AntiScribbles", {
   Text = "No Scribbles Damage", Default = false, Tooltip = "Prevents scribbles from damaging you", Disabled = not (Executor.hookmetamethod and Executor.newcclosure and Executor.getnamecallmethod), DisabledTooltip = "Your executor doesn't support this feature :(", })
 
-Groupboxes.ArchivesBypass = element3.Archives:AddLeftGroupbox("Anticheat Bypass")
+Groupboxes.ArchivesBypass = element3.Archives:AddRightGroupbox("Anticheat Bypass")
 
 Groupboxes.ArchivesBypass:AddToggle("ArchiveChairFly", {
   Text = "Chair Anticheat Bypass", Default = false, Tooltip = "Allows you to bypass the anticheat by flying on a chair, allowing you to noclip and fly freely, drag an office chair, then sit in it and press the 'Start Bypass' button", })
