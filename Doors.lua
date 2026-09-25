@@ -10313,6 +10313,7 @@ local function TriggerPrompt(prompt)
     prompt.Enabled = true
     prompt.MaxActivationDistance = 999
     prompt.RequiresLineOfSight = false
+    prompt.HoldDuration = 0
   end)
   if Executor and Executor.fireproximityprompt then
     pcall(Executor.fireproximityprompt, prompt, 0)
@@ -10323,7 +10324,12 @@ local function TriggerPrompt(prompt)
   end
   pcall(function()
     prompt:InputHoldBegin()
-    task.wait(0.04)
+    local holdTime = math.min(prompt.HoldDuration or 0, 0.5)
+    if holdTime > 0.05 then
+      task.wait(holdTime + 0.05)
+    else
+      task.wait(0.04)
+    end
     prompt:InputHoldEnd()
   end)
 end
@@ -10339,7 +10345,7 @@ local function PlayerHasKey()
       if item and item:IsA("Tool") then return true, item end
     end
     for _, item in ipairs(char:GetChildren()) do
-      if item:IsA("Tool") and item.Name:find("Key") then return true, item end
+      if item:IsA("Tool") and item.Name:lower():find("key") then return true, item end
     end
   end
 
@@ -10349,7 +10355,7 @@ local function PlayerHasKey()
       if item and item:IsA("Tool") then return true, item end
     end
     for _, item in ipairs(bp:GetChildren()) do
-      if item:IsA("Tool") and item.Name:find("Key") then return true, item end
+      if item:IsA("Tool") and item.Name:lower():find("key") then return true, item end
     end
   end
 
@@ -10377,9 +10383,7 @@ local function IsDoorLocked(door)
   if lock and lock.Parent then
     local unPr = lock:FindFirstChild("UnlockPrompt")
       or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if unPr and unPr.Enabled and unPr.Parent then
-      return true, unPr
-    end
+    return true, unPr
   end
   return false, nil
 end
@@ -10390,14 +10394,18 @@ local function IsDoorOpen(door)
   if door:GetAttribute("Opened") == true or door:GetAttribute("Open") == true then
     return true
   end
-  local isLocked = IsDoorLocked(door)
-  if isLocked then return false end
-
+  if door:FindFirstChild("Lock") then
+    return false
+  end
   local p = door:FindFirstChildWhichIsA("ProximityPrompt", true)
   if p and p.Enabled then
     return false
   end
-  return true
+  local openVal = door:FindFirstChild("Open") or door:FindFirstChild("Opened")
+  if openVal and (openVal:IsA("BoolValue") or openVal:IsA("ValueBase")) then
+    return openVal.Value == true
+  end
+  return false
 end
 
 local function GetDoorCenter(door)
@@ -10521,17 +10529,21 @@ end
 local function FindRoomKey(room)
   if not room then return nil end
   for _, item in ipairs(room:GetDescendants()) do
-    if (item.Name == "KeyObtain" or item.Name == "ElectricalKeyObtain" or item.Name == "KeyIron")
+    if (item.Name == "KeyObtain" or item.Name == "ElectricalKeyObtain" or item.Name == "KeyIron" or item.Name == "Key" or item.Name == "IronKey" or item.Name:lower():find("key"))
         and not KnobFarm.LootedObjects[item] and item.Parent then
-      return item
+      if item:FindFirstChildWhichIsA("ProximityPrompt", true) or item.Name:lower():find("key") then
+        return item
+      end
     end
   end
   local curRooms = workspace:FindFirstChild("CurrentRooms")
   if curRooms then
     for _, item in ipairs(curRooms:GetDescendants()) do
-      if (item.Name == "KeyObtain" or item.Name == "ElectricalKeyObtain" or item.Name == "KeyIron")
+      if (item.Name == "KeyObtain" or item.Name == "ElectricalKeyObtain" or item.Name == "KeyIron" or item.Name == "Key" or item.Name == "IronKey" or item.Name:lower():find("key"))
           and not KnobFarm.LootedObjects[item] and item.Parent then
-        return item
+        if item:FindFirstChildWhichIsA("ProximityPrompt", true) or item.Name:lower():find("key") then
+          return item
+        end
       end
     end
   end
@@ -10688,84 +10700,109 @@ local function ExecutePhaseRush(room, roomNum, reason)
 
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
-  if not char or not root then return false end
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not char or not root or not hum or hum.Health <= 0 then return false end
 
   KnobFarm.SetStatus("Phase Rush: " .. tostring(reason) .. " (Room " .. tostring(roomNum) .. ")")
 
-  local isDoorOpen = IsDoorOpen(exitDoor)
-  if not isDoorOpen then
-    -- 1. If door is locked and we don't have key, Phase fly straight to key
-    local locked, unPr = IsDoorLocked(exitDoor)
-    if locked and not PlayerHasKey() then
-      local keyItem = FindRoomKey(room)
-      local findStart = tick()
-      while not keyItem and tick() - findStart < 2.0 and KnobFarm.Active and not _Unloading do
-        task.wait(0.2)
-        keyItem = FindRoomKey(room)
-      end
+  -- 1. If door is locked or this is Room 0, ensure we have the key
+  local locked, unPr = IsDoorLocked(exitDoor)
+  if (locked or roomNum == 0) and not PlayerHasKey() then
+    KnobFarm.SetStatus("Phase -> Searching Key (Room " .. tostring(roomNum) .. ")")
+    local keyItem = FindRoomKey(room)
+    local findStart = tick()
+    while not keyItem and tick() - findStart < 3.0 and KnobFarm.Active and not _Unloading do
+      task.wait(0.2)
+      keyItem = FindRoomKey(room)
+    end
 
-      if keyItem and keyItem.Parent then
-        local keyPos = GetInstancePosition(keyItem)
-        if keyPos then
-          KnobFarm.SetStatus("Phase -> Key (Room " .. tostring(roomNum) .. ")")
-          PhaseFlyTo(keyPos + Vector3.new(0, 1.0, 0), 18, 3.5, 6.0)
+    if keyItem and keyItem.Parent then
+      local keyPos = GetInstancePosition(keyItem)
+      if keyPos then
+        KnobFarm.SetStatus("Phase -> Flying to Key...")
+        PhaseFlyTo(keyPos + Vector3.new(0, 1.2, 0), 22, 2.5, 5.0)
 
-          local desk = keyItem:FindFirstAncestorWhichIsA("Model")
-          if desk then
-            for _, pr in ipairs(desk:GetDescendants()) do
-              if pr:IsA("ProximityPrompt") and pr.Enabled and pr.Name ~= "ModulePrompt" then
-                TriggerPrompt(pr)
-              end
+        -- Trigger prompts on parent/desk/container
+        local desk = keyItem:FindFirstAncestorWhichIsA("Model")
+        if desk and desk ~= room then
+          for _, pr in ipairs(desk:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") and pr.Enabled then
+              TriggerPrompt(pr)
             end
           end
+        end
 
-          local grabStart = tick()
-          while tick() - grabStart < 1.2 and not PlayerHasKey() and KnobFarm.Active do
-            local kPr = keyItem:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if kPr and kPr.Enabled then TriggerPrompt(kPr) end
-            task.wait(0.1)
+        -- Repeatedly trigger all prompts on keyItem until key is in inventory
+        local grabStart = tick()
+        while tick() - grabStart < 3.0 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
+          for _, pr in ipairs(keyItem:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") then
+              TriggerPrompt(pr)
+            end
           end
+          local directPr = keyItem:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if directPr then
+            TriggerPrompt(directPr)
+          end
+          task.wait(0.12)
+        end
+
+        if PlayerHasKey() then
           KnobFarm.LootedObjects[keyItem] = true
+          KnobFarm.SetStatus("Key Acquired!")
+        else
+          KnobFarm.SetStatus("Key pickup failed, will retry...")
         end
       end
     end
-
-    -- 2. Phase fly directly to Exit Door approach
-    local doorCenter = GetDoorCenter(exitDoor)
-    local rootPos = root.Position
-    local doorApproach = GetDoorApproachPosition(doorCenter, rootPos, exitDoor)
-
-    KnobFarm.SetStatus("Phase -> Door " .. tostring(roomNum + 1))
-    PhaseFlyTo(doorApproach, 18, 3.0, 6.0)
-
-    -- 3. Unlock if locked
-    if IsDoorLocked(exitDoor) then
-      EquipKey()
-      task.wait(0.1)
-      local _, curUnPr = IsDoorLocked(exitDoor)
-      if curUnPr and curUnPr.Enabled then
-        TriggerPrompt(curUnPr)
-        task.wait(0.25)
-      end
-      local stillLocked, curUnPr2 = IsDoorLocked(exitDoor)
-      if stillLocked and curUnPr2 and curUnPr2.Enabled then
-        TriggerPrompt(curUnPr2)
-        task.wait(0.2)
-      end
-    end
-
-    -- 4. Open door
-    if exitDoor:FindFirstChild("ClientOpen") then
-      pcall(function() exitDoor.ClientOpen:FireServer() end)
-    end
-    local dPr = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if dPr and dPr.Enabled then
-      TriggerPrompt(dPr)
-    end
-    KnobFarm.OpenedDoors[exitDoor] = true
   end
 
-  -- 5. Fly forward into next room with Phase ON (do not turn off phase at the threshold!)
+  -- 2. Phase fly directly to Exit Door approach
+  local doorCenter = GetDoorCenter(exitDoor)
+  local rootPos = root.Position
+  local doorApproach = GetDoorApproachPosition(doorCenter, rootPos, exitDoor)
+
+  KnobFarm.SetStatus("Phase -> Door " .. tostring(roomNum + 1))
+  PhaseFlyTo(doorApproach, 22, 2.5, 6.0)
+
+  -- 3. Unlock door if locked
+  if IsDoorLocked(exitDoor) then
+    KnobFarm.SetStatus("Unlocking Door " .. tostring(roomNum + 1) .. "...")
+    EquipKey()
+    task.wait(0.1)
+
+    local unlockStart = tick()
+    while IsDoorLocked(exitDoor) and tick() - unlockStart < 3.5 and KnobFarm.Active and not _Unloading do
+      EquipKey()
+      local _, curUnPr = IsDoorLocked(exitDoor)
+      if curUnPr then
+        TriggerPrompt(curUnPr)
+      else
+        local lock = exitDoor:FindFirstChild("Lock")
+        if lock then
+          for _, pr in ipairs(lock:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") then
+              TriggerPrompt(pr)
+            end
+          end
+        end
+      end
+      task.wait(0.2)
+    end
+  end
+
+  -- 4. Open door
+  KnobFarm.SetStatus("Opening Door " .. tostring(roomNum + 1) .. "...")
+  if exitDoor:FindFirstChild("ClientOpen") then
+    pcall(function() exitDoor.ClientOpen:FireServer() end)
+  end
+  local dPr = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
+  if dPr and dPr.Enabled then
+    TriggerPrompt(dPr)
+  end
+  KnobFarm.OpenedDoors[exitDoor] = true
+
+  -- 5. Disable collision on door & gate/lattice
   pcall(function()
     for _, dp in ipairs(exitDoor:GetDescendants()) do
       if dp:IsA("BasePart") then dp.CanCollide = false end
@@ -10778,7 +10815,7 @@ local function ExecutePhaseRush(room, roomNum, reason)
     end
   end)
 
-  local doorCenter = GetDoorCenter(exitDoor)
+  -- 6. Fly forward into next room with Phase ON (do not turn off phase at the threshold!)
   local passDir = root.CFrame.LookVector
   local doorLeaf = exitDoor:FindFirstChild("Door")
   local cf = (doorLeaf and doorLeaf:IsA("BasePart") and doorLeaf.CFrame)
@@ -10795,26 +10832,42 @@ local function ExecutePhaseRush(room, roomNum, reason)
   end
 
   KnobFarm.SetStatus("Flying into Room " .. tostring(roomNum + 1) .. "...")
-  local floorPos = GetFloorPosition(doorCenter + passDir * 16.0)
-  local flyTarget = floorPos and (floorPos + Vector3.new(0, 2.5, 0)) or (doorCenter + passDir * 16.0)
-  PhaseFlyTo(flyTarget, 18, 2.0, 2.5)
-  task.wait(0.25)
+  local floorPos = GetFloorPosition(doorCenter + passDir * 18.0)
+  local flyTarget = floorPos and (floorPos + Vector3.new(0, 2.5, 0)) or (doorCenter + passDir * 18.0)
+  PhaseFlyTo(flyTarget, 22, 2.0, 3.0)
+  task.wait(0.2)
 
-  -- 6. Turn off Phase AFTER flying forward into the next room!
+  -- 7. Verify we entered next room
+  local curRoom, curNum = GetPlayerCurrentRoom()
+  local passedSuccessfully = false
+  if curNum and curNum > roomNum then
+    passedSuccessfully = true
+  else
+    local distPast = (root.Position - doorCenter):Dot(passDir)
+    if distPast > 6.0 then
+      passedSuccessfully = true
+    end
+  end
+
+  -- 8. Turn off Phase AFTER passing through
   if toggles.Phase and toggles.Phase.Value then
     toggles.Phase:SetValue(false)
   end
   Phase.TargetPosition = nil
   Phase.Speed = nil
 
-  if reason == "Door 1" then
-    KnobFarm.PassedFirstDoor = true
+  if passedSuccessfully then
+    if reason == "Door 1" or roomNum == 0 then
+      KnobFarm.PassedFirstDoor = true
+    else
+      KnobFarm.PassedPhaseRooms[room] = true
+    end
+    KnobFarm.SetStatus(tostring(reason) .. " passed! Phase OFF.")
   else
-    KnobFarm.PassedPhaseRooms[room] = true
+    KnobFarm.SetStatus(tostring(reason) .. " not completed, retrying...")
   end
-  KnobFarm.SetStatus(tostring(reason) .. " passed! Phase OFF.")
-  task.wait(0.3)
-  return true
+  task.wait(0.2)
+  return passedSuccessfully
 end
 
 local function FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
@@ -11013,13 +11066,17 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
 
   if targetType == "Key" then
     local pickStart = tick()
-    while tick() - pickStart < 0.8 and not PlayerHasKey() and KnobFarm.Active do
+    while tick() - pickStart < 2.5 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
+      for _, pr in ipairs(target:GetDescendants()) do
+        if pr:IsA("ProximityPrompt") then TriggerPrompt(pr) end
+      end
       local kPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if kPr and kPr.Enabled then TriggerPrompt(kPr) end
+      if kPr then TriggerPrompt(kPr) end
       task.wait(0.12)
     end
-    -- UNCONDITIONAL ANTI-STUCK: mark key looted so it NEVER loops forever
-    KnobFarm.LootedObjects[target] = true
+    if PlayerHasKey() then
+      KnobFarm.LootedObjects[target] = true
+    end
     task.wait(0.08)
   elseif targetType == "Lever" then
     local pr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -11034,15 +11091,13 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       local hasKey, keyTool = PlayerHasKey()
       if hasKey and keyTool then
         EquipKey()
-        task.wait(0.08)
-        if unPr and unPr.Enabled then
-          TriggerPrompt(unPr)
-          task.wait(0.15)
-        end
-        local stillLocked, unPr2 = IsDoorLocked(target)
-        if stillLocked and unPr2 then
-          TriggerPrompt(unPr2)
-          task.wait(0.1)
+        task.wait(0.1)
+        local unlockStart = tick()
+        while IsDoorLocked(target) and tick() - unlockStart < 3.0 and KnobFarm.Active and not _Unloading do
+          EquipKey()
+          local _, curUnPr = IsDoorLocked(target)
+          if curUnPr then TriggerPrompt(curUnPr) end
+          task.wait(0.2)
         end
       end
     end
@@ -11126,6 +11181,9 @@ function KnobFarm.RunLoop()
         ClearPathNodes()
         KnobFarm.PassedFirstDoor = false
         KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
+        KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
+        KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
+        KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
         pcall(function()
           if toggles.Phase and toggles.Phase.Value then
             toggles.Phase:SetValue(false)
@@ -11152,6 +11210,9 @@ function KnobFarm.RunLoop()
         ClearPathNodes()
         KnobFarm.PassedFirstDoor = false
         KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
+        KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
+        KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
+        KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
         pcall(function()
           if toggles.Phase and toggles.Phase.Value then
             toggles.Phase:SetValue(false)
@@ -11175,8 +11236,12 @@ function KnobFarm.RunLoop()
 
       KnobFarm.CurrentRoomNum = roomNum
 
+      if roomNum >= 1 then
+        KnobFarm.PassedFirstDoor = true
+      end
+
       -- SPECIAL PHASE RUSH FOR FIRST DOOR (Room 0 / Door 1)
-      if roomNum <= 1 and not KnobFarm.PassedFirstDoor then
+      if roomNum == 0 and not KnobFarm.PassedFirstDoor then
         if ExecutePhaseRush(room, roomNum, "Door 1") then
           continue
         end
@@ -11279,11 +11344,28 @@ end
 function KnobFarm.Start()
   if KnobFarm.Active then return end
   KnobFarm.Active = true
+  KnobFarm.PassedFirstDoor = false
   KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
+  KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
+  KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
+  KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
   local _, curRoomNum = GetPlayerCurrentRoom()
   KnobFarm.CurrentRoomNum = curRoomNum or 0
+  if (curRoomNum or 0) >= 1 then
+    KnobFarm.PassedFirstDoor = true
+  end
   KnobFarm.SetStatus("Started (Room " .. tostring(KnobFarm.CurrentRoomNum) .. ")")
   SetCrouched(true)
+
+  -- Ensure Godmode and InstantInteract are enabled so character is protected and prompts trigger instantly
+  pcall(function()
+    if toggles and toggles.Godmode and not toggles.Godmode.Value then
+      toggles.Godmode:SetValue(true)
+    end
+    if toggles and toggles.InstantInteract and not toggles.InstantInteract.Value then
+      toggles.InstantInteract:SetValue(true)
+    end
+  end)
 
   -- Speedhack setup: if farm walkspeed slider is set and higher than current walkspeed, apply it
   pcall(function()
@@ -11307,6 +11389,9 @@ function KnobFarm.Stop()
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.PassedFirstDoor = false
   KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
+  KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
+  KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
+  KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
   if KnobFarm.Thread then
     pcall(task.cancel, KnobFarm.Thread)
     KnobFarm.Thread = nil
