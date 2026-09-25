@@ -289,14 +289,22 @@ local function wrapSection(luminaSec, tab, colName)
             elseif type(cfg.Default) == "string" then
                 table.insert(defs, cfg.Default)
             end
+            local multiProxy
             local luminaMulti = luminaSec:AddMultiDropdown({
                 Name = cfg.Text or flag,
                 Options = cfg.Values or {},
                 Default = defs,
                 Flag = flag,
-                Callback = cfg.Callback,
+                Callback = function(val)
+                    if cfg.Callback then pcall(cfg.Callback, val) end
+                    if multiProxy and multiProxy._listeners then
+                        for _, fn in ipairs(multiProxy._listeners) do
+                            pcall(fn, val)
+                        end
+                    end
+                end,
             })
-            local multiProxy = {
+            multiProxy = {
                 _raw = luminaMulti,
                 _flag = flag,
                 _listeners = {},
@@ -312,6 +320,12 @@ local function wrapSection(luminaSec, tab, colName)
                                 elseif v == true then table.insert(list, k) end
                             end
                             luminaMulti.Set(list)
+                        end
+                    end
+                    if self._listeners then
+                        local cur = self:GetState()
+                        for _, fn in ipairs(self._listeners) do
+                            pcall(fn, cur)
                         end
                     end
                 end,
@@ -337,19 +351,32 @@ local function wrapSection(luminaSec, tab, colName)
             if type(def) == "number" and cfg.Values and cfg.Values[def] then
                 def = cfg.Values[def]
             end
+            local dropProxy
             local luminaDrop = luminaSec:AddDropdown({
                 Name = cfg.Text or flag,
                 Options = cfg.Values or {},
                 Default = def or (cfg.Values and cfg.Values[1]) or "",
                 Flag = flag,
-                Callback = cfg.Callback,
+                Callback = function(val)
+                    if cfg.Callback then pcall(cfg.Callback, val) end
+                    if dropProxy and dropProxy._listeners then
+                        for _, fn in ipairs(dropProxy._listeners) do
+                            pcall(fn, val)
+                        end
+                    end
+                end,
             })
-            local dropProxy = {
+            dropProxy = {
                 _raw = luminaDrop,
                 _flag = flag,
                 _listeners = {},
                 SetValue = function(self, val)
                     if luminaDrop and luminaDrop.Set then luminaDrop.Set(val) end
+                    if self._listeners then
+                        for _, fn in ipairs(self._listeners) do
+                            pcall(fn, val)
+                        end
+                    end
                 end,
                 OnChanged = function(self, fn)
                     table.insert(self._listeners, fn)
@@ -1388,7 +1415,7 @@ local element3 = {
   AutoFarm = moroWindow:AddTab("Auto Farm", "bot"),
   Visuals = moroWindow:AddTab("Visuals", "scan-eye"),
   Exploits = moroWindow:AddTab("Exploits", "sparkle"),
-  Miscellaneous = moroWindow:AddTab("Miscellaneous", "settings"),
+  Miscellaneous = moroWindow:AddTab("misc", "settings"),
   Mines = moroWindow:AddTab("Mines", "gem"),
   FoolsHotel = moroWindow:AddTab("Hotel-/Fools", "party-popper"),
   Rooms = moroWindow:AddTab("Rooms", "bed-double"),
@@ -2219,6 +2246,585 @@ Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmMinesFlySpeed", {
   Tooltip = "Speed of flight during Phase 2 loot sweep",
 })
 
+-- ========================================================
+-- Auto Door Skip (Knob Farm / Room Cleared)
+-- ========================================================
+Groupboxes.AutoDoorSkip = element3.AutoFarm:AddLeftGroupbox("Auto Door Skip")
+
+do
+  Groupboxes.AutoDoorSkip:AddToggle("AutoDoorSkip", {
+    Text = "Auto Door Skip",
+    Tooltip = "Automatically clears rooms (visible gold, keys, levers) and solves doors.",
+    Default = false,
+  })
+
+  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipFastLoot", {
+    Text = "Fast Loot (Золото / Пыль)",
+    Tooltip = "Teleports to visible gold piles and stardust on tables/floor.",
+    Default = true,
+  })
+
+  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipWaitThreats", {
+    Text = "Wait Threat in Seek Zones (30-40, 80-90)",
+    Tooltip = "Waits for Rush/Ambush/Blitz to despawn ONLY in rooms 30-40 and 80-90 (Seek chase zones).",
+    Default = true,
+  })
+
+  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipUnlock", {
+    Text = "Auto Key & Gate",
+    Tooltip = "Automatically teleports to keys and pulls gate levers if door is locked.",
+    Default = true,
+  })
+
+  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipSpecialRooms", {
+    Text = "Auto Room 50 & 100",
+    Tooltip = "Auto collects books + code in Room 50, and collects fuses + solves breaker + enters elevator in Room 100.",
+    Default = true,
+  })
+
+  local function safeFirePrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    pcall(function()
+      prompt.HoldDuration = 0
+      prompt.RequiresLineOfSight = false
+      prompt.MaxActivationDistance = 30
+      prompt.Enabled = true
+    end)
+    if fireproximityprompt then
+      pcall(fireproximityprompt, prompt, 0, true)
+      pcall(fireproximityprompt, prompt)
+    end
+    if Functions and Functions.ForceFirePrompt then
+      pcall(Functions.ForceFirePrompt, prompt)
+    end
+  end
+
+  local function HasRushAmbushBlitz()
+    local threatNames = {
+      RushMoving = true, Rush = true,
+      AmbushMoving = true, Ambush = true,
+      BlitzMoving = true, Blitz = true,
+      ["RNIUSHCG=="] = true, AR0xMBUSH = true,
+      GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
+    }
+
+    if val83 and val83.ActiveThreats then
+      for threat, active in pairs(val83.ActiveThreats) do
+        if active and threat and threat.Parent and threatNames[threat.Name] then
+          return true, threat
+        end
+      end
+    end
+
+    for name in pairs(threatNames) do
+      local obj = workspace:FindFirstChild(name)
+      if obj then return true, obj end
+    end
+
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if curRooms then
+      for name in pairs(threatNames) do
+        local obj = curRooms:FindFirstChild(name, true)
+        if obj then return true, obj end
+      end
+    end
+
+    return false, nil
+  end
+
+  local function isSeekUpcoming(currentRoom, currentRoomNum)
+    if currentRoom then
+      if currentRoom:FindFirstChild("TriggerEventCollision", true)
+        or currentRoom:FindFirstChild("Seek_Arm", true)
+        or currentRoom:FindFirstChild("SeekTrigger", true)
+        or currentRoom:FindFirstChild("Seeking", true)
+        or currentRoom:FindFirstChild("ChaseStartTrigger", true) then
+        return true
+      end
+    end
+
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if curRooms and currentRoomNum then
+      local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
+      if nextRoom then
+        if nextRoom:FindFirstChild("TriggerEventCollision", true)
+          or nextRoom:FindFirstChild("Seek_Arm", true)
+          or nextRoom:FindFirstChild("SeekTrigger", true)
+          or nextRoom:FindFirstChild("Seeking", true)
+          or nextRoom:FindFirstChild("ChaseStartTrigger", true)
+          or nextRoom:FindFirstChild("SeekMoving", true)
+          or nextRoom:FindFirstChild("SeekMovingNewClone", true) then
+          return true
+        end
+      end
+    end
+
+    return false
+  end
+
+  local function isSeekThreatZone(currentRoom, currentRoomNum)
+    if currentRoomNum and ((currentRoomNum >= 30 and currentRoomNum <= 40) or (currentRoomNum >= 80 and currentRoomNum <= 90)) then
+      return true
+    end
+    if isSeekUpcoming(currentRoom, currentRoomNum) then
+      return true
+    end
+    return false
+  end
+
+  local function getPromptPos(prompt)
+    local parent = prompt.Parent
+    if not parent then return nil end
+    if parent:IsA("BasePart") then
+      return parent.Position
+    elseif parent:IsA("Attachment") then
+      return parent.WorldPosition
+    elseif parent:IsA("Model") then
+      return parent:GetPivot().Position
+    end
+    local part = prompt:FindFirstAncestorWhichIsA("BasePart")
+    if part then return part.Position end
+    return nil
+  end
+
+  local function isVisiblePickupPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
+    local action = prompt.ActionText:lower()
+    local objText = prompt.ObjectText:lower()
+    local parent = prompt.Parent
+    if not parent then return false end
+    local parentName = parent.Name
+
+    -- Exclude doors, locks, levers, books, papers, fuses
+    if parentName == "Door" or parentName == "Padlock" or parentName == "Lock"
+      or parent:FindFirstAncestor("Door") or parentName == "DoorFake" or parentName == "FakeDoor"
+      or parentName == "LeverForGate" or parentName == "TrackLever"
+      or parentName == "LiveHintBook" or parentName == "LibraryHintPaper"
+      or parentName == "FusePickup" or parentName == "FuseObtain" then
+      return false
+    end
+
+    if action == "close" then return false end
+
+    -- Visible gold & stardust only
+    if parentName == "GoldPile" or parentName == "TinyGold" or parentName == "Gold"
+      or parentName == "StardustPickup" or parentName == "Stardust"
+      or parent:GetAttribute("GoldValue")
+      or objText:find("gold") or objText:find("stardust")
+      or (action:find("take") and (parentName:find("Gold") or parentName:find("Star"))) then
+      return true
+    end
+
+    return false
+  end
+
+  local function fastLootRoom(room)
+    local lootedPrompts = {}
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local prompts = {}
+    for _, pr in ipairs(room:GetDescendants()) do
+      if isVisiblePickupPrompt(pr) and not lootedPrompts[pr] then
+        table.insert(prompts, pr)
+      end
+    end
+
+    for _, pr in ipairs(prompts) do
+      if not (toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then break end
+      if pr and pr.Parent and pr.Enabled and not lootedPrompts[pr] then
+        local pos = getPromptPos(pr)
+        if pos then
+          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+          safeFirePrompt(pr)
+          lootedPrompts[pr] = true
+          task.wait(0.06)
+        end
+      end
+    end
+  end
+
+  local function handleGate(room)
+    local gate = room:FindFirstChild("Gate", true)
+    local lever = room:FindFirstChild("LeverForGate", true)
+    if gate and lever then
+      local char = localPlayer2.Character
+      local root = char and char:FindFirstChild("HumanoidRootPart")
+      if root then
+        local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
+        if leverPart then
+          root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
+          local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if pr then
+            safeFirePrompt(pr)
+          end
+          task.wait(0.2)
+        end
+      end
+    end
+  end
+
+  local function handleKeyAndUnlock(room, door)
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root then return end
+
+    local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
+    if not lock then return end
+
+    local function getKeyTool()
+      if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
+      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
+      for _, item in ipairs(char:GetChildren()) do
+        if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+      end
+      if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+          if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+        end
+      end
+      return nil
+    end
+
+    local keyTool = getKeyTool()
+    if not keyTool then
+      local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
+      if not keyObj then
+        for _, pr in ipairs(room:GetDescendants()) do
+          if pr:IsA("ProximityPrompt") and (pr.ObjectText:lower():find("key") or pr.Name:lower():find("key")) then
+            keyObj = pr.Parent
+            break
+          end
+        end
+      end
+
+      if keyObj then
+        local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
+        if keyPos then
+          root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
+          local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if keyPrompt then
+            safeFirePrompt(keyPrompt)
+          end
+          task.wait(0.25)
+        end
+      end
+      keyTool = getKeyTool()
+    end
+
+    if keyTool and hum and keyTool.Parent ~= char then
+      pcall(function() hum:EquipTool(keyTool) end)
+      task.wait(0.15)
+    end
+
+    local lockPrompt = door:FindFirstChild("UnlockPrompt", true)
+      or (lock:IsA("ProximityPrompt") and lock)
+      or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+    local lockPart = (lock:IsA("BasePart") and lock) or lock:FindFirstChildWhichIsA("BasePart", true) or door:FindFirstChild("Door") or door.PrimaryPart
+    if lockPart then
+      root.CFrame = lockPart.CFrame * CFrame.new(0, 0, 2.5)
+      if lockPrompt then
+        safeFirePrompt(lockPrompt)
+      end
+      task.wait(0.2)
+    end
+  end
+
+  local function openRoomDoor(door)
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not door then return end
+
+    local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
+    if doorPart then
+      root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
+    end
+    local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt then
+      safeFirePrompt(prompt)
+    end
+  end
+
+  -- ROOM 50 SOLVER (Books, Paper, Padlock Code)
+  local function handleRoom50(room, door)
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    -- 1. Collect all Books (LiveHintBook)
+    for _, desc in ipairs(room:GetDescendants()) do
+      if desc.Name == "LiveHintBook" then
+        local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
+        local pos = (desc:IsA("BasePart") and desc.Position) or (desc:IsA("Model") and desc:GetPivot().Position)
+        if pos then
+          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+          if pr then safeFirePrompt(pr) end
+          task.wait(0.15)
+        end
+      end
+    end
+
+    -- 2. Collect paper (LibraryHintPaper)
+    local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("PickupItem", true)
+    if not paper then
+      for _, pr in ipairs(room:GetDescendants()) do
+        if pr:IsA("ProximityPrompt") and pr.ObjectText:lower():find("paper") then
+          paper = pr.Parent
+          break
+        end
+      end
+    end
+    if paper then
+      local pPos = (paper:IsA("BasePart") and paper.Position) or (paper:IsA("Model") and paper:GetPivot().Position)
+      if pPos then
+        root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 0))
+        local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr then safeFirePrompt(pr) end
+        task.wait(0.2)
+      end
+    end
+
+    -- 3. Teleport near door 50 Padlock
+    local padlock = room:FindFirstChild("Padlock", true) or (door and door:FindFirstChild("Padlock", true))
+    local padPart = (padlock and padlock:IsA("BasePart") and padlock)
+      or (padlock and padlock:FindFirstChildWhichIsA("BasePart", true))
+      or (door and door:FindFirstChild("Door"))
+      or (door and door.PrimaryPart)
+
+    if padPart then
+      root.CFrame = padPart.CFrame * CFrame.new(0, 0, 2.5)
+      task.wait(0.3)
+    end
+
+    -- 4. Solve Padlock with code / brute force
+    local code = Functions and Functions.GetLibraryCode and Functions.GetLibraryCode()
+    if code and remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
+      if not string.find(code, "_") and code ~= "_____" then
+        remotesFolder2.PL:FireServer(code)
+      else
+        task.spawn(function()
+          local function brute(s)
+            local idx = string.find(s, "_")
+            if not idx then
+              pcall(function() remotesFolder2.PL:FireServer(s) end)
+              task.wait(0.02)
+              return
+            end
+            for d = 0, 9 do
+              local newS = string.sub(s, 1, idx - 1) .. tostring(d) .. string.sub(s, idx + 1)
+              brute(newS)
+            end
+          end
+          brute(code)
+        end)
+      end
+    end
+
+    -- Wait for padlock unlock
+    local t = tick()
+    while padlock and padlock.Parent and (tick() - t < 4) do
+      task.wait(0.2)
+    end
+
+    if door then
+      openRoomDoor(door)
+    end
+  end
+
+  -- ROOM 100 SOLVER (Fuses, Gate Lever, Breaker Box, Elevator)
+  local function handleRoom100(room)
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root then return end
+
+    -- 1. Поднять ключ от щитка (ElectricalKeyObtain) если есть, и открыть дверь
+    local elecKey = room:FindFirstChild("ElectricalKeyObtain", true) or room:FindFirstChild("KeyElectrical", true)
+    if elecKey then
+      local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
+      if kPos then
+        root.CFrame = CFrame.new(kPos + Vector3.new(0, 1.2, 0))
+        local kPr = elecKey:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if kPr then safeFirePrompt(kPr) end
+        task.wait(0.25)
+      end
+    end
+
+    -- Открыть запертую электрическую дверь если есть
+    local elecLock = room:FindFirstChild("KeyElectrical", true) or room:FindFirstChild("ElectricalLock", true)
+    if elecLock then
+      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      local keyTool = (char and char:FindFirstChild("KeyElectrical")) or (bp and bp:FindFirstChild("KeyElectrical"))
+      if keyTool and hum and keyTool.Parent ~= char then
+        pcall(function() hum:EquipTool(keyTool) end)
+        task.wait(0.15)
+      end
+      local lPos = (elecLock:IsA("BasePart") and elecLock.Position) or (elecLock:IsA("Model") and elecLock:GetPivot().Position)
+      if lPos then
+        root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
+        local lPr = elecLock:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if lPr then safeFirePrompt(lPr) end
+        task.wait(0.2)
+      end
+    end
+
+    -- 2. Поднять все фигни (предохранители / fuses / breaker poles)
+    for _, desc in ipairs(room:GetDescendants()) do
+      local isFuse = desc.Name == "FusePickup" or desc.Name == "FuseObtain" or desc.Name == "Fuse" or desc.Name == "LiveBreakerPolePickup"
+      if not isFuse and desc:IsA("ProximityPrompt") and (desc.ObjectText:lower():find("fuse") or desc.ActionText:lower():find("fuse")) then
+        isFuse = true
+      end
+      if isFuse then
+        local pr = desc:IsA("ProximityPrompt") and desc or desc:FindFirstChildWhichIsA("ProximityPrompt", true)
+        local target = desc:IsA("ProximityPrompt") and desc.Parent or desc
+        local pos = (target:IsA("BasePart") and target.Position) or (target:IsA("Model") and target:GetPivot().Position)
+        if pos then
+          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+          if pr then safeFirePrompt(pr) end
+          task.wait(0.12)
+        end
+      end
+    end
+
+    -- 3. Дернуть рычаг (открывающий ворота)
+    local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
+    if lever then
+      local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
+      if lPos then
+        root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
+        local lPr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if lPr then safeFirePrompt(lPr) end
+        task.wait(0.3)
+      end
+    end
+
+    -- 4. Выполнить щиток
+    local breaker = room:FindFirstChild("ElevatorBreaker", true) or workspace:FindFirstChild("ElevatorBreaker")
+    if breaker then
+      local bPos = (breaker:IsA("BasePart") and breaker.Position) or (breaker:IsA("Model") and breaker:GetPivot().Position)
+      if bPos then
+        root.CFrame = CFrame.new(bPos + Vector3.new(0, 1.5, 2.5))
+        for _, bPr in ipairs(breaker:GetDescendants()) do
+          if bPr:IsA("ProximityPrompt") then
+            safeFirePrompt(bPr)
+          end
+        end
+        task.wait(0.5)
+
+        if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
+          pcall(function() remotesFolder2.EBF:FireServer() end)
+        end
+        task.wait(2)
+      end
+    end
+
+    -- 5. Тепнуться в лифт
+    local elevator = room:FindFirstChild("ElevatorCar", true)
+      or room:FindFirstChild("Elevator", true)
+      or workspace:FindFirstChild("ElevatorCar")
+
+    if elevator then
+      local ePos = elevator:GetPivot().Position
+      root.CFrame = CFrame.new(ePos + Vector3.new(0, 2, 0))
+      local ePr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if ePr then safeFirePrompt(ePr) end
+    end
+  end
+
+  local lastProcessedRoom = nil
+
+  task.spawn(function()
+    while task.wait(0.1) do
+      if toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
+        pcall(function()
+          local rep = game:GetService("ReplicatedStorage")
+          local gameData = rep:FindFirstChild("GameData")
+          local latestRoom = gameData and gameData:FindFirstChild("LatestRoom")
+          if not latestRoom then return end
+
+          local roomNum = tostring(latestRoom.Value)
+          local currentRoomNum = tonumber(latestRoom.Value) or 0
+          local currentRooms = workspace:FindFirstChild("CurrentRooms")
+          local currentRoom = currentRooms and currentRooms:FindFirstChild(roomNum)
+          if not currentRoom then return end
+
+          local door = currentRoom:FindFirstChild("Door")
+
+          -- ROOM 50 LOGIC
+          if (currentRoomNum == 50 or roomNum == "50") and toggles.AutoSkipSpecialRooms and toggles.AutoSkipSpecialRooms.Value then
+            if lastProcessedRoom ~= roomNum then
+              handleRoom50(currentRoom, door)
+              lastProcessedRoom = roomNum
+            else
+              if door then openRoomDoor(door) end
+            end
+            return
+          end
+
+          -- ROOM 100 LOGIC
+          if (currentRoomNum >= 100 or roomNum == "100") and toggles.AutoSkipSpecialRooms and toggles.AutoSkipSpecialRooms.Value then
+            if lastProcessedRoom ~= roomNum then
+              handleRoom100(currentRoom)
+              lastProcessedRoom = roomNum
+            end
+            return
+          end
+
+          -- Check threat wait: ONLY in rooms 30-40 and 80-90 (Seek chase zones)
+          if isSeekThreatZone(currentRoom, currentRoomNum) and toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value then
+            if HasRushAmbushBlitz() then
+              while HasRushAmbushBlitz() do
+                task.wait(0.3)
+              end
+              task.wait(0.5)
+            end
+          end
+
+          if not door then return end
+
+          if lastProcessedRoom ~= roomNum then
+            if toggles.AutoSkipFastLoot and toggles.AutoSkipFastLoot.Value then
+              fastLootRoom(currentRoom)
+            end
+
+            if toggles.AutoSkipUnlock and toggles.AutoSkipUnlock.Value then
+              handleGate(currentRoom)
+              handleKeyAndUnlock(currentRoom, door)
+            end
+
+            lastProcessedRoom = roomNum
+          else
+            if toggles.AutoSkipUnlock and toggles.AutoSkipUnlock.Value then
+              local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
+              if lock then
+                handleKeyAndUnlock(currentRoom, door)
+              end
+            end
+          end
+
+          -- Threat wait before opening door in Seek zones
+          if isSeekThreatZone(currentRoom, currentRoomNum) and toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value then
+            if HasRushAmbushBlitz() then
+              while HasRushAmbushBlitz() do
+                task.wait(0.3)
+              end
+              task.wait(0.5)
+            end
+          end
+
+          openRoomDoor(door)
+        end)
+      else
+        lastProcessedRoom = nil
+      end
+    end
+  end)
+end
+
 Groupboxes.SpamBuy = element3.Exploits:AddLeftGroupbox("Pre-Run")
 
 Groupboxes.SpamBuy:AddButton({
@@ -2549,6 +3155,173 @@ Groupboxes.Exploits:AddButton({
     end)
   end, })
 
+-- ========================================================
+-- Crucifix Everything (Exploits Left Groupbox)
+-- ========================================================
+Groupboxes.CrucifixEverything = element3.Exploits:AddLeftGroupbox("Crucifix Everything")
+
+do
+  local CRUCIFIX_URL = "https://raw.githubusercontent.com/RegularVynixu/DOORS-Crucifix-Everything/main/init.luau"
+  local CrucifixEverything = nil
+
+  local function LoadCrucifix()
+    if CrucifixEverything then return CrucifixEverything end
+    local success, result = pcall(function()
+      local source = game:HttpGet(CRUCIFIX_URL)
+      if not source or source == "" then error("Empty source") end
+      local loader = loadstring(source)
+      if not loader then error("loadstring failed") end
+      return loader()
+    end)
+    if success and result then
+      CrucifixEverything = result
+      return CrucifixEverything
+    else
+      warn("[Crucifix] Failed to load library: " .. tostring(result))
+      return nil
+    end
+  end
+
+  local crucifixType = 1
+  local crucifixUses = nil
+  local crucifixResist = false
+  local crucifixEntitiesOnly = false
+  local crucifixCustomColor = nil
+  local crucifixIgnoreList = {}
+
+  Groupboxes.CrucifixEverything:AddDropdown("CrucifixType", {
+    Text = "Crucifix Type",
+    Values = { "guiding light", "curious light" },
+    Default = "guiding light",
+    Callback = function(val)
+      if val == "guiding light" then
+        crucifixType = 1
+      elseif val == "curious light" then
+        crucifixType = 2
+      end
+    end,
+  })
+
+  Groupboxes.CrucifixEverything:AddInput("CrucifixUses", {
+    Text = "Crucifix Uses",
+    Default = "nil",
+    Placeholder = "number or nil (infinite)",
+    Callback = function(val)
+      local lowerVal = string.lower(tostring(val or ""))
+      if lowerVal == "nil" or lowerVal == "" then
+        crucifixUses = nil
+      else
+        local n = tonumber(val)
+        if n then crucifixUses = n end
+      end
+    end,
+  })
+
+  Groupboxes.CrucifixEverything:AddToggle("CrucifixResist", {
+    Text = "Resist",
+    Tooltip = "Whether the crucifix succeeds or fails against the entity.",
+    Default = false,
+    Callback = function(val)
+      crucifixResist = val
+    end,
+  })
+
+  Groupboxes.CrucifixEverything:AddToggle("CrucifixEntitiesOnly", {
+    Text = "Entities Only",
+    Tooltip = "Only target custom entity models.",
+    Default = false,
+    Callback = function(val)
+      crucifixEntitiesOnly = val
+    end,
+  })
+
+  Groupboxes.CrucifixEverything:AddInput("CrucifixColor", {
+    Text = "Custom Color",
+    Default = "",
+    Placeholder = "r, g, b (e.g. 255, 0, 0)",
+    Callback = function(val)
+      val = tostring(val or "")
+      if val == "" then
+        crucifixCustomColor = nil
+        return
+      end
+      local r, g, b = string.match(val, "(%d+)%s*,%s*(%d+)%s*,%s*(%d+)")
+      if r and g and b then
+        crucifixCustomColor = Color3.fromRGB(math.clamp(tonumber(r), 0, 255), math.clamp(tonumber(g), 0, 255), math.clamp(tonumber(b), 0, 255))
+      else
+        crucifixCustomColor = nil
+      end
+    end,
+  })
+
+  Groupboxes.CrucifixEverything:AddInput("CrucifixIgnoreList", {
+    Text = "Ignore List",
+    Default = "",
+    Placeholder = "entity1, entity2",
+    Callback = function(val)
+      val = tostring(val or "")
+      crucifixIgnoreList = {}
+      if val == "" then return end
+      for name in string.gmatch(val, "([^,]+)") do
+        name = name:gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" then
+          table.insert(crucifixIgnoreList, name)
+        end
+      end
+    end,
+  })
+
+  Groupboxes.CrucifixEverything:AddButton({
+    Text = "Give Crucifix",
+    Tooltip = "Spawns the configured crucifix in your inventory.",
+    Callback = function()
+      local lib = LoadCrucifix()
+      if not lib then
+        library:Notify({ Title = "Crucifix", Description = "Failed to load Crucifix library", Time = 5 })
+        return
+      end
+      local ok, err = pcall(function()
+        lib:GiveCrucifix({
+          Type = crucifixType,
+          Uses = crucifixUses,
+          Resist = crucifixResist,
+          EntitiesOnly = crucifixEntitiesOnly,
+          CustomColor = crucifixCustomColor,
+          IgnoreList = crucifixIgnoreList,
+        })
+      end)
+      if ok then
+        library:Notify({ Title = "Crucifix", Description = "Crucifix given successfully!", Time = 4 })
+      else
+        library:Notify({ Title = "Crucifix", Description = "Error: " .. tostring(err), Time = 5 })
+      end
+    end,
+  })
+
+  Groupboxes.CrucifixEverything:AddButton({
+    Text = "Remove Crucifix",
+    Tooltip = "Removes any Crucifix from backpack and character.",
+    Callback = function()
+      local removed = false
+      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      if bp then
+        local c = bp:FindFirstChild("Crucifix")
+        if c then c:Destroy(); removed = true end
+      end
+      local ch = localPlayer2.Character
+      if ch then
+        local c = ch:FindFirstChild("Crucifix")
+        if c then c:Destroy(); removed = true end
+      end
+      if removed then
+        library:Notify({ Title = "Crucifix", Description = "Crucifix removed!", Time = 3 })
+      else
+        library:Notify({ Title = "Crucifix", Description = "No Crucifix found in inventory.", Time = 3 })
+      end
+    end,
+  })
+end
+
 local function helper26(val111)
   if not val111:GetAttribute("HoldDuration_Old") then
     val111:SetAttribute("HoldDuration_Old", val111.HoldDuration)
@@ -2698,29 +3471,80 @@ Groupboxes.Exploits_Bypasses = Groupboxes.Exploits_BypassBox:AddTab("Bypasses")
 Groupboxes.Exploits_Removals = Groupboxes.Exploits_BypassBox:AddTab("Removals")
 Groupboxes.Exploits_Damage = Groupboxes.Exploits_BypassBox:AddTab("Damage")
 
-Groupboxes.Exploits_Bypasses:AddToggle("BypassGiggle", {
-  Text = "Anti Giggle", Default = false, Tooltip = "Prevents Giggle from attacking you", })
+local function createProxyToggle(flag)
+  local proxy = {
+    Value = false,
+    _listeners = {},
+    SetValue = function(self, val)
+      val = not not val
+      if self.Value ~= val then
+        self.Value = val
+        for _, fn in ipairs(self._listeners) do
+          pcall(fn, val)
+        end
+      end
+    end,
+    OnChanged = function(self, fn)
+      table.insert(self._listeners, fn)
+      return {
+        Disconnect = function()
+          for i, l in ipairs(self._listeners) do
+            if l == fn then table.remove(self._listeners, i); break end
+          end
+        end
+      }
+    end,
+    SetDisabled = function(self, d)
+      self.Disabled = d
+    end,
+  }
+  library.Toggles[flag] = proxy
+  return proxy
+end
 
-Groupboxes.Exploits_Bypasses:AddToggle("BypassDupe", {
-  Text = "Anti Dupe", Default = false, Tooltip = "Prevents you from opening Dupe doors", })
+Groupboxes.Exploits_Bypasses:AddToggle("AntiEntityMaster", {
+  Text = "Anti-Entity",
+  Default = false,
+  Tooltip = "Master toggle to protect against selected entities",
+})
 
-Groupboxes.Exploits_Bypasses:AddToggle("BypassEyes", {
-  Text = "Anti Eyes", Default = false, Tooltip = "Prevents Eyes from hurting you", DisabledTooltip = "Your executor doesn't support this feature :(", })
+Groupboxes.Exploits_Bypasses:AddDropdown("AntiEntityList", {
+  Text = "Entities Selection",
+  Values = { "Giggle", "Dupe", "Eyes", "Lookman", "Gloombat Eggs", "Seek Obstructions", "Vacuum", "Snare" },
+  Default = { "Giggle", "Dupe", "Eyes", "Lookman", "Gloombat Eggs", "Seek Obstructions", "Vacuum", "Snare" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select which entities to protect against",
+})
 
-Groupboxes.Exploits_Bypasses:AddToggle("BypassLookman", {
-  Text = "Anti Lookman", Default = false, Tooltip = "Prevents Lookman from hurting you", DisabledTooltip = "Your executor doesn't support this feature :(", })
+local AntiEntityMapping = {
+  ["Giggle"] = "BypassGiggle",
+  ["Dupe"] = "BypassDupe",
+  ["Eyes"] = "BypassEyes",
+  ["Lookman"] = "BypassLookman",
+  ["Gloombat Eggs"] = "BypassGloombatEggs",
+  ["Seek Obstructions"] = "BypassSeekObstructions",
+  ["Vacuum"] = "BypassVacuum",
+  ["Snare"] = "BypassSnare",
+}
 
-Groupboxes.Exploits_Bypasses:AddToggle("BypassGloombatEggs", {
-  Text = "Anti Gloombat Eggs", Default = false, Tooltip = "Prevents taking damage from stepping on Gloombat eggs", })
+for _, flag in pairs(AntiEntityMapping) do
+  createProxyToggle(flag)
+end
 
-Groupboxes.Exploits_Bypasses:AddToggle("BypassSeekObstructions", {
-  Text = "Anti Seek Obstructions", Default = false, Tooltip = "Prevents obstacles in the Seek chase from harming you", })
+local function syncAntiEntity()
+  local master = toggles.AntiEntityMaster and toggles.AntiEntityMaster.Value
+  local selected = options.AntiEntityList and options.AntiEntityList.Value or {}
+  for name, flag in pairs(AntiEntityMapping) do
+    local isEnabled = master and (selected[name] == true)
+    if toggles[flag] then
+      toggles[flag]:SetValue(isEnabled)
+    end
+  end
+end
 
-Groupboxes.Exploits_Bypasses:AddToggle("BypassVacuum", {
-  Text = "Anti Vacuum", Default = false, Tooltip = "Prevents you from falling into Vacuum fake doors", })
-
-Groupboxes.Exploits_Bypasses:AddToggle("BypassSnare", {
-  Text = "Anti Snare", Default = false, Tooltip = "Prevents Snare from trapping you", })
+toggles.AntiEntityMaster:OnChanged(syncAntiEntity)
+options.AntiEntityList:OnChanged(syncAntiEntity)
 
 local val114 = {
   Entities = {}, EventTriggers = {}, Obstructions = {}, HidingSpots = {}, SeekObstructions = {}, SeekBridges = {}, SeekNodes = {}, SeekDuckBoards = {}, SeekHighlights = {}, EyestalkHighlights = {}, PathLights = {}, }
@@ -3251,28 +4075,48 @@ toggles.BypassSnare:OnChanged(function(p63)
   end
 end)
 
-Groupboxes.Exploits_Removals:AddToggle("RemoveA90", {
-  Text = "Remove A-90", Default = false, Tooltip = "Prevents A-90 from spawning", })
+Groupboxes.Exploits_Removals:AddToggle("RemoveMaster", {
+  Text = "Remove Features",
+  Default = false,
+  Tooltip = "Master toggle to remove selected features/sounds/delays",
+})
 
-Groupboxes.Exploits_Removals:AddToggle("RemoveDread", {
-  Text = "Remove Dread", Default = false, Tooltip = "Prevents Dread from spawning", })
+Groupboxes.Exploits_Removals:AddDropdown("RemoveList", {
+  Text = "Removals Selection",
+  Values = { "A-90", "Dread", "Footstep Sounds", "Jammin Music", "Interacting Sounds", "Haste Sound", "Closet Delay" },
+  Default = { "A-90", "Dread", "Footstep Sounds", "Jammin Music", "Interacting Sounds", "Haste Sound", "Closet Delay" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select which features/sounds to remove",
+})
 
-Groupboxes.Exploits_Removals:AddDivider()
+local RemoveMapping = {
+  ["A-90"] = "RemoveA90",
+  ["Dread"] = "RemoveDread",
+  ["Footstep Sounds"] = "RemoveFootstepSounds",
+  ["Jammin Music"] = "RemoveJamminMusic",
+  ["Interacting Sounds"] = "RemoveInteractingSounds",
+  ["Haste Sound"] = "RemoveHasteSound",
+  ["Closet Delay"] = "RemoveClosetDelay",
+}
 
-Groupboxes.Exploits_Removals:AddToggle("RemoveFootstepSounds", {
-  Text = "Remove Footstep Sounds", Default = false, Tooltip = "Removes the sounds when walking", })
+for _, flag in pairs(RemoveMapping) do
+  createProxyToggle(flag)
+end
 
-Groupboxes.Exploits_Removals:AddToggle("RemoveJamminMusic", {
-  Text = "Remove Jammin Music", Default = false, Tooltip = "Removes the music and muffle effect from the Jammin modifier", })
+local function syncRemove()
+  local master = toggles.RemoveMaster and toggles.RemoveMaster.Value
+  local selected = options.RemoveList and options.RemoveList.Value or {}
+  for name, flag in pairs(RemoveMapping) do
+    local isEnabled = master and (selected[name] == true)
+    if toggles[flag] then
+      toggles[flag]:SetValue(isEnabled)
+    end
+  end
+end
 
-Groupboxes.Exploits_Removals:AddToggle("RemoveInteractingSounds", {
-  Text = "Remove Interacting Sounds", Default = false, Tooltip = "Removes the sounds when interacting with proximity prompts", })
-
-Groupboxes.Exploits_Removals:AddToggle("RemoveHasteSound", {
-  Text = "Remove Haste Sound", Default = false, Tooltip = "Mutes the ambience sound when Haste is active", })
-
-Groupboxes.Exploits_Removals:AddToggle("RemoveClosetDelay", {
-  Text = "Remove Closet Delay", Default = false, Tooltip = "Removes the short window where you can't exit out of a closet after the animation finishes.", })
+toggles.RemoveMaster:OnChanged(syncRemove)
+options.RemoveList:OnChanged(syncRemove)
 
 toggles.RemoveA90:OnChanged(function(p64)
   local object2 = helper19()
@@ -3382,11 +4226,44 @@ toggles.RemoveInteractingSounds:OnChanged(function(p68)
   end
 end)
 
-Groupboxes.Exploits_Damage:AddToggle("NoScreechDamage", {
-  Text = "No Screech Damage", Default = false, Tooltip = "Prevents Screech from hurting you", })
+Groupboxes.Exploits_Damage:AddToggle("NoDamageMaster", {
+  Text = "No Damage",
+  Default = false,
+  Tooltip = "Master toggle to prevent damage from selected entities",
+})
 
-Groupboxes.Exploits_Damage:AddToggle("NoA90Damage", {
-  Text = "No A-90 Damage", Default = false, Tooltip = "Prevents A-90 from hurting you", })
+Groupboxes.Exploits_Damage:AddDropdown("NoDamageList", {
+  Text = "No Damage Selection",
+  Values = { "Screech", "A-90", "Halt" },
+  Default = { "Screech", "A-90", "Halt" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select entities that should not damage you",
+})
+
+local NoDamageMapping = {
+  ["Screech"] = "NoScreechDamage",
+  ["A-90"] = "NoA90Damage",
+  ["Halt"] = "NoHaltDamage",
+}
+
+for _, flag in pairs(NoDamageMapping) do
+  createProxyToggle(flag)
+end
+
+local function syncNoDamage()
+  local master = toggles.NoDamageMaster and toggles.NoDamageMaster.Value
+  local selected = options.NoDamageList and options.NoDamageList.Value or {}
+  for name, flag in pairs(NoDamageMapping) do
+    local isEnabled = master and (selected[name] == true)
+    if toggles[flag] then
+      toggles[flag]:SetValue(isEnabled)
+    end
+  end
+end
+
+toggles.NoDamageMaster:OnChanged(syncNoDamage)
+options.NoDamageList:OnChanged(syncNoDamage)
 
 toggles.NoScreechDamage:OnChanged(function(p69)
   if not remotesFolder2 then
@@ -3403,9 +4280,6 @@ toggles.NoScreechDamage:OnChanged(function(p69)
     FakeEvents.Screech.Parent = nil
   end
 end)
-
-Groupboxes.Exploits_Damage:AddToggle("NoHaltDamage", {
-  Text = "No Halt Damage", Default = false, Tooltip = "Prevents Halt from hurting you", })
 
 toggles.NoHaltDamage:OnChanged(function(p70)
   if not remotesFolder2 then
@@ -4295,6 +5169,119 @@ Groupboxes.Other:AddToggle("DoorReachToggle", {
 
 Groupboxes.Other:AddSlider("DoorReachDistance", {
   Text = "Door Reach Distance", Min = 15, Max = 75, Default = 45, Rounding = 0, Compact = true, Suffix = " studs", })
+
+-- ========================================================
+-- Phantom Noclip (Main Tab)
+-- ========================================================
+Groupboxes.PhantomNoclip = element3.Main:AddRightGroupbox("Phantom Noclip")
+
+do
+  local phantomTolerance = 3
+  local phantomEnabled = false
+  local lastSafeCFrame = nil
+  local noclipConn = nil
+  local antiTpConn = nil
+  local charConn = nil
+
+  local function setPhantomCollision(state)
+    local char = localPlayer2.Character
+    if not char then return end
+    for _, obj in ipairs(char:GetDescendants()) do
+      if obj:IsA("BasePart") then
+        obj.CanCollide = not state
+      end
+    end
+  end
+
+  local function disablePhantom()
+    phantomEnabled = false
+    lastSafeCFrame = nil
+    if noclipConn then
+      noclipConn:Disconnect()
+      noclipConn = nil
+    end
+    if antiTpConn then
+      antiTpConn:Disconnect()
+      antiTpConn = nil
+    end
+    setPhantomCollision(false)
+  end
+
+  local function enablePhantom()
+    if phantomEnabled then return end
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    phantomEnabled = true
+    lastSafeCFrame = root.CFrame
+
+    noclipConn = runService.Stepped:Connect(function()
+      if not phantomEnabled then return end
+      setPhantomCollision(true)
+    end)
+
+    local postSim = runService.PostSimulation or runService.Heartbeat
+    antiTpConn = postSim:Connect(function()
+      if not phantomEnabled then return end
+      local c = localPlayer2.Character
+      local currRoot = c and c:FindFirstChild("HumanoidRootPart")
+      if not currRoot then
+        lastSafeCFrame = nil
+        return
+      end
+      if not lastSafeCFrame then
+        lastSafeCFrame = currRoot.CFrame
+        return
+      end
+
+      local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
+      if distMoved > phantomTolerance then
+        currRoot.CFrame = lastSafeCFrame
+        currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+      else
+        lastSafeCFrame = currRoot.CFrame
+      end
+    end)
+  end
+
+  charConn = localPlayer2.CharacterAdded:Connect(function()
+    if not phantomEnabled then return end
+    lastSafeCFrame = nil
+    task.wait(0.5)
+    if phantomEnabled then
+      local c = localPlayer2.Character
+      local r = c and c:FindFirstChild("HumanoidRootPart")
+      if r then lastSafeCFrame = r.CFrame end
+      setPhantomCollision(true)
+    end
+  end)
+
+  Groupboxes.PhantomNoclip:AddToggle("PhantomNoclip", {
+    Text = "Phantom Noclip",
+    Tooltip = "Noclip with position flashback protection against fall/rollback.",
+    Default = false,
+  })
+
+  toggles.PhantomNoclip:OnChanged(function(val)
+    if val then
+      enablePhantom()
+    else
+      disablePhantom()
+    end
+  end)
+
+  Groupboxes.PhantomNoclip:AddSlider("PhantomTolerance", {
+    Text = "Phantom Tolerance",
+    Min = 1,
+    Max = 20,
+    Default = 3,
+    Rounding = 1,
+    Callback = function(val)
+      phantomTolerance = val
+    end,
+  })
+end
 
 Fly = { Connection = nil, Body = nil }
 local val148 = nil
@@ -7458,13 +8445,15 @@ Groupboxes.ArchivesMain:AddToggle("AntiRansom", {
 Groupboxes.ArchivesMain:AddToggle("AntiScribbles", {
   Text = "No Scribbles Damage", Default = false, Tooltip = "Prevents scribbles from damaging you", Disabled = not (Executor.hookmetamethod and Executor.newcclosure and Executor.getnamecallmethod), DisabledTooltip = "Your executor doesn't support this feature :(", })
 
-Groupboxes.ArchivesMain:AddToggle("ArchiveChairFly", {
+Groupboxes.ArchivesBypass = element3.Archives:AddLeftGroupbox("Anticheat Bypass")
+
+Groupboxes.ArchivesBypass:AddToggle("ArchiveChairFly", {
   Text = "Chair Anticheat Bypass", Default = false, Tooltip = "Allows you to bypass the anticheat by flying on a chair, allowing you to noclip and fly freely, drag an office chair, then sit in it and press the 'Start Bypass' button", })
 
-Groupboxes.ArchivesMain:AddSlider("ArchiveChairFlySpeed", {
+Groupboxes.ArchivesBypass:AddSlider("ArchiveChairFlySpeed", {
   Text = "Chair Speed", Min = 15, Max = 150, Default = 55, Rounding = 0, })
 
-Groupboxes.ArchivesMain:AddButton({
+Groupboxes.ArchivesBypass:AddButton({
   Text = "Start Bypass", Tooltip = "Press this AFTER you have dragged the chair and sat in it, shift to go down and ctrl and then space to exit (or just turn off the toggle)", Callback = function()
     if not toggles.ArchiveChairFly.Value then
       toggles.ArchiveChairFly:SetValue(true)
@@ -7736,861 +8725,7 @@ do
   })
 end
 
--- ========================================================
--- General Addons (Right Groupbox)
--- ========================================================
-Groupboxes.ArchivesGeneralAddons = element3.Archives:AddRightGroupbox("General Addons")
 
--- 3. Auto Door Skip (Visible Loot + Seek Threat Wait + Room 50 & 100 Solver)
-do
-  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoDoorSkip", {
-    Text = "Auto Door Skip",
-    Tooltip = "Automatically clears rooms (visible gold, keys, levers) and solves doors.",
-    Default = false,
-  })
-
-  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipFastLoot", {
-    Text = "Fast Loot (Золото / Пыль)",
-    Tooltip = "Teleports to visible gold piles and stardust on tables/floor.",
-    Default = true,
-  })
-
-  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipWaitThreats", {
-    Text = "Wait Threat in Seek Zones (30-40, 80-90)",
-    Tooltip = "Waits for Rush/Ambush/Blitz to despawn ONLY in rooms 30-40 and 80-90 (Seek chase zones).",
-    Default = true,
-  })
-
-  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipUnlock", {
-    Text = "Auto Key & Gate",
-    Tooltip = "Automatically teleports to keys and pulls gate levers if door is locked.",
-    Default = true,
-  })
-
-  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoSkipSpecialRooms", {
-    Text = "Auto Room 50 & 100",
-    Tooltip = "Auto collects books + code in Room 50, and collects fuses + solves breaker + enters elevator in Room 100.",
-    Default = true,
-  })
-
-  local function safeFirePrompt(prompt)
-    if not prompt or not prompt:IsA("ProximityPrompt") then return end
-    pcall(function()
-      prompt.HoldDuration = 0
-      prompt.RequiresLineOfSight = false
-      prompt.MaxActivationDistance = 30
-      prompt.Enabled = true
-    end)
-    if fireproximityprompt then
-      pcall(fireproximityprompt, prompt, 0, true)
-      pcall(fireproximityprompt, prompt)
-    end
-    if Functions and Functions.ForceFirePrompt then
-      pcall(Functions.ForceFirePrompt, prompt)
-    end
-  end
-
-  local function HasRushAmbushBlitz()
-    local threatNames = {
-      RushMoving = true, Rush = true,
-      AmbushMoving = true, Ambush = true,
-      BlitzMoving = true, Blitz = true,
-      ["RNIUSHCG=="] = true, AR0xMBUSH = true,
-      GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
-    }
-
-    if val83 and val83.ActiveThreats then
-      for threat, active in pairs(val83.ActiveThreats) do
-        if active and threat and threat.Parent and threatNames[threat.Name] then
-          return true, threat
-        end
-      end
-    end
-
-    for name in pairs(threatNames) do
-      local obj = workspace:FindFirstChild(name)
-      if obj then return true, obj end
-    end
-
-    local curRooms = workspace:FindFirstChild("CurrentRooms")
-    if curRooms then
-      for name in pairs(threatNames) do
-        local obj = curRooms:FindFirstChild(name, true)
-        if obj then return true, obj end
-      end
-    end
-
-    return false, nil
-  end
-
-  local function isSeekUpcoming(currentRoom, currentRoomNum)
-    if currentRoom then
-      if currentRoom:FindFirstChild("TriggerEventCollision", true)
-        or currentRoom:FindFirstChild("Seek_Arm", true)
-        or currentRoom:FindFirstChild("SeekTrigger", true)
-        or currentRoom:FindFirstChild("Seeking", true)
-        or currentRoom:FindFirstChild("ChaseStartTrigger", true) then
-        return true
-      end
-    end
-
-    local curRooms = workspace:FindFirstChild("CurrentRooms")
-    if curRooms and currentRoomNum then
-      local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
-      if nextRoom then
-        if nextRoom:FindFirstChild("TriggerEventCollision", true)
-          or nextRoom:FindFirstChild("Seek_Arm", true)
-          or nextRoom:FindFirstChild("SeekTrigger", true)
-          or nextRoom:FindFirstChild("Seeking", true)
-          or nextRoom:FindFirstChild("ChaseStartTrigger", true)
-          or nextRoom:FindFirstChild("SeekMoving", true)
-          or nextRoom:FindFirstChild("SeekMovingNewClone", true) then
-          return true
-        end
-      end
-    end
-
-    return false
-  end
-
-  local function isSeekThreatZone(currentRoom, currentRoomNum)
-    if currentRoomNum and ((currentRoomNum >= 30 and currentRoomNum <= 40) or (currentRoomNum >= 80 and currentRoomNum <= 90)) then
-      return true
-    end
-    if isSeekUpcoming(currentRoom, currentRoomNum) then
-      return true
-    end
-    return false
-  end
-
-  local function getPromptPos(prompt)
-    local parent = prompt.Parent
-    if not parent then return nil end
-    if parent:IsA("BasePart") then
-      return parent.Position
-    elseif parent:IsA("Attachment") then
-      return parent.WorldPosition
-    elseif parent:IsA("Model") then
-      return parent:GetPivot().Position
-    end
-    local part = prompt:FindFirstAncestorWhichIsA("BasePart")
-    if part then return part.Position end
-    return nil
-  end
-
-  local function isVisiblePickupPrompt(prompt)
-    if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
-    local action = prompt.ActionText:lower()
-    local objText = prompt.ObjectText:lower()
-    local parent = prompt.Parent
-    if not parent then return false end
-    local parentName = parent.Name
-
-    -- Exclude doors, locks, levers, books, papers, fuses
-    if parentName == "Door" or parentName == "Padlock" or parentName == "Lock"
-      or parent:FindFirstAncestor("Door") or parentName == "DoorFake" or parentName == "FakeDoor"
-      or parentName == "LeverForGate" or parentName == "TrackLever"
-      or parentName == "LiveHintBook" or parentName == "LibraryHintPaper"
-      or parentName == "FusePickup" or parentName == "FuseObtain" then
-      return false
-    end
-
-    if action == "close" then return false end
-
-    -- Visible gold & stardust only
-    if parentName == "GoldPile" or parentName == "TinyGold" or parentName == "Gold"
-      or parentName == "StardustPickup" or parentName == "Stardust"
-      or parent:GetAttribute("GoldValue")
-      or objText:find("gold") or objText:find("stardust")
-      or (action:find("take") and (parentName:find("Gold") or parentName:find("Star"))) then
-      return true
-    end
-
-    return false
-  end
-
-  local function fastLootRoom(room)
-    local lootedPrompts = {}
-    local char = localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    local prompts = {}
-    for _, pr in ipairs(room:GetDescendants()) do
-      if isVisiblePickupPrompt(pr) and not lootedPrompts[pr] then
-        table.insert(prompts, pr)
-      end
-    end
-
-    for _, pr in ipairs(prompts) do
-      if not (toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then break end
-      if pr and pr.Parent and pr.Enabled and not lootedPrompts[pr] then
-        local pos = getPromptPos(pr)
-        if pos then
-          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-          safeFirePrompt(pr)
-          lootedPrompts[pr] = true
-          task.wait(0.06)
-        end
-      end
-    end
-  end
-
-  local function handleGate(room)
-    local gate = room:FindFirstChild("Gate", true)
-    local lever = room:FindFirstChild("LeverForGate", true)
-    if gate and lever then
-      local char = localPlayer2.Character
-      local root = char and char:FindFirstChild("HumanoidRootPart")
-      if root then
-        local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
-        if leverPart then
-          root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
-          local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
-          if pr then
-            safeFirePrompt(pr)
-          end
-          task.wait(0.2)
-        end
-      end
-    end
-  end
-
-  local function handleKeyAndUnlock(room, door)
-    local char = localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not root then return end
-
-    local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
-    if not lock then return end
-
-    local function getKeyTool()
-      if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-      if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
-      for _, item in ipairs(char:GetChildren()) do
-        if item:IsA("Tool") and item.Name:lower():find("key") then return item end
-      end
-      if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-          if item:IsA("Tool") and item.Name:lower():find("key") then return item end
-        end
-      end
-      return nil
-    end
-
-    local keyTool = getKeyTool()
-    if not keyTool then
-      local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
-      if not keyObj then
-        for _, pr in ipairs(room:GetDescendants()) do
-          if pr:IsA("ProximityPrompt") and (pr.ObjectText:lower():find("key") or pr.Name:lower():find("key")) then
-            keyObj = pr.Parent
-            break
-          end
-        end
-      end
-
-      if keyObj then
-        local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
-        if keyPos then
-          root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
-          local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
-          if keyPrompt then
-            safeFirePrompt(keyPrompt)
-          end
-          task.wait(0.25)
-        end
-      end
-      keyTool = getKeyTool()
-    end
-
-    if keyTool and hum and keyTool.Parent ~= char then
-      pcall(function() hum:EquipTool(keyTool) end)
-      task.wait(0.15)
-    end
-
-    local lockPrompt = door:FindFirstChild("UnlockPrompt", true)
-      or (lock:IsA("ProximityPrompt") and lock)
-      or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
-
-    local lockPart = (lock:IsA("BasePart") and lock) or lock:FindFirstChildWhichIsA("BasePart", true) or door:FindFirstChild("Door") or door.PrimaryPart
-    if lockPart then
-      root.CFrame = lockPart.CFrame * CFrame.new(0, 0, 2.5)
-      if lockPrompt then
-        safeFirePrompt(lockPrompt)
-      end
-      task.wait(0.2)
-    end
-  end
-
-  local function openRoomDoor(door)
-    local char = localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root or not door then return end
-
-    local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
-    if doorPart then
-      root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
-    end
-    local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if prompt then
-      safeFirePrompt(prompt)
-    end
-  end
-
-  -- ROOM 50 SOLVER (Books, Paper, Padlock Code)
-  local function handleRoom50(room, door)
-    local char = localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    -- 1. Collect all Books (LiveHintBook)
-    for _, desc in ipairs(room:GetDescendants()) do
-      if desc.Name == "LiveHintBook" then
-        local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
-        local pos = (desc:IsA("BasePart") and desc.Position) or (desc:IsA("Model") and desc:GetPivot().Position)
-        if pos then
-          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-          if pr then safeFirePrompt(pr) end
-          task.wait(0.15)
-        end
-      end
-    end
-
-    -- 2. Collect paper (LibraryHintPaper)
-    local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("PickupItem", true)
-    if not paper then
-      for _, pr in ipairs(room:GetDescendants()) do
-        if pr:IsA("ProximityPrompt") and pr.ObjectText:lower():find("paper") then
-          paper = pr.Parent
-          break
-        end
-      end
-    end
-    if paper then
-      local pPos = (paper:IsA("BasePart") and paper.Position) or (paper:IsA("Model") and paper:GetPivot().Position)
-      if pPos then
-        root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 0))
-        local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr then safeFirePrompt(pr) end
-        task.wait(0.2)
-      end
-    end
-
-    -- 3. Teleport near door 50 Padlock
-    local padlock = room:FindFirstChild("Padlock", true) or (door and door:FindFirstChild("Padlock", true))
-    local padPart = (padlock and padlock:IsA("BasePart") and padlock)
-      or (padlock and padlock:FindFirstChildWhichIsA("BasePart", true))
-      or (door and door:FindFirstChild("Door"))
-      or (door and door.PrimaryPart)
-
-    if padPart then
-      root.CFrame = padPart.CFrame * CFrame.new(0, 0, 2.5)
-      task.wait(0.3)
-    end
-
-    -- 4. Solve Padlock with code / brute force
-    local code = Functions and Functions.GetLibraryCode and Functions.GetLibraryCode()
-    if code and remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
-      if not string.find(code, "_") and code ~= "_____" then
-        remotesFolder2.PL:FireServer(code)
-      else
-        task.spawn(function()
-          local function brute(s)
-            local idx = string.find(s, "_")
-            if not idx then
-              pcall(function() remotesFolder2.PL:FireServer(s) end)
-              task.wait(0.02)
-              return
-            end
-            for d = 0, 9 do
-              local newS = string.sub(s, 1, idx - 1) .. tostring(d) .. string.sub(s, idx + 1)
-              brute(newS)
-            end
-          end
-          brute(code)
-        end)
-      end
-    end
-
-    -- Wait for padlock unlock
-    local t = tick()
-    while padlock and padlock.Parent and (tick() - t < 4) do
-      task.wait(0.2)
-    end
-
-    if door then
-      openRoomDoor(door)
-    end
-  end
-
-  -- ROOM 100 SOLVER (Fuses, Gate Lever, Breaker Box, Elevator)
-  local function handleRoom100(room)
-    local char = localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not root then return end
-
-    -- 1. Поднять ключ от щитка (ElectricalKeyObtain) если есть, и открыть дверь
-    local elecKey = room:FindFirstChild("ElectricalKeyObtain", true) or room:FindFirstChild("KeyElectrical", true)
-    if elecKey then
-      local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
-      if kPos then
-        root.CFrame = CFrame.new(kPos + Vector3.new(0, 1.2, 0))
-        local kPr = elecKey:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if kPr then safeFirePrompt(kPr) end
-        task.wait(0.25)
-      end
-    end
-
-    -- Открыть запертую электрическую дверь если есть
-    local elecLock = room:FindFirstChild("KeyElectrical", true) or room:FindFirstChild("ElectricalLock", true)
-    if elecLock then
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-      local keyTool = (char and char:FindFirstChild("KeyElectrical")) or (bp and bp:FindFirstChild("KeyElectrical"))
-      if keyTool and hum and keyTool.Parent ~= char then
-        pcall(function() hum:EquipTool(keyTool) end)
-        task.wait(0.15)
-      end
-      local lPos = (elecLock:IsA("BasePart") and elecLock.Position) or (elecLock:IsA("Model") and elecLock:GetPivot().Position)
-      if lPos then
-        root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
-        local lPr = elecLock:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if lPr then safeFirePrompt(lPr) end
-        task.wait(0.2)
-      end
-    end
-
-    -- 2. Поднять все фигни (предохранители / fuses / breaker poles)
-    for _, desc in ipairs(room:GetDescendants()) do
-      local isFuse = desc.Name == "FusePickup" or desc.Name == "FuseObtain" or desc.Name == "Fuse" or desc.Name == "LiveBreakerPolePickup"
-      if not isFuse and desc:IsA("ProximityPrompt") and (desc.ObjectText:lower():find("fuse") or desc.ActionText:lower():find("fuse")) then
-        isFuse = true
-      end
-      if isFuse then
-        local pr = desc:IsA("ProximityPrompt") and desc or desc:FindFirstChildWhichIsA("ProximityPrompt", true)
-        local target = desc:IsA("ProximityPrompt") and desc.Parent or desc
-        local pos = (target:IsA("BasePart") and target.Position) or (target:IsA("Model") and target:GetPivot().Position)
-        if pos then
-          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-          if pr then safeFirePrompt(pr) end
-          task.wait(0.12)
-        end
-      end
-    end
-
-    -- 3. Дернуть рычаг (открывающий ворота)
-    local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
-    if lever then
-      local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
-      if lPos then
-        root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
-        local lPr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if lPr then safeFirePrompt(lPr) end
-        task.wait(0.3)
-      end
-    end
-
-    -- 4. Выполнить щиток
-    local breaker = room:FindFirstChild("ElevatorBreaker", true) or workspace:FindFirstChild("ElevatorBreaker")
-    if breaker then
-      local bPos = (breaker:IsA("BasePart") and breaker.Position) or (breaker:IsA("Model") and breaker:GetPivot().Position)
-      if bPos then
-        root.CFrame = CFrame.new(bPos + Vector3.new(0, 1.5, 2.5))
-        for _, bPr in ipairs(breaker:GetDescendants()) do
-          if bPr:IsA("ProximityPrompt") then
-            safeFirePrompt(bPr)
-          end
-        end
-        task.wait(0.5)
-
-        if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-          pcall(function() remotesFolder2.EBF:FireServer() end)
-        end
-        task.wait(2)
-      end
-    end
-
-    -- 5. Тепнуться в лифт
-    local elevator = room:FindFirstChild("ElevatorCar", true)
-      or room:FindFirstChild("Elevator", true)
-      or workspace:FindFirstChild("ElevatorCar")
-
-    if elevator then
-      local ePos = elevator:GetPivot().Position
-      root.CFrame = CFrame.new(ePos + Vector3.new(0, 2, 0))
-      local ePr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if ePr then safeFirePrompt(ePr) end
-    end
-  end
-
-  local lastProcessedRoom = nil
-
-  task.spawn(function()
-    while task.wait(0.1) do
-      if toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
-        pcall(function()
-          local rep = game:GetService("ReplicatedStorage")
-          local gameData = rep:FindFirstChild("GameData")
-          local latestRoom = gameData and gameData:FindFirstChild("LatestRoom")
-          if not latestRoom then return end
-
-          local roomNum = tostring(latestRoom.Value)
-          local currentRoomNum = tonumber(latestRoom.Value) or 0
-          local currentRooms = workspace:FindFirstChild("CurrentRooms")
-          local currentRoom = currentRooms and currentRooms:FindFirstChild(roomNum)
-          if not currentRoom then return end
-
-          local door = currentRoom:FindFirstChild("Door")
-
-          -- ROOM 50 LOGIC
-          if (currentRoomNum == 50 or roomNum == "50") and toggles.AutoSkipSpecialRooms and toggles.AutoSkipSpecialRooms.Value then
-            if lastProcessedRoom ~= roomNum then
-              handleRoom50(currentRoom, door)
-              lastProcessedRoom = roomNum
-            else
-              if door then openRoomDoor(door) end
-            end
-            return
-          end
-
-          -- ROOM 100 LOGIC
-          if (currentRoomNum >= 100 or roomNum == "100") and toggles.AutoSkipSpecialRooms and toggles.AutoSkipSpecialRooms.Value then
-            if lastProcessedRoom ~= roomNum then
-              handleRoom100(currentRoom)
-              lastProcessedRoom = roomNum
-            end
-            return
-          end
-
-          -- Check threat wait: ONLY in rooms 30-40 and 80-90 (Seek chase zones)
-          if isSeekThreatZone(currentRoom, currentRoomNum) and toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value then
-            if HasRushAmbushBlitz() then
-              while HasRushAmbushBlitz() do
-                task.wait(0.3)
-              end
-              task.wait(0.5)
-            end
-          end
-
-          if not door then return end
-
-          if lastProcessedRoom ~= roomNum then
-            if toggles.AutoSkipFastLoot and toggles.AutoSkipFastLoot.Value then
-              fastLootRoom(currentRoom)
-            end
-
-            if toggles.AutoSkipUnlock and toggles.AutoSkipUnlock.Value then
-              handleGate(currentRoom)
-              handleKeyAndUnlock(currentRoom, door)
-            end
-
-            lastProcessedRoom = roomNum
-          else
-            if toggles.AutoSkipUnlock and toggles.AutoSkipUnlock.Value then
-              local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
-              if lock then
-                handleKeyAndUnlock(currentRoom, door)
-              end
-            end
-          end
-
-          -- Threat wait before opening door in Seek zones
-          if isSeekThreatZone(currentRoom, currentRoomNum) and toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value then
-            if HasRushAmbushBlitz() then
-              while HasRushAmbushBlitz() do
-                task.wait(0.3)
-              end
-              task.wait(0.5)
-            end
-          end
-
-          openRoomDoor(door)
-        end)
-      else
-        lastProcessedRoom = nil
-      end
-    end
-  end)
-end
-
--- 4. Phantom Noclip
-do
-  local phantomTolerance = 3
-  local phantomEnabled = false
-  local lastSafeCFrame = nil
-  local noclipConn = nil
-  local antiTpConn = nil
-  local charConn = nil
-
-  local function setPhantomCollision(state)
-    local char = localPlayer2.Character
-    if not char then return end
-    for _, obj in ipairs(char:GetDescendants()) do
-      if obj:IsA("BasePart") then
-        obj.CanCollide = not state
-      end
-    end
-  end
-
-  local function disablePhantom()
-    phantomEnabled = false
-    lastSafeCFrame = nil
-    if noclipConn then
-      noclipConn:Disconnect()
-      noclipConn = nil
-    end
-    if antiTpConn then
-      antiTpConn:Disconnect()
-      antiTpConn = nil
-    end
-    setPhantomCollision(false)
-  end
-
-  local function enablePhantom()
-    if phantomEnabled then return end
-    local char = localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    phantomEnabled = true
-    lastSafeCFrame = root.CFrame
-
-    noclipConn = runService.Stepped:Connect(function()
-      if not phantomEnabled then return end
-      setPhantomCollision(true)
-    end)
-
-    local postSim = runService.PostSimulation or runService.Heartbeat
-    antiTpConn = postSim:Connect(function()
-      if not phantomEnabled then return end
-      local c = localPlayer2.Character
-      local currRoot = c and c:FindFirstChild("HumanoidRootPart")
-      if not currRoot then
-        lastSafeCFrame = nil
-        return
-      end
-      if not lastSafeCFrame then
-        lastSafeCFrame = currRoot.CFrame
-        return
-      end
-
-      local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
-      if distMoved > phantomTolerance then
-        currRoot.CFrame = lastSafeCFrame
-        currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-      else
-        lastSafeCFrame = currRoot.CFrame
-      end
-    end)
-  end
-
-  charConn = localPlayer2.CharacterAdded:Connect(function()
-    if not phantomEnabled then return end
-    lastSafeCFrame = nil
-    task.wait(0.5)
-    if phantomEnabled then
-      local c = localPlayer2.Character
-      local r = c and c:FindFirstChild("HumanoidRootPart")
-      if r then lastSafeCFrame = r.CFrame end
-      setPhantomCollision(true)
-    end
-  end)
-
-  Groupboxes.ArchivesGeneralAddons:AddToggle("PhantomNoclip", {
-    Text = "Phantom Noclip",
-    Tooltip = "Noclip with position flashback protection against fall/rollback.",
-    Default = false,
-  })
-
-  toggles.PhantomNoclip:OnChanged(function(val)
-    if val then
-      enablePhantom()
-    else
-      disablePhantom()
-    end
-  end)
-
-  Groupboxes.ArchivesGeneralAddons:AddSlider("PhantomTolerance", {
-    Text = "Phantom Tolerance",
-    Min = 1,
-    Max = 20,
-    Default = 3,
-    Rounding = 1,
-    Callback = function(val)
-      phantomTolerance = val
-    end,
-  })
-end
-
--- ========================================================
--- Crucifix Everything (Right Groupbox)
--- ========================================================
-Groupboxes.ArchivesCrucifix = element3.Archives:AddRightGroupbox("Crucifix Everything")
-
-do
-  local CRUCIFIX_URL = "https://raw.githubusercontent.com/RegularVynixu/DOORS-Crucifix-Everything/main/init.luau"
-  local CrucifixEverything = nil
-
-  local function LoadCrucifix()
-    if CrucifixEverything then return CrucifixEverything end
-    local success, result = pcall(function()
-      local source = game:HttpGet(CRUCIFIX_URL)
-      if not source or source == "" then error("Empty source") end
-      local loader = loadstring(source)
-      if not loader then error("loadstring failed") end
-      return loader()
-    end)
-    if success and result then
-      CrucifixEverything = result
-      return CrucifixEverything
-    else
-      warn("[Crucifix] Failed to load library: " .. tostring(result))
-      return nil
-    end
-  end
-
-  local crucifixType = 1
-  local crucifixUses = nil
-  local crucifixResist = false
-  local crucifixEntitiesOnly = false
-  local crucifixCustomColor = nil
-  local crucifixIgnoreList = {}
-
-  Groupboxes.ArchivesCrucifix:AddDropdown("CrucifixType", {
-    Text = "Crucifix Type",
-    Values = { "guiding light", "curious light" },
-    Default = "guiding light",
-    Callback = function(val)
-      if val == "guiding light" then
-        crucifixType = 1
-      elseif val == "curious light" then
-        crucifixType = 2
-      end
-    end,
-  })
-
-  Groupboxes.ArchivesCrucifix:AddInput("CrucifixUses", {
-    Text = "Crucifix Uses",
-    Default = "nil",
-    Placeholder = "number or nil (infinite)",
-    Callback = function(val)
-      local lowerVal = string.lower(tostring(val or ""))
-      if lowerVal == "nil" or lowerVal == "" then
-        crucifixUses = nil
-      else
-        local n = tonumber(val)
-        if n then crucifixUses = n end
-      end
-    end,
-  })
-
-  Groupboxes.ArchivesCrucifix:AddToggle("CrucifixResist", {
-    Text = "Resist",
-    Tooltip = "Whether the crucifix succeeds or fails against the entity.",
-    Default = false,
-    Callback = function(val)
-      crucifixResist = val
-    end,
-  })
-
-  Groupboxes.ArchivesCrucifix:AddToggle("CrucifixEntitiesOnly", {
-    Text = "Entities Only",
-    Tooltip = "Only target custom entity models.",
-    Default = false,
-    Callback = function(val)
-      crucifixEntitiesOnly = val
-    end,
-  })
-
-  Groupboxes.ArchivesCrucifix:AddInput("CrucifixColor", {
-    Text = "Custom Color",
-    Default = "",
-    Placeholder = "r, g, b (e.g. 255, 0, 0)",
-    Callback = function(val)
-      val = tostring(val or "")
-      if val == "" then
-        crucifixCustomColor = nil
-        return
-      end
-      local r, g, b = string.match(val, "(%d+)%s*,%s*(%d+)%s*,%s*(%d+)")
-      if r and g and b then
-        crucifixCustomColor = Color3.fromRGB(math.clamp(tonumber(r), 0, 255), math.clamp(tonumber(g), 0, 255), math.clamp(tonumber(b), 0, 255))
-      else
-        crucifixCustomColor = nil
-      end
-    end,
-  })
-
-  Groupboxes.ArchivesCrucifix:AddInput("CrucifixIgnoreList", {
-    Text = "Ignore List",
-    Default = "",
-    Placeholder = "entity1, entity2",
-    Callback = function(val)
-      val = tostring(val or "")
-      crucifixIgnoreList = {}
-      if val == "" then return end
-      for name in string.gmatch(val, "([^,]+)") do
-        name = name:gsub("^%s+", ""):gsub("%s+$", "")
-        if name ~= "" then
-          table.insert(crucifixIgnoreList, name)
-        end
-      end
-    end,
-  })
-
-  Groupboxes.ArchivesCrucifix:AddButton({
-    Text = "Give Crucifix",
-    Tooltip = "Spawns the configured crucifix in your inventory.",
-    Callback = function()
-      local lib = LoadCrucifix()
-      if not lib then
-        library:Notify({ Title = "Crucifix", Description = "Failed to load Crucifix library", Time = 5 })
-        return
-      end
-      local ok, err = pcall(function()
-        lib:GiveCrucifix({
-          Type = crucifixType,
-          Uses = crucifixUses,
-          Resist = crucifixResist,
-          EntitiesOnly = crucifixEntitiesOnly,
-          CustomColor = crucifixCustomColor,
-          IgnoreList = crucifixIgnoreList,
-        })
-      end)
-      if ok then
-        library:Notify({ Title = "Crucifix", Description = "Crucifix given successfully!", Time = 4 })
-      else
-        library:Notify({ Title = "Crucifix", Description = "Error: " .. tostring(err), Time = 5 })
-      end
-    end,
-  })
-
-  Groupboxes.ArchivesCrucifix:AddButton({
-    Text = "Remove Crucifix",
-    Tooltip = "Removes any Crucifix from backpack and character.",
-    Callback = function()
-      local removed = false
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-      if bp then
-        local c = bp:FindFirstChild("Crucifix")
-        if c then c:Destroy(); removed = true end
-      end
-      local ch = localPlayer2.Character
-      if ch then
-        local c = ch:FindFirstChild("Crucifix")
-        if c then c:Destroy(); removed = true end
-      end
-      if removed then
-        library:Notify({ Title = "Crucifix", Description = "Crucifix removed!", Time = 3 })
-      else
-        library:Notify({ Title = "Crucifix", Description = "No Crucifix found in inventory.", Time = 3 })
-      end
-    end,
-  })
-end
 
 Groupboxes.StairwellMain = element3.Stairwell:AddLeftGroupbox("Stairwell")
 
@@ -10349,14 +10484,39 @@ end)
 Groupboxes.Visuals_Settings:AddToggle("ESPRainbow", { Text = "Rainbow ESP", Default = false })
 Groupboxes.Visuals_Settings:AddDivider()
 
+Groupboxes.Visuals_Settings:AddToggle("TracersMaster", {
+  Text = "Tracers",
+  Default = false,
+  Tooltip = "Master toggle for tracers",
+})
+
+Groupboxes.Visuals_Settings:AddDropdown("TracersList", {
+  Text = "Tracers Selection",
+  Values = { "Entities", "Doors", "Keys", "Objectives", "Items", "Coins", "Chests", "Hiding Spots" },
+  Default = { "Entities", "Doors", "Keys", "Objectives", "Items", "Coins", "Chests", "Hiding Spots" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select which categories to show tracers for",
+})
+
 TracerCategories = { "Entities", "Doors", "Keys", "Objectives", "Items", "Gold", "Chests", "HidingSpots" }
+
+local TracerCatToDisplayName = {
+  ["Entities"] = "Entities",
+  ["Doors"] = "Doors",
+  ["Keys"] = "Keys",
+  ["Objectives"] = "Objectives",
+  ["Items"] = "Items",
+  ["Gold"] = "Coins",
+  ["Chests"] = "Chests",
+  ["HidingSpots"] = "Hiding Spots",
+}
 
 for index71, value108 in ipairs(TracerCategories) do
   local val274 = value108
   local val275 = val274 .. "Tracers"
   local val276 = ESPToggleKeys[val274]
-  local val277 = val274 == "HidingSpots" and "Hiding Spots" or (val274 == "Gold" and "Coins" or val274)
-  Groupboxes.Visuals_Settings:AddToggle(val275, { Text = val277 .. " Tracers", Default = false })
+  createProxyToggle(val275)
 
   toggles[val275]:OnChanged(function(p165)
     if p165 and not toggles[val276].Value then
@@ -10373,6 +10533,22 @@ for index71, value108 in ipairs(TracerCategories) do
     end
   end)
 end
+
+local function syncTracers()
+  local master = toggles.TracersMaster and toggles.TracersMaster.Value
+  local selected = options.TracersList and options.TracersList.Value or {}
+  for _, cat in ipairs(TracerCategories) do
+    local disp = TracerCatToDisplayName[cat] or cat
+    local isEnabled = master and (selected[disp] == true)
+    local val275 = cat .. "Tracers"
+    if toggles[val275] then
+      toggles[val275]:SetValue(isEnabled)
+    end
+  end
+end
+
+toggles.TracersMaster:OnChanged(syncTracers)
+options.TracersList:OnChanged(syncTracers)
 
 Groupboxes.Visuals_Settings:AddDropdown("ESPTracerOrigin", {
   Text = "Tracer Origin", Values = { "Top", "Middle", "Bottom" }, Default = 3, })
