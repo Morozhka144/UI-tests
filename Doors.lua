@@ -11883,26 +11883,88 @@ local function HasDoorLattice(room)
   return room:FindFirstChild("DoorLattice") ~= nil or room:FindFirstChild("DoorLattice", true) ~= nil
 end
 
+local function DisableObstacleCollision(room)
+  if not room then return end
+  pcall(function()
+    for _, desc in ipairs(room:GetDescendants()) do
+      if desc:IsA("BasePart") then
+        local name = desc.Name:lower()
+        local pName = desc.Parent and desc.Parent.Name:lower() or ""
+        local gpName = desc.Parent and desc.Parent.Parent and desc.Parent.Parent.Name:lower() or ""
+        if name:find("plant") or name:find("pot") or name:find("bush") or name:find("flower")
+            or name:find("fern") or name:find("leaf") or name:find("leaves") or name:find("foliage")
+            or name:find("vase") or name:find("bonsai") or name:find("hedge") or name:find("cactus")
+            or name:find("shrub") or name:find("vine") or name:find("tree") or name:find("planter")
+            or pName:find("plant") or pName:find("pot") or pName:find("bush") or pName:find("flower")
+            or pName:find("fern") or pName:find("foliage") or pName:find("vase") or pName:find("bonsai")
+            or pName:find("hedge") or pName:find("cactus") or pName:find("shrub") or pName:find("tree")
+            or pName:find("planter") or gpName:find("plant") or gpName:find("pot") or gpName:find("bush") then
+          desc.CanCollide = false
+        end
+      end
+    end
+  end)
+end
+
+local function IsUserMovingManually()
+  if not userInputService then return false end
+  local keys = {
+    Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
+    Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Left, Enum.KeyCode.Right
+  }
+  for _, k in ipairs(keys) do
+    if userInputService:IsKeyDown(k) then
+      return true
+    end
+  end
+  return false
+end
+
+local function HasLineOfSight(fromPos, toPos, ignoreModel)
+  local diff = toPos - fromPos
+  local dist = diff.Magnitude
+  if dist < 0.5 then return true end
+
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  local ignoreList = { localPlayer2 and localPlayer2.Character }
+  if ignoreModel then
+    table.insert(ignoreList, ignoreModel)
+  end
+  rayParams.FilterDescendantsInstances = ignoreList
+
+  local result = workspace:Raycast(fromPos + Vector3.new(0, 1.2, 0), diff, rayParams)
+  if not result then
+    return true
+  end
+  local hitPart = result.Instance
+  if hitPart and (not hitPart.CanCollide or hitPart.Transparency >= 0.9) then
+    return true
+  end
+  return (result.Position - (fromPos + Vector3.new(0, 1.2, 0))).Magnitude >= dist - 0.5
+end
+
 local function PhaseTemporary(durationSeconds)
   if not KnobFarm.Active or _Unloading then return end
+  local char = localPlayer2 and localPlayer2.Character
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if hum then hum:Move(Vector3.zero, false) end
+
+  Phase.TargetPosition = nil
+  Phase.Speed = nil
+
   pcall(function()
     if toggles.Phase and not toggles.Phase.Value then
       toggles.Phase:SetValue(true)
     end
   end)
-  local char = localPlayer2 and localPlayer2.Character
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local moveDir = (root and root.CFrame.LookVector) or Vector3.new(0, 0, -1)
+
   local t = tick()
   local dur = durationSeconds or 3.0
   while (tick() - t < dur) and KnobFarm.Active and not _Unloading do
-    if hum and moveDir then
-      hum:Move(moveDir, false)
-    end
     task.wait(0.05)
   end
-  if hum then hum:Move(Vector3.zero, false) end
+
   pcall(function()
     if toggles.Phase and toggles.Phase.Value then
       toggles.Phase:SetValue(false)
@@ -12033,6 +12095,12 @@ local function IsStuck()
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return false end
 
+  if IsUserMovingManually() then
+    KnobFarm.LastPosition = root.Position
+    KnobFarm.LastMoveTime = tick()
+    return false
+  end
+
   local pos = root.Position
   if KnobFarm.LastPosition then
     local moved = (pos - KnobFarm.LastPosition).Magnitude
@@ -12145,9 +12213,9 @@ end
 
 local function PhaseFlyTo(targetPos, speed, stopDistance, timeout)
   if not targetPos then return false end
-  speed = speed or 18
-  stopDistance = stopDistance or 3.0
-  timeout = timeout or 6.0
+  speed = speed or (Phase.Speed or 2.25)
+  stopDistance = stopDistance or 2.5
+  timeout = timeout or 8.0
 
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -12183,6 +12251,7 @@ local function PhaseFlyTo(targetPos, speed, stopDistance, timeout)
   end
 
   Phase.TargetPosition = nil
+  Phase.Speed = nil
   if Phase.Body then
     Phase.Body.Velocity = Vector3.zero
   end
@@ -12206,6 +12275,20 @@ local function ExecutePhaseRush(room, roomNum, reason)
 
   KnobFarm.SetStatus("Phase Rush: " .. tostring(reason) .. " (Room " .. tostring(roomNum) .. ")")
 
+  -- Disable collision on door & gate/lattice and room obstacles IMMEDIATELY
+  pcall(function()
+    for _, dp in ipairs(exitDoor:GetDescendants()) do
+      if dp:IsA("BasePart") then dp.CanCollide = false end
+    end
+    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
+    if lattice then
+      for _, lp in ipairs(lattice:GetDescendants()) do
+        if lp:IsA("BasePart") then lp.CanCollide = false end
+      end
+    end
+  end)
+  DisableObstacleCollision(room)
+
   -- 1. If door is locked or this is Room 0, ensure we have the key
   local locked, unPr = IsDoorLocked(exitDoor)
   if (locked or roomNum == 0) and not PlayerHasKey() then
@@ -12221,7 +12304,7 @@ local function ExecutePhaseRush(room, roomNum, reason)
       local keyPos = GetInstancePosition(keyItem)
       if keyPos then
         KnobFarm.SetStatus("Phase -> Flying to Key...")
-        PhaseFlyTo(keyPos + Vector3.new(0, 1.2, 0), 22, 2.5, 5.0)
+        PhaseFlyTo(keyPos + Vector3.new(0, 1.2, 0), nil, 2.5, 6.0)
 
         -- Trigger prompts on parent/desk/container
         local desk = keyItem:FindFirstAncestorWhichIsA("Model")
@@ -12258,13 +12341,13 @@ local function ExecutePhaseRush(room, roomNum, reason)
     end
   end
 
-  -- 2. Phase fly directly to Exit Door approach
+  -- 2. Phase fly directly to Exit Door approach (using original script Phase speed)
   local doorCenter = GetDoorCenter(exitDoor)
   local rootPos = root.Position
   local doorApproach = GetDoorApproachPosition(doorCenter, rootPos, exitDoor)
 
   KnobFarm.SetStatus("Phase -> Door " .. tostring(roomNum + 1))
-  PhaseFlyTo(doorApproach, 22, 2.5, 6.0)
+  PhaseFlyTo(doorApproach, nil, 2.5, 6.0)
 
   -- 3. Unlock door if locked
   if IsDoorLocked(exitDoor) then
@@ -12303,7 +12386,7 @@ local function ExecutePhaseRush(room, roomNum, reason)
   end
   KnobFarm.OpenedDoors[exitDoor] = true
 
-  -- 5. Disable collision on door & gate/lattice
+  -- 5. Disable collision on door & gate/lattice again before flying through
   pcall(function()
     for _, dp in ipairs(exitDoor:GetDescendants()) do
       if dp:IsA("BasePart") then dp.CanCollide = false end
@@ -12316,7 +12399,7 @@ local function ExecutePhaseRush(room, roomNum, reason)
     end
   end)
 
-  -- 6. Fly forward into next room with Phase ON (do not turn off phase at the threshold!)
+  -- 6. Fly forward into next room with Phase ON at original Phase speed (2.25)
   local passDir = root.CFrame.LookVector
   local doorLeaf = exitDoor:FindFirstChild("Door")
   local cf = (doorLeaf and doorLeaf:IsA("BasePart") and doorLeaf.CFrame)
@@ -12333,9 +12416,9 @@ local function ExecutePhaseRush(room, roomNum, reason)
   end
 
   KnobFarm.SetStatus("Flying into Room " .. tostring(roomNum + 1) .. "...")
-  local floorPos = GetFloorPosition(doorCenter + passDir * 18.0)
-  local flyTarget = floorPos and (floorPos + Vector3.new(0, 2.5, 0)) or (doorCenter + passDir * 18.0)
-  PhaseFlyTo(flyTarget, 22, 2.0, 3.0)
+  local floorPos = GetFloorPosition(doorCenter + passDir * 10.0)
+  local flyTarget = floorPos and (floorPos + Vector3.new(0, 2.0, 0)) or (doorCenter + passDir * 10.0)
+  PhaseFlyTo(flyTarget, nil, 2.0, 6.0)
   task.wait(0.2)
 
   -- 7. Verify we entered next room
@@ -12345,7 +12428,7 @@ local function ExecutePhaseRush(room, roomNum, reason)
     passedSuccessfully = true
   else
     local distPast = (root.Position - doorCenter):Dot(passDir)
-    if distPast > 6.0 then
+    if distPast > 4.0 then
       passedSuccessfully = true
     end
   end
@@ -12401,7 +12484,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
   -- Continuous RenderStepped steering: fluid lookahead velocity without MoveTo stutter
   local moveConn
   moveConn = runService.RenderStepped:Connect(function()
-    if not KnobFarm.Active or _Unloading then
+    if not KnobFarm.Active or _Unloading or IsUserMovingManually() then
       completed = true
       return
     end
@@ -12424,8 +12507,8 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       local dz = curPos.Z - rootPos.Z
       local flatDist = math.sqrt(dx * dx + dz * dz)
 
-      if flatDist < 4.2 then
-        -- Consumed this node: remove visual
+      -- Only consume node when close enough (2.4 studs), preventing skipping doorway waypoints from inside subrooms
+      if flatDist < 2.4 then
         if currentNodes[wpIndex] and currentNodes[wpIndex].Parent then
           pcall(function() currentNodes[wpIndex]:Destroy() end)
           currentNodes[wpIndex] = nil
@@ -12433,14 +12516,14 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
         wpIndex = wpIndex + 1
       else
         local nextWp = waypoints[wpIndex + 1]
-        if nextWp then
+        -- Only allow skipping to next waypoint if within 4.5 studs AND we have direct Line Of Sight without hitting a wall!
+        if nextWp and flatDist < 4.5 then
           local nextPos = nextWp.Position
           local segX = nextPos.X - curPos.X
           local segZ = nextPos.Z - curPos.Z
           local pastX = rootPos.X - curPos.X
           local pastZ = rootPos.Z - curPos.Z
-          if (pastX * segX + pastZ * segZ) > 0 then
-            -- Player has crossed perpendicular plane of curWp
+          if (pastX * segX + pastZ * segZ) > 0 and HasLineOfSight(rootPos, nextPos) then
             if currentNodes[wpIndex] and currentNodes[wpIndex].Parent then
               pcall(function() currentNodes[wpIndex]:Destroy() end)
               currentNodes[wpIndex] = nil
@@ -12455,12 +12538,16 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       end
     end
 
-    -- Lookahead steering: aim ahead on the path for ultra-smooth curved trajectory
-    local lookIndex = math.min(#waypoints, wpIndex + 1)
-    local targetPoint = (waypoints[lookIndex] and waypoints[lookIndex].Position) or targetPos
+    -- Steering target: aim at current waypoint (e.g. subroom doorway exit).
+    -- ONLY look ahead to next waypoint if there is direct Line Of Sight (no wall between player and next waypoint)!
+    local curWp = waypoints[wpIndex]
+    local targetPoint = (curWp and curWp.Position) or targetPos
 
-    if wpIndex >= #waypoints then
-      targetPoint = targetPos
+    if curWp and wpIndex < #waypoints then
+      local nextWp = waypoints[wpIndex + 1]
+      if nextWp and HasLineOfSight(rootPos, nextWp.Position) then
+        targetPoint = nextWp.Position
+      end
     end
 
     local steerX = targetPoint.X - rootPos.X
@@ -12497,12 +12584,17 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
   while not completed and KnobFarm.Active and not _Unloading do
     task.wait(0.04)
 
+    if IsUserMovingManually() then
+      completed = true
+      break
+    end
+
     local char = localPlayer2 and localPlayer2.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then break end
 
-    -- Stuck detection: if barely moved in 1.2 seconds, jump or break
+    -- Stuck detection: if barely moved in 1.0 second, jump or break
     if not lastRootPos then
       lastRootPos = root.Position
       lastProgressTime = tick()
@@ -12511,9 +12603,11 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       if moved > 1.5 then
         lastRootPos = root.Position
         lastProgressTime = tick()
-      elseif tick() - lastProgressTime > 1.2 then
+      elseif tick() - lastProgressTime > 1.0 then
         hum.Jump = true
-        if tick() - lastProgressTime > 2.8 then
+        if targetType == "Drawer" and tick() - lastProgressTime > 2.0 then
+          break -- drawer stuck, don't waste time
+        elseif tick() - lastProgressTime > 2.8 then
           break -- recompute path
         end
       end
@@ -12572,6 +12666,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     moveConn:Disconnect()
     moveConn = nil
   end
+  if hum then hum:Move(Vector3.zero, false) end
 
   -- Target Finalization
   local char = localPlayer2 and localPlayer2.Character
@@ -12672,6 +12767,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       hum:Move(Vector3.zero, false)
     end
   end
+  return completed and not IsUserMovingManually()
 end
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -13254,9 +13350,24 @@ function KnobFarm.RunLoop()
         path = pathfindingService:CreatePath({
           AgentCanJump = true,
           AgentCanClimb = false,
-          WaypointSpacing = 4,
-          AgentRadius = 0.7,
+          WaypointSpacing = 3,
+          AgentRadius = 0.6,
           AgentHeight = 1.2,
+          Costs = { StuckPart = 8 },
+        })
+        pcall(function()
+          path:ComputeAsync(root.Position, targetPos)
+        end)
+      end
+
+      if not path or path.Status ~= Enum.PathStatus.Success then
+        -- Micro-agent for narrow sub-room doorways
+        path = pathfindingService:CreatePath({
+          AgentCanJump = true,
+          AgentCanClimb = false,
+          WaypointSpacing = 2,
+          AgentRadius = 0.35,
+          AgentHeight = 1.0,
           Costs = { StuckPart = 8 },
         })
         pcall(function()
@@ -13268,11 +13379,8 @@ function KnobFarm.RunLoop()
         local waypoints = path:GetWaypoints()
         FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
       else
-        local waypoints = {
-          { Position = root.Position, Action = Enum.PathWaypointAction.Walk },
-          { Position = targetPos, Action = Enum.PathWaypointAction.Walk },
-        }
-        FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
+        KnobFarm.SetStatus("Path obstructed (Room " .. tostring(roomNum) .. "), calculating...")
+        task.wait(0.2)
       end
     end
   end)
