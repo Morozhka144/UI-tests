@@ -12143,12 +12143,29 @@ end
 local function GetDoorApproachPosition(doorCenter, rootPos, door)
   if not doorCenter then return rootPos end
 
-  -- Determine perpendicular normal of the doorway
+  -- If door is already opened, do not push character backwards into the room
+  if door and KnobFarm.OpenedDoors[door] then
+    return doorCenter
+  end
+
+  if rootPos then
+    local toPlayer = Vector3.new(rootPos.X - doorCenter.X, 0, rootPos.Z - doorCenter.Z)
+    -- If character is already within 2.5 studs of doorway, head directly to doorway center
+    if toPlayer.Magnitude < 2.5 then
+      return doorCenter
+    end
+  end
+
+  -- Determine perpendicular normal of doorway using STATIC parts (avoid swinging Door leaf!)
   local normal = nil
   if door then
-    local doorLeaf = door:FindFirstChild("Door")
-    local cf = (doorLeaf and doorLeaf:IsA("BasePart") and doorLeaf.CFrame)
-    if not cf and door:IsA("Model") then
+    local staticPart = door:FindFirstChild("Hidden")
+      or door:FindFirstChild("DoorFrame")
+      or door:FindFirstChild("Frame")
+      or door:FindFirstChild("Sign")
+      or door.PrimaryPart
+    local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
+    if not cf and door:IsA("Model") and not KnobFarm.OpenedDoors[door] then
       local ok, piv = pcall(function() return door:GetPivot() end)
       if ok and piv then cf = piv end
     end
@@ -12400,19 +12417,30 @@ local function ExecutePhaseRush(room, roomNum, reason)
   end)
 
   -- 6. Fly forward into next room with Phase ON at original Phase speed (2.25)
-  local passDir = root.CFrame.LookVector
-  local doorLeaf = exitDoor:FindFirstChild("Door")
-  local cf = (doorLeaf and doorLeaf:IsA("BasePart") and doorLeaf.CFrame)
-    or (exitDoor:IsA("Model") and select(1, pcall(function() return exitDoor:GetPivot() end)))
-  if cf and typeof(cf) == "CFrame" then
-    local lv = cf.LookVector
-    local flatLv = Vector3.new(lv.X, 0, lv.Z)
-    if flatLv.Magnitude > 0.2 then
-      local normal = flatLv.Unit
-      local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
-      local side = toPlayer:Dot(normal) >= 0 and 1 or -1
-      passDir = normal * (-side)
+  local passDir = nil
+  local toDoor = Vector3.new(doorCenter.X - root.Position.X, 0, doorCenter.Z - root.Position.Z)
+  if toDoor.Magnitude > 1.0 then
+    passDir = toDoor.Unit
+  else
+    local staticPart = exitDoor:FindFirstChild("Hidden")
+      or exitDoor:FindFirstChild("DoorFrame")
+      or exitDoor:FindFirstChild("Frame")
+      or exitDoor:FindFirstChild("Sign")
+      or exitDoor.PrimaryPart
+    local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
+    if cf then
+      local flatLv = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+      if flatLv.Magnitude > 0.2 then
+        local normal = flatLv.Unit
+        local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
+        local side = toPlayer:Dot(normal) >= 0 and 1 or -1
+        passDir = normal * (-side)
+      end
     end
+  end
+  if not passDir then
+    local fwd = root.CFrame.LookVector
+    passDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
   end
 
   KnobFarm.SetStatus("Flying into Room " .. tostring(roomNum + 1) .. "...")
@@ -12732,30 +12760,50 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
 
     -- 4. Walk forward through the doorway into the next room
     if root and hum then
-      local passDir = root.CFrame.LookVector
-      local doorLeaf = target:FindFirstChild("Door")
-      local cf = (doorLeaf and doorLeaf:IsA("BasePart") and doorLeaf.CFrame)
-        or (target:IsA("Model") and select(1, pcall(function() return target:GetPivot() end)))
-      if cf and typeof(cf) == "CFrame" then
-        local lv = cf.LookVector
-        local flatLv = Vector3.new(lv.X, 0, lv.Z)
-        if flatLv.Magnitude > 0.2 then
-          local normal = flatLv.Unit
-          local toPlayer = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
-          local side = toPlayer:Dot(normal) >= 0 and 1 or -1
-          passDir = normal * (-side)
-        end
-      elseif #waypoints >= 2 then
+      local passDir = nil
+      -- Priority 1: Path waypoint approach direction (the direction the player was running towards the door)
+      if #waypoints >= 2 then
         local p1 = waypoints[#waypoints].Position
         local p0 = waypoints[#waypoints - 1].Position
         local seg = Vector3.new(p1.X - p0.X, 0, p1.Z - p0.Z)
-        if seg.Magnitude > 0.1 then
+        if seg.Magnitude > 0.2 then
           passDir = seg.Unit
         end
       end
+      -- Priority 2: Direction from player's position to door target position
+      if not passDir then
+        local toDoor = Vector3.new(targetPos.X - root.Position.X, 0, targetPos.Z - root.Position.Z)
+        if toDoor.Magnitude > 0.3 then
+          passDir = toDoor.Unit
+        end
+      end
+      -- Priority 3: Static doorway normal (from static frame/hidden, NOT swinging Door leaf)
+      if not passDir then
+        local staticPart = target:FindFirstChild("Hidden")
+          or target:FindFirstChild("DoorFrame")
+          or target:FindFirstChild("Frame")
+          or target:FindFirstChild("Sign")
+          or target.PrimaryPart
+        local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
+        if cf then
+          local lv = cf.LookVector
+          local flatLv = Vector3.new(lv.X, 0, lv.Z)
+          if flatLv.Magnitude > 0.2 then
+            local normal = flatLv.Unit
+            local toPlayer = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
+            local side = toPlayer:Dot(normal) >= 0 and 1 or -1
+            passDir = normal * (-side)
+          end
+        end
+      end
+      -- Fallback: current character facing direction
+      if not passDir then
+        local fwd = root.CFrame.LookVector
+        passDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
+      end
 
       local passStart = tick()
-      while tick() - passStart < 0.8 and KnobFarm.Active and not _Unloading do
+      while tick() - passStart < 0.6 and KnobFarm.Active and not _Unloading do
         for _, dp in ipairs(target:GetDescendants()) do
           if dp:IsA("BasePart") then
             dp.CanCollide = false
@@ -13067,6 +13115,22 @@ local function ExecuteAutoDoorSkip(room, roomNum)
 
   KnobFarm.SetStatus("Auto Door Skip: Room " .. tostring(roomNum))
 
+  -- Disable collisions on decorative plants/pots/bushes
+  DisableObstacleCollision(room)
+
+  -- Disable collision on door & gate/lattice immediately
+  pcall(function()
+    for _, dp in ipairs(exitDoor:GetDescendants()) do
+      if dp:IsA("BasePart") then dp.CanCollide = false end
+    end
+    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
+    if lattice then
+      for _, lp in ipairs(lattice:GetDescendants()) do
+        if lp:IsA("BasePart") then lp.CanCollide = false end
+      end
+    end
+  end)
+
   -- 1. Threat wait in Seek zones (30-40, 80-90)
   WaitForThreats(roomNum)
 
@@ -13085,14 +13149,25 @@ local function ExecuteAutoDoorSkip(room, roomNum)
     task.wait(0.15)
   end
 
-  -- 4. Key handling and Unlock
+  -- 4. Key handling and Unlock (ensured for locked doors and Room 0)
   local locked, unPr = IsDoorLocked(exitDoor)
-  if locked and not PlayerHasKey() then
+  if (locked or roomNum == 0) and not PlayerHasKey() then
     local keyItem = FindRoomKey(room)
+    local findStart = tick()
+    while not keyItem and tick() - findStart < 2.5 and KnobFarm.Active and not _Unloading do
+      task.wait(0.15)
+      keyItem = FindRoomKey(room)
+    end
     if keyItem and keyItem.Parent then
       local keyPos = GetInstancePosition(keyItem)
       if keyPos then
         root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
+        local desk = keyItem:FindFirstAncestorWhichIsA("Model")
+        if desk and desk ~= room then
+          for _, pr in ipairs(desk:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") and pr.Enabled then TriggerPrompt(pr) end
+          end
+        end
         local grabStart = tick()
         while tick() - grabStart < 2.5 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
           for _, pr in ipairs(keyItem:GetDescendants()) do
@@ -13128,15 +13203,41 @@ local function ExecuteAutoDoorSkip(room, roomNum)
   -- 5. Threat wait before opening
   WaitForThreats(roomNum)
 
-  -- 6. Teleport to door, open, and step through into next room
+  -- 6. Teleport to door, open, and pass cleanly into next room
   local doorCenter = GetDoorCenter(exitDoor)
-  local doorLeaf = exitDoor:FindFirstChild("Door") or exitDoor:FindFirstChild("Hidden") or exitDoor.PrimaryPart
-  if doorLeaf and doorLeaf:IsA("BasePart") then
-    root.CFrame = doorLeaf.CFrame * CFrame.new(0, 0, 3)
-  elseif doorCenter then
-    root.CFrame = CFrame.new(doorCenter)
+  if not doorCenter then return false end
+
+  -- Determine forward direction from player towards and through door
+  local toDoor = Vector3.new(doorCenter.X - root.Position.X, 0, doorCenter.Z - root.Position.Z)
+  local passDir = nil
+  if toDoor.Magnitude > 1.0 then
+    passDir = toDoor.Unit
+  else
+    local staticPart = exitDoor:FindFirstChild("Hidden")
+      or exitDoor:FindFirstChild("DoorFrame")
+      or exitDoor:FindFirstChild("Frame")
+      or exitDoor:FindFirstChild("Sign")
+      or exitDoor.PrimaryPart
+    local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
+    if cf then
+      local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+      if flat.Magnitude > 0.2 then
+        local normal = flat.Unit
+        local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
+        local side = toPlayer:Dot(normal) >= 0 and 1 or -1
+        passDir = normal * (-side)
+      end
+    end
+    if not passDir then
+      local fwd = root.CFrame.LookVector
+      passDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
+    end
   end
 
+  -- Stand 2.5 studs in front of door facing the door
+  root.CFrame = CFrame.lookAt(doorCenter - passDir * 2.5 + Vector3.new(0, 1.2, 0), doorCenter + Vector3.new(0, 1.2, 0))
+
+  -- Open door
   if exitDoor:FindFirstChild("ClientOpen") then
     pcall(function() exitDoor.ClientOpen:FireServer() end)
   end
@@ -13144,15 +13245,22 @@ local function ExecuteAutoDoorSkip(room, roomNum)
   if dPr and dPr.Enabled then TriggerPrompt(dPr) end
   KnobFarm.OpenedDoors[exitDoor] = true
 
-  -- Disable collision on door and step forward into next room
+  -- Disable collision on door & lattice
   pcall(function()
     for _, dp in ipairs(exitDoor:GetDescendants()) do
       if dp:IsA("BasePart") then dp.CanCollide = false end
     end
+    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
+    if lattice then
+      for _, lp in ipairs(lattice:GetDescendants()) do
+        if lp:IsA("BasePart") then lp.CanCollide = false end
+      end
+    end
   end)
 
   task.wait(0.1)
-  root.CFrame = root.CFrame * CFrame.new(0, 0, -10)
+  -- Step forward through doorway into next room (5 studs past door center)
+  root.CFrame = CFrame.lookAt(doorCenter + passDir * 5.0 + Vector3.new(0, 1.2, 0), doorCenter + passDir * 9.0 + Vector3.new(0, 1.2, 0))
   task.wait(0.2)
   return true
 end
@@ -13240,9 +13348,20 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 1. Room 0 / Door 1: Phase -> Key -> Door -> Fly past -> Phase OFF -> Crouch Run + Godmode
+      -- ── 1. Room 0 / Door 1: Auto Door Skip -> Key -> Door -> Pass -> Crouch Run + Godmode
       if not KnobFarm.PassedFirstDoor or roomNum == 0 then
-        ExecutePhaseRush(room, roomNum, "Door 1")
+        local success = ExecuteAutoDoorSkip(room, roomNum)
+        if success then
+          KnobFarm.PassedFirstDoor = true
+          SetCrouched(true)
+          pcall(function()
+            if options and options.Walkspeed then
+              local desiredSpeed = (options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
+              options.Walkspeed:SetValue(desiredSpeed)
+            end
+          end)
+          KnobFarm.EnableGodmodeOnSpawn()
+        end
         continue
       end
 
@@ -13267,9 +13386,12 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 5. DoorLattice Room: Phase straight to door & fly into next room ──
+      -- ── 5. DoorLattice Room: Auto Door Skip ─────────────────
       if HasDoorLattice(room) and not KnobFarm.PassedPhaseRooms[room] then
-        ExecutePhaseRush(room, roomNum, "DoorLattice")
+        local success = ExecuteAutoDoorSkip(room, roomNum)
+        if success then
+          KnobFarm.PassedPhaseRooms[room] = true
+        end
         continue
       end
 
