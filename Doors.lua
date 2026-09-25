@@ -2195,6 +2195,30 @@ Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmPlayAgain", {
   Tooltip = "Automatically clicks Play Again 7 seconds after dying or beating the game",
 })
 
+Groupboxes.AutoFarm_Settings:AddDivider()
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmMinesMode", {
+  Text = "Mines Mode (Ladder Bypass)",
+  Default = false,
+  Tooltip = "Phase 1: walk to nearest ladder to trigger AC bypass. Phase 2: fly+noclip through all rooms looting everything.",
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmMinesAutoProtect", {
+  Text = "Auto-enable Mines Protections",
+  Default = true,
+  Tooltip = "Automatically enables Vacuum/Snare/Giggle/Gloombat bypass and DisableAnticheat on start",
+})
+
+Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmMinesFlySpeed", {
+  Text = "Fly Loot Speed",
+  Min = 20,
+  Max = 80,
+  Default = 35,
+  Rounding = 0,
+  Compact = true,
+  Tooltip = "Speed of flight during Phase 2 loot sweep",
+})
+
 Groupboxes.SpamBuy = element3.Exploits:AddLeftGroupbox("Pre-Run")
 
 Groupboxes.SpamBuy:AddButton({
@@ -10163,6 +10187,11 @@ KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
 KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
 KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
 KnobFarm.PreviousWalkSpeed = nil
+KnobFarm.FlyLootPhase = false
+KnobFarm.CutsceneResetConn = nil
+KnobFarm.EnemyModResetConn = nil
+KnobFarm.PreviousFlyState = false
+KnobFarm.PreviousNoclipState = false
 
 if not val85.HotelNodesFolder then
   val85.HotelNodesFolder = Instance.new("Folder")
@@ -10548,6 +10577,202 @@ local function FindRoomKey(room)
     end
   end
   return nil
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+-- MINES AUTO-FARM: Helpers for ladder bypass + fly loot
+-- ═══════════════════════════════════════════════════════════════════
+
+local MINES_LOOT_NAMES = {
+  GoldPile = true,
+  ChestBox = true,
+  ChestBoxLocked = true,
+  Toolbox = true,
+  Toolbox_Locked = true,
+  Toolshed_Small = true,
+  StardustPickup = true,
+}
+
+local function FindNearestLadder()
+  if not ESPCategories or not ESPCategories.Ladders then return nil end
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then return nil end
+
+  local bestDist = math.huge
+  local bestLadder = nil
+
+  for _, ladderModel in ipairs(ESPCategories.Ladders) do
+    if ladderModel and ladderModel.Parent then
+      local pos = GetInstancePosition(ladderModel)
+      if pos then
+        local dist = (pos - root.Position).Magnitude
+        if dist < bestDist then
+          bestDist = dist
+          bestLadder = ladderModel
+        end
+      end
+    end
+  end
+
+  return bestLadder, bestDist
+end
+
+local function FlyLootRoom(room)
+  if not room or not KnobFarm.Active or _Unloading then return end
+  if not val85.AnticheatDisabled then return end
+
+  local flySpeed = 35
+  if options and options.AutoFarmMinesFlySpeed then
+    flySpeed = options.AutoFarmMinesFlySpeed.Value
+  end
+
+  -- Collect all lootable objects in this room
+  local lootTargets = {}
+  for _, obj in ipairs(room:GetDescendants()) do
+    if MINES_LOOT_NAMES[obj.Name] and not KnobFarm.LootedObjects[obj] and obj.Parent then
+      local pos = GetInstancePosition(obj)
+      if pos then
+        table.insert(lootTargets, { Object = obj, Position = pos })
+      end
+    end
+  end
+
+  -- Fly to each loot target
+  for _, loot in ipairs(lootTargets) do
+    if not KnobFarm.Active or _Unloading or not val85.AnticheatDisabled then break end
+
+    KnobFarm.SetStatus("Fly Loot: " .. loot.Object.Name .. " (Room " .. tostring(room.Name) .. ")")
+    PhaseFlyTo(loot.Position + Vector3.new(0, 1.5, 0), flySpeed, 3.0, 5.0)
+
+    -- Try to trigger all prompts on/inside the object
+    pcall(function()
+      for _, pr in ipairs(loot.Object:GetDescendants()) do
+        if pr:IsA("ProximityPrompt") then
+          TriggerPrompt(pr)
+        end
+      end
+      local directPr = loot.Object:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if directPr then
+        TriggerPrompt(directPr)
+      end
+    end)
+
+    KnobFarm.LootedObjects[loot.Object] = true
+    task.wait(0.08)
+  end
+
+  -- Open the exit door (fly through with noclip)
+  local exitDoor = room:FindFirstChild("Door")
+  if exitDoor and not KnobFarm.OpenedDoors[exitDoor] then
+    local dCenter = GetDoorCenter(exitDoor)
+    if dCenter then
+      -- Trigger door prompt from distance
+      pcall(function()
+        if exitDoor:FindFirstChild("ClientOpen") then
+          exitDoor.ClientOpen:FireServer()
+        end
+        local dPr = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if dPr then
+          TriggerPrompt(dPr)
+        end
+      end)
+      KnobFarm.OpenedDoors[exitDoor] = true
+    end
+  end
+end
+
+local function SetupCutsceneResetListener()
+  -- Disconnect old listeners if any
+  if KnobFarm.CutsceneResetConn then
+    pcall(function() KnobFarm.CutsceneResetConn:Disconnect() end)
+    KnobFarm.CutsceneResetConn = nil
+  end
+  if KnobFarm.EnemyModResetConn then
+    pcall(function() KnobFarm.EnemyModResetConn:Disconnect() end)
+    KnobFarm.EnemyModResetConn = nil
+  end
+
+  -- Listen for cutscene (AC re-enables)
+  pcall(function()
+    local cutsceneRemote = remotesFolder2 and remotesFolder2:FindFirstChild("Cutscene")
+    if cutsceneRemote then
+      KnobFarm.CutsceneResetConn = cutsceneRemote.OnClientEvent:Connect(function(cutsceneName)
+        if val85.AnticheatDisabled == false and KnobFarm.FlyLootPhase then
+          -- AC got re-enabled by the cutscene, exit fly loot phase
+          KnobFarm.FlyLootPhase = false
+          pcall(function()
+            if toggles.FlyToggle and toggles.FlyToggle.Value then
+              toggles.FlyToggle:SetValue(false)
+            end
+            if toggles.Noclip and toggles.Noclip.Value then
+              toggles.Noclip:SetValue(false)
+            end
+          end)
+          KnobFarm.SetStatus("AC re-enabled (cutscene). Back to Phase 1.")
+        end
+      end)
+    end
+  end)
+
+  -- Listen for Void/Glitch enemy module (also re-enables AC)
+  pcall(function()
+    local enemyModRemote = remotesFolder2 and remotesFolder2:FindFirstChild("UseEnemyModule")
+    if enemyModRemote then
+      KnobFarm.EnemyModResetConn = enemyModRemote.OnClientEvent:Connect(function(modName)
+        if (modName == "Void" or modName == "Glitch") and KnobFarm.FlyLootPhase then
+          KnobFarm.FlyLootPhase = false
+          pcall(function()
+            if toggles.FlyToggle and toggles.FlyToggle.Value then
+              toggles.FlyToggle:SetValue(false)
+            end
+            if toggles.Noclip and toggles.Noclip.Value then
+              toggles.Noclip:SetValue(false)
+            end
+          end)
+          KnobFarm.SetStatus("AC re-enabled (" .. tostring(modName) .. "). Back to Phase 1.")
+        end
+      end)
+    end
+  end)
+end
+
+local function EnterFlyLootPhase()
+  if KnobFarm.FlyLootPhase then return end
+  KnobFarm.FlyLootPhase = true
+
+  -- Save previous states
+  KnobFarm.PreviousFlyState = toggles.FlyToggle and toggles.FlyToggle.Value or false
+  KnobFarm.PreviousNoclipState = toggles.Noclip and toggles.Noclip.Value or false
+
+  -- Enable fly + noclip
+  pcall(function()
+    if toggles.FlyToggle and not toggles.FlyToggle.Value then
+      toggles.FlyToggle:SetValue(true)
+    end
+    if toggles.Noclip and not toggles.Noclip.Value then
+      toggles.Noclip:SetValue(true)
+    end
+  end)
+
+  KnobFarm.SetStatus("Phase 2: Fly+Noclip loot active!")
+end
+
+local function ExitFlyLootPhase()
+  if not KnobFarm.FlyLootPhase then return end
+  KnobFarm.FlyLootPhase = false
+
+  -- Restore previous states
+  pcall(function()
+    if toggles.FlyToggle and toggles.FlyToggle.Value and not KnobFarm.PreviousFlyState then
+      toggles.FlyToggle:SetValue(false)
+    end
+    if toggles.Noclip and toggles.Noclip.Value and not KnobFarm.PreviousNoclipState then
+      toggles.Noclip:SetValue(false)
+    end
+  end)
+
+  KnobFarm.SetStatus("Phase 2 ended. Returning to Phase 1.")
 end
 
 local function GetKeyApproachPosition(keyPos, rootPos)
@@ -11161,8 +11386,15 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
 end
 
 function KnobFarm.RunLoop()
+  local isMinesMode = toggles.AutoFarmMinesMode and toggles.AutoFarmMinesMode.Value
+
+  -- Setup cutscene reset listener for Mines mode
+  if isMinesMode then
+    SetupCutsceneResetListener()
+  end
+
   local ok, err = pcall(function()
-    KnobFarm.SetStatus("AutoWalk Active")
+    KnobFarm.SetStatus(isMinesMode and "Mines AutoFarm Active" or "AutoWalk Active")
 
     while KnobFarm.Active and not _Unloading do
       task.wait(0.04)
@@ -11176,6 +11408,7 @@ function KnobFarm.RunLoop()
         continue
       end
 
+      -- ── Death handler ──────────────────────────────────────
       if hum.Health <= 0 then
         KnobFarm.SetStatus("Dead. Waiting...")
         ClearPathNodes()
@@ -11191,6 +11424,10 @@ function KnobFarm.RunLoop()
           Phase.TargetPosition = nil
           Phase.Speed = nil
         end)
+        -- Exit fly phase on death
+        if isMinesMode and KnobFarm.FlyLootPhase then
+          ExitFlyLootPhase()
+        end
         if toggles.AutoFarmPlayAgain and toggles.AutoFarmPlayAgain.Value then
           task.wait(7.0)
           pcall(function()
@@ -11203,7 +11440,7 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- Check if in-game rooms exist (if not, we are in Lobby)
+      -- ── Lobby / waiting for rooms ──────────────────────────
       local roomsFolder = workspace:FindFirstChild("CurrentRooms")
       if not roomsFolder or #roomsFolder:GetChildren() == 0 then
         KnobFarm.SetStatus("Waiting for rooms...")
@@ -11213,6 +11450,9 @@ function KnobFarm.RunLoop()
         KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
         KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
         KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
+        if isMinesMode and KnobFarm.FlyLootPhase then
+          ExitFlyLootPhase()
+        end
         pcall(function()
           if toggles.Phase and toggles.Phase.Value then
             toggles.Phase:SetValue(false)
@@ -11224,7 +11464,69 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- Keep player crouched (на корточках)
+      -- ════════════════════════════════════════════════════════
+      -- MINES MODE: PHASE 2 — FLY + NOCLIP LOOT
+      -- ════════════════════════════════════════════════════════
+      if isMinesMode and val85.AnticheatDisabled then
+        -- Enter fly loot phase if not already
+        if not KnobFarm.FlyLootPhase then
+          EnterFlyLootPhase()
+        end
+
+        -- Ensure fly+noclip stay enabled
+        pcall(function()
+          if toggles.FlyToggle and not toggles.FlyToggle.Value then
+            toggles.FlyToggle:SetValue(true)
+          end
+          if toggles.Noclip and not toggles.Noclip.Value then
+            toggles.Noclip:SetValue(true)
+          end
+        end)
+
+        -- Get all rooms sorted by number
+        local rooms = roomsFolder:GetChildren()
+        table.sort(rooms, function(a, b)
+          return (tonumber(a.Name) or 0) < (tonumber(b.Name) or 0)
+        end)
+
+        -- Find first room we haven't fully looted
+        local foundWork = false
+        for _, flyRoom in ipairs(rooms) do
+          if not KnobFarm.Active or _Unloading or not val85.AnticheatDisabled then break end
+
+          -- Check if room has un-looted objects
+          local hasLoot = false
+          for _, obj in ipairs(flyRoom:GetDescendants()) do
+            if MINES_LOOT_NAMES[obj.Name] and not KnobFarm.LootedObjects[obj] and obj.Parent then
+              hasLoot = true
+              break
+            end
+          end
+
+          if hasLoot then
+            foundWork = true
+            FlyLootRoom(flyRoom)
+          end
+        end
+
+        if not foundWork then
+          KnobFarm.SetStatus("All rooms looted. Waiting for new rooms...")
+          task.wait(2.0)
+        end
+
+        continue
+      end
+
+      -- ════════════════════════════════════════════════════════
+      -- PHASE 1: NORMAL WALKING (Hotel logic + Mines ladder)
+      -- ════════════════════════════════════════════════════════
+
+      -- Reset fly phase flag when AC is not bypassed
+      if isMinesMode and KnobFarm.FlyLootPhase and not val85.AnticheatDisabled then
+        ExitFlyLootPhase()
+      end
+
+      -- Keep player crouched
       SetCrouched(true)
 
       local room, roomNum = GetPlayerCurrentRoom()
@@ -11239,6 +11541,83 @@ function KnobFarm.RunLoop()
       if roomNum >= 1 then
         KnobFarm.PassedFirstDoor = true
       end
+
+      -- ── MINES MODE: Priority — walk to nearest ladder ────
+      if isMinesMode and not val85.AnticheatDisabled then
+        local nearestLadder, ladderDist = FindNearestLadder()
+        if nearestLadder and ladderDist then
+          local ladderPos = GetInstancePosition(nearestLadder)
+          if ladderPos then
+            KnobFarm.SetStatus("Phase 1: Walking to Ladder (" .. math.floor(ladderDist) .. " studs)")
+
+            local path = pathfindingService:CreatePath({
+              AgentCanJump = true,
+              AgentCanClimb = true,
+              WaypointSpacing = 4,
+              AgentRadius = 1.0,
+              AgentHeight = 1.8,
+              Costs = { StuckPart = 8 },
+            })
+
+            local success, _ = pcall(function()
+              path:ComputeAsync(root.Position, ladderPos)
+            end)
+
+            if not success or path.Status ~= Enum.PathStatus.Success then
+              path = pathfindingService:CreatePath({
+                AgentCanJump = true,
+                AgentCanClimb = true,
+                WaypointSpacing = 4,
+                AgentRadius = 0.7,
+                AgentHeight = 1.2,
+                Costs = { StuckPart = 8 },
+              })
+              pcall(function()
+                path:ComputeAsync(root.Position, ladderPos)
+              end)
+            end
+
+            if path and path.Status == Enum.PathStatus.Success then
+              local waypoints = path:GetWaypoints()
+              FollowPath(waypoints, nearestLadder, ladderPos, "Ladder", room, roomNum)
+            else
+              local waypoints = {
+                { Position = root.Position, Action = Enum.PathWaypointAction.Walk },
+                { Position = ladderPos, Action = Enum.PathWaypointAction.Walk },
+              }
+              FollowPath(waypoints, nearestLadder, ladderPos, "Ladder", room, roomNum)
+            end
+
+            -- After reaching ladder, trigger its prompt to start climbing
+            pcall(function()
+              local ladderPr = nearestLadder:FindFirstChildWhichIsA("ProximityPrompt", true)
+              if ladderPr then
+                TriggerPrompt(ladderPr)
+              end
+            end)
+
+            -- Wait briefly for Climbing attribute to trigger AC bypass
+            local waitStart = tick()
+            while not val85.AnticheatDisabled and tick() - waitStart < 3.0
+              and KnobFarm.Active and not _Unloading do
+              task.wait(0.1)
+            end
+
+            if val85.AnticheatDisabled then
+              KnobFarm.SetStatus("Ladder AC bypass activated!")
+            else
+              KnobFarm.SetStatus("Ladder bypass failed, retrying...")
+            end
+
+            continue
+          end
+        end
+
+        -- No ladder found yet — fall through to normal room logic
+        KnobFarm.SetStatus("Phase 1: No ladder in range, solving rooms...")
+      end
+
+      -- ── Standard Hotel logic (also used in Mines Phase 1) ──
 
       -- SPECIAL PHASE RUSH FOR FIRST DOOR (Room 0 / Door 1)
       if roomNum == 0 and not KnobFarm.PassedFirstDoor then
@@ -11339,11 +11718,22 @@ function KnobFarm.RunLoop()
 
   ClearPathNodes()
   SetCrouched(false)
+
+  -- Cleanup Mines listeners
+  if KnobFarm.CutsceneResetConn then
+    pcall(function() KnobFarm.CutsceneResetConn:Disconnect() end)
+    KnobFarm.CutsceneResetConn = nil
+  end
+  if KnobFarm.EnemyModResetConn then
+    pcall(function() KnobFarm.EnemyModResetConn:Disconnect() end)
+    KnobFarm.EnemyModResetConn = nil
+  end
 end
 
 function KnobFarm.Start()
   if KnobFarm.Active then return end
   KnobFarm.Active = true
+  KnobFarm.FlyLootPhase = false
   KnobFarm.PassedFirstDoor = false
   KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
@@ -11366,6 +11756,26 @@ function KnobFarm.Start()
       toggles.InstantInteract:SetValue(true)
     end
   end)
+
+  -- ── Mines Mode: auto-enable protections ──────────────────
+  local isMinesMode = toggles.AutoFarmMinesMode and toggles.AutoFarmMinesMode.Value
+  if isMinesMode then
+    pcall(function()
+      local autoProtect = not toggles.AutoFarmMinesAutoProtect or toggles.AutoFarmMinesAutoProtect.Value
+      if autoProtect then
+        local minesProtections = {
+          "DisableAnticheat", "BypassVacuum", "BypassSnare",
+          "BypassGiggle", "BypassGloombatEggs",
+        }
+        for _, name in ipairs(minesProtections) do
+          if toggles[name] and not toggles[name].Value then
+            toggles[name]:SetValue(true)
+          end
+        end
+      end
+    end)
+    KnobFarm.SetStatus("Mines Mode: Phase 1 — walking to ladder...")
+  end
 
   -- Speedhack setup: if farm walkspeed slider is set and higher than current walkspeed, apply it
   pcall(function()
@@ -11406,6 +11816,22 @@ function KnobFarm.Stop()
     Phase.TargetPosition = nil
     Phase.Speed = nil
   end)
+
+  -- Exit fly loot phase and restore fly/noclip states
+  if KnobFarm.FlyLootPhase then
+    ExitFlyLootPhase()
+  end
+  KnobFarm.FlyLootPhase = false
+
+  -- Disconnect cutscene/enemy module listeners
+  if KnobFarm.CutsceneResetConn then
+    pcall(function() KnobFarm.CutsceneResetConn:Disconnect() end)
+    KnobFarm.CutsceneResetConn = nil
+  end
+  if KnobFarm.EnemyModResetConn then
+    pcall(function() KnobFarm.EnemyModResetConn:Disconnect() end)
+    KnobFarm.EnemyModResetConn = nil
+  end
 
   -- Restore previous walkspeed
   pcall(function()
