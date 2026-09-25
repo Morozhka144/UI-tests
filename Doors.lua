@@ -2167,6 +2167,22 @@ Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmShowPath", {
   Tooltip = "Renders green neon pathfinding nodes along the walking path (like in the video)",
 })
 
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmPhaseFlight", {
+  Text = "Constant Phase Flight",
+  Default = true,
+  Tooltip = "Constantly fly through walls and obstacles using Phase at high speed (45) instead of walking",
+})
+
+Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmPhaseSpeed", {
+  Text = "Phase Flight Speed",
+  Min = 5,
+  Max = 100,
+  Default = 45,
+  Rounding = 1,
+  Compact = true,
+  Tooltip = "Movement speed while AutoFarm Phase flight is active (default: 45)",
+})
+
 Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmWalkSpeed", {
   Text = "Farm WalkSpeed",
   Min = 16,
@@ -4211,6 +4227,16 @@ Groupboxes.Character:AddToggle("Phase", {
 toggles.Phase:AddKeyPicker("PhaseKeybind", {
   Text = "Phase", Default = "T", Mode = "Toggle", SyncToggleState = true, })
 
+Groupboxes.Character:AddSlider("PhaseSpeed", {
+  Text = "Phase Speed",
+  Min = 1,
+  Max = 100,
+  Default = 45,
+  Rounding = 1,
+  Compact = true,
+  Tooltip = "Adjusts movement speed when Phase is active (default: 45)",
+})
+
 Groupboxes.Other:AddToggle("AnticheatManipulation", {
   Text = "Anticheat Manipulation", Default = false, Tooltip = "Makes your character fly forwards fast to trick the anticheat to send you through walls", })
 
@@ -5384,7 +5410,7 @@ function onEvent()
       end
 
       if humanoidRootPart then
-        local pSpeed = Phase.Speed or 2.25
+        local pSpeed = Phase.Speed or (options and options.PhaseSpeed and options.PhaseSpeed.Value) or 45
         if Phase.TargetPosition then
           local toTarget = Phase.TargetPosition - humanoidRootPart.Position
           if toTarget.Magnitude > 0.5 then
@@ -5405,7 +5431,7 @@ function onEvent()
     Phase.Body = Instance.new("BodyVelocity")
     Phase.Body.MaxForce = Vector3.new(9000000000, 9000000000, 9000000000)
 
-    local initSpeed = Phase.Speed or 2.25
+    local initSpeed = Phase.Speed or (options and options.PhaseSpeed and options.PhaseSpeed.Value) or 45
     local initVel = humanoidRootPart and humanoidRootPart.CFrame.LookVector * initSpeed or Vector3.zero
     if Phase.TargetPosition and humanoidRootPart then
       local toTarget = Phase.TargetPosition - humanoidRootPart.Position
@@ -5425,6 +5451,14 @@ function onEvent()
 end
 
 toggles.Phase:OnChanged(onEvent)
+
+if options and options.PhaseSpeed then
+  options.PhaseSpeed:OnChanged(function(val)
+    if Phase.Body and not Phase.TargetPosition and humanoidRootPart then
+      Phase.Body.Velocity = humanoidRootPart.CFrame.LookVector * val
+    end
+  end)
+end
 
 toggles.AnticheatManipulation:OnChanged(function(p96)
   if AnticheatConnection then
@@ -10598,15 +10632,18 @@ local function GetRoomTarget(room)
   local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
   if not exitDoor then return nil, nil, nil end
 
-  -- 1. Check for closed Gate with a Lever in this room
-  local gate = room:FindFirstChild("Gate")
-  local lever = room:FindFirstChild("LeverForGate", true)
-  if gate and lever and not KnobFarm.PassedGates[gate] then
-    local leverPrompt = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if leverPrompt and leverPrompt.Enabled then
-      local leverPos = GetInstancePosition(lever)
-      if leverPos then
-        return lever, GetFloorPosition(leverPos), "Lever"
+  -- 1. Check for closed Gate with a Lever in this room (only needed if walking on foot; Phase noclips straight through gates)
+  local isPhaseFlight = (toggles.AutoFarmPhaseFlight == nil or toggles.AutoFarmPhaseFlight.Value == true)
+  if not isPhaseFlight then
+    local gate = room:FindFirstChild("Gate")
+    local lever = room:FindFirstChild("LeverForGate", true)
+    if gate and lever and not KnobFarm.PassedGates[gate] then
+      local leverPrompt = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if leverPrompt and leverPrompt.Enabled then
+        local leverPos = GetInstancePosition(lever)
+        if leverPos then
+          return lever, GetFloorPosition(leverPos), "Lever"
+        end
       end
     end
   end
@@ -11041,121 +11078,6 @@ function KnobFarm.RunLoop()
 
       KnobFarm.CurrentRoomNum = roomNum
 
-      -- SPECIAL PHASE RUSH FOR FIRST DOOR (Room 0 / Door 1):
-      -- User requirement: "на первой двери бот пусть передвигается за счет phase, прямо к ключу, а затем к двери(после phase выключвается)"
-      if roomNum <= 1 and not KnobFarm.PassedFirstDoor then
-        local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
-        if exitDoor then
-          local isDoorOpen = IsDoorOpen(exitDoor)
-          if not isDoorOpen then
-            KnobFarm.SetStatus("Phase Rush: Door 1...")
-
-            -- 1. If door is locked and we don't have key, Phase fly straight to key
-            local locked, unPr = IsDoorLocked(exitDoor)
-            if locked and not PlayerHasKey() then
-              local keyItem = FindRoomKey(room)
-              local findStart = tick()
-              while not keyItem and tick() - findStart < 2.0 and KnobFarm.Active and not _Unloading do
-                task.wait(0.2)
-                keyItem = FindRoomKey(room)
-              end
-
-              if keyItem and keyItem.Parent then
-                local keyPos = GetInstancePosition(keyItem)
-                if keyPos then
-                  KnobFarm.SetStatus("Phase -> Key (Room " .. tostring(roomNum) .. ")")
-                  PhaseFlyTo(keyPos + Vector3.new(0, 1.0, 0), 18, 3.5, 6.0)
-
-                  local grabStart = tick()
-                  while tick() - grabStart < 1.2 and not PlayerHasKey() and KnobFarm.Active do
-                    local kPr = keyItem:FindFirstChildWhichIsA("ProximityPrompt", true)
-                    if kPr and kPr.Enabled then TriggerPrompt(kPr) end
-                    task.wait(0.1)
-                  end
-                  KnobFarm.LootedObjects[keyItem] = true
-                end
-              end
-            end
-
-            -- 2. Phase fly directly to Door 1 center
-            local doorCenter = GetDoorCenter(exitDoor)
-            local rootPos = root.Position
-            local doorApproach = GetDoorApproachPosition(doorCenter, rootPos, exitDoor)
-
-            KnobFarm.SetStatus("Phase -> Door 1")
-            PhaseFlyTo(doorApproach, 18, 3.0, 6.0)
-
-            -- 3. Unlock if locked
-            if IsDoorLocked(exitDoor) then
-              EquipKey()
-              task.wait(0.1)
-              local _, curUnPr = IsDoorLocked(exitDoor)
-              if curUnPr and curUnPr.Enabled then
-                TriggerPrompt(curUnPr)
-                task.wait(0.25)
-              end
-              local stillLocked, curUnPr2 = IsDoorLocked(exitDoor)
-              if stillLocked and curUnPr2 and curUnPr2.Enabled then
-                TriggerPrompt(curUnPr2)
-                task.wait(0.2)
-              end
-            end
-
-            -- 4. Open door
-            if exitDoor:FindFirstChild("ClientOpen") then
-              pcall(function() exitDoor.ClientOpen:FireServer() end)
-            end
-            local dPr = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if dPr and dPr.Enabled then
-              TriggerPrompt(dPr)
-            end
-            KnobFarm.OpenedDoors[exitDoor] = true
-
-            -- 5. Fly through doorway into Room 1
-            pcall(function()
-              for _, dp in ipairs(exitDoor:GetDescendants()) do
-                if dp:IsA("BasePart") then dp.CanCollide = false end
-              end
-            end)
-
-            local passDir = root.CFrame.LookVector
-            local doorLeaf = exitDoor:FindFirstChild("Door")
-            local cf = (doorLeaf and doorLeaf:IsA("BasePart") and doorLeaf.CFrame)
-              or (exitDoor:IsA("Model") and select(1, pcall(function() return exitDoor:GetPivot() end)))
-            if cf and typeof(cf) == "CFrame" then
-              local lv = cf.LookVector
-              local flatLv = Vector3.new(lv.X, 0, lv.Z)
-              if flatLv.Magnitude > 0.2 then
-                local normal = flatLv.Unit
-                local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
-                local side = toPlayer:Dot(normal) >= 0 and 1 or -1
-                passDir = normal * (-side)
-              end
-            end
-
-            PhaseFlyTo(doorCenter + passDir * 6.0, 16, 2.0, 1.5)
-
-            -- 6. Turn off Phase!
-            if toggles.Phase and toggles.Phase.Value then
-              toggles.Phase:SetValue(false)
-            end
-            Phase.TargetPosition = nil
-            Phase.Speed = nil
-            KnobFarm.PassedFirstDoor = true
-            KnobFarm.SetStatus("Door 1 passed! Phase OFF.")
-            task.wait(0.3)
-            continue
-          else
-            KnobFarm.PassedFirstDoor = true
-            if toggles.Phase and toggles.Phase.Value then
-              toggles.Phase:SetValue(false)
-            end
-            Phase.TargetPosition = nil
-            Phase.Speed = nil
-          end
-        end
-      end
-
       local isBoss = (roomNum == 50 or roomNum == 100 or workspace:FindFirstChild("SeekMoving") ~= nil or room:FindFirstChild("SeekMoving") ~= nil)
       KnobFarm.DisableGodmodeForBoss = isBoss
 
@@ -11167,6 +11089,127 @@ function KnobFarm.RunLoop()
         continue
       end
 
+      -- Phase flight speed determination: check slider or default to 45
+      local currentPhaseSpeed = 45
+      if options and options.AutoFarmPhaseSpeed then
+        currentPhaseSpeed = options.AutoFarmPhaseSpeed.Value
+      elseif options and options.PhaseSpeed then
+        currentPhaseSpeed = options.PhaseSpeed.Value
+      end
+
+      local usePhaseFlight = (toggles.AutoFarmPhaseFlight == nil or toggles.AutoFarmPhaseFlight.Value == true)
+
+      -- CONSTANT HIGH-SPEED PHASE FLIGHT (Speed 45)
+      if usePhaseFlight and not isBoss then
+        local gate = room:FindFirstChild("Gate")
+        if gate then
+          KnobFarm.PassedGates[gate] = true
+          pcall(function()
+            for _, gp in ipairs(gate:GetDescendants()) do
+              if gp:IsA("BasePart") then gp.CanCollide = false end
+            end
+          end)
+        end
+
+        KnobFarm.SetStatus("Phase -> " .. targetType .. " (Room " .. tostring(roomNum) .. ") @ " .. tostring(currentPhaseSpeed))
+        RenderPathNodes({
+          { Position = root.Position, Action = Enum.PathWaypointAction.Walk },
+          { Position = targetPos, Action = Enum.PathWaypointAction.Walk },
+        })
+
+        if targetType == "Key" then
+          PhaseFlyTo(targetPos + Vector3.new(0, 1.0, 0), currentPhaseSpeed, 3.5, 6.0)
+          local pickStart = tick()
+          while tick() - pickStart < 1.2 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
+            local kPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if kPr and kPr.Enabled then TriggerPrompt(kPr) end
+            task.wait(0.1)
+          end
+          KnobFarm.LootedObjects[target] = true
+          task.wait(0.05)
+
+        elseif targetType == "Lever" then
+          PhaseFlyTo(targetPos, currentPhaseSpeed, 3.5, 6.0)
+          local pr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if pr and pr.Enabled then TriggerPrompt(pr) end
+          local gate = room:FindFirstChild("Gate")
+          if gate then KnobFarm.PassedGates[gate] = true end
+          task.wait(0.1)
+
+        elseif targetType == "Door" then
+          -- 1. Fly to approach position directly in front of doorway center
+          PhaseFlyTo(targetPos, currentPhaseSpeed, 3.0, 6.0)
+
+          -- 2. Unlock if locked
+          local locked, unPr = IsDoorLocked(target)
+          if locked then
+            local hasKey, keyTool = PlayerHasKey()
+            if hasKey and keyTool then
+              EquipKey()
+              task.wait(0.08)
+              if unPr and unPr.Enabled then
+                TriggerPrompt(unPr)
+                task.wait(0.2)
+              end
+              local stillLocked, unPr2 = IsDoorLocked(target)
+              if stillLocked and unPr2 and unPr2.Enabled then
+                TriggerPrompt(unPr2)
+                task.wait(0.15)
+              end
+            end
+          end
+
+          -- 3. Open door
+          if target:FindFirstChild("ClientOpen") then
+            pcall(function() target.ClientOpen:FireServer() end)
+          end
+          local dPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if dPr and dPr.Enabled then
+            TriggerPrompt(dPr)
+          end
+          KnobFarm.OpenedDoors[target] = true
+
+          -- 4. Disable can-collide on door parts
+          pcall(function()
+            for _, dp in ipairs(target:GetDescendants()) do
+              if dp:IsA("BasePart") then dp.CanCollide = false end
+            end
+          end)
+
+          -- 5. Calculate perpendicular through-doorway vector
+          local doorCenter = GetDoorCenter(target) or targetPos
+          local passDir = root.CFrame.LookVector
+          local doorLeaf = target:FindFirstChild("Door")
+          local cf = (doorLeaf and doorLeaf:IsA("BasePart") and doorLeaf.CFrame)
+            or (target:IsA("Model") and select(1, pcall(function() return target:GetPivot() end)))
+          if cf and typeof(cf) == "CFrame" then
+            local lv = cf.LookVector
+            local flatLv = Vector3.new(lv.X, 0, lv.Z)
+            if flatLv.Magnitude > 0.2 then
+              local normal = flatLv.Unit
+              local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
+              local side = toPlayer:Dot(normal) >= 0 and 1 or -1
+              passDir = normal * (-side)
+            end
+          end
+
+          -- Fly 8 studs through the doorway into the next room
+          PhaseFlyTo(doorCenter + passDir * 8.0, currentPhaseSpeed, 2.0, 1.2)
+
+          -- Wait up to 2.5s for next room to appear in CurrentRooms
+          local waitStart = tick()
+          while tick() - waitStart < 2.5 and KnobFarm.Active and not _Unloading do
+            local curR, curN = GetPlayerCurrentRoom()
+            if curN and curN > roomNum then break end
+            task.wait(0.05)
+          end
+        end
+
+        ClearPathNodes()
+        continue
+      end
+
+      -- Fallback: Walking mode (if Phase Flight disabled or boss room)
       KnobFarm.SetStatus("Walking to " .. targetType .. " (Room " .. tostring(roomNum) .. ")")
 
       -- Pathfinding with Crouched Agent Dimensions (Height = 1.8, Radius = 1.0 to easily clear doorways)
