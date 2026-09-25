@@ -7481,6 +7481,584 @@ toggles.ArchiveChairFly:OnChanged(function()
   end
 end)
 
+-- ========================================================
+-- Archives Addons (Right Groupbox)
+-- ========================================================
+Groupboxes.ArchivesAddons = element3.Archives:AddRightGroupbox("Archives Addons")
+
+-- 1. Archives Locker Autoloot
+do
+  local lockerRunning = false
+  local lockerList = {}
+  local lockerDelay = 0.8
+
+  local function validLocker(obj)
+    return obj:IsA("Model") and obj.Name:match("^HidingSpot%d+$") ~= nil
+  end
+
+  local function watchLocker(obj)
+    if validLocker(obj) then
+      lockerList[obj] = 0
+    end
+  end
+
+  for _, obj in workspace:GetDescendants() do
+    watchLocker(obj)
+  end
+  workspace.DescendantAdded:Connect(watchLocker)
+  workspace.DescendantRemoving:Connect(function(obj)
+    lockerList[obj] = nil
+  end)
+
+  local function tryLootLocker(obj, hrp, now)
+    if not obj.Parent then
+      lockerList[obj] = nil
+      return
+    end
+
+    local prompt = obj:FindFirstChild("InteractPrompt", true)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    if prompt.ActionText ~= "Loot" or not prompt.Enabled then
+      lockerList[obj] = 0
+      return
+    end
+
+    local dist = (hrp.Position - obj:GetPivot().Position).Magnitude
+    if dist > prompt.MaxActivationDistance then
+      lockerList[obj] = 0
+      return
+    end
+
+    if now - (lockerList[obj] or 0) < lockerDelay then return end
+
+    lockerList[obj] = now
+    if fireproximityprompt then
+      fireproximityprompt(prompt)
+    end
+  end
+
+  local function updateLockers()
+    local char = localPlayer2.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local now = os.clock()
+    for obj in pairs(lockerList) do
+      tryLootLocker(obj, hrp, now)
+    end
+  end
+
+  Groupboxes.ArchivesAddons:AddToggle("ArchivesLocker", {
+    Text = "Archives Locker Autoloot",
+    Tooltip = "Automatically loots nearby Archives lockers.",
+    Default = false,
+  })
+
+  toggles.ArchivesLocker:OnChanged(function(val)
+    if val then
+      if lockerRunning then return end
+      lockerRunning = true
+      task.spawn(function()
+        while lockerRunning and toggles.ArchivesLocker.Value do
+          updateLockers()
+          task.wait(0.05)
+        end
+        lockerRunning = false
+      end)
+    else
+      lockerRunning = false
+      for obj in pairs(lockerList) do
+        lockerList[obj] = 0
+      end
+    end
+  end)
+
+  Groupboxes.ArchivesAddons:AddSlider("ArchivesLockerCooldown", {
+    Text = "Loot Attempt Cooldown",
+    Tooltip = "Delay between loot attempts.",
+    Min = 0.01,
+    Max = 5,
+    Default = 0.8,
+    Rounding = 2,
+    Callback = function(value)
+      lockerDelay = value
+    end,
+  })
+end
+
+-- 2. Archives Water Cooler
+do
+  local coolerCooldown = 0.5
+  local coolerStepDelay = 0.15
+  local coolerCupTimeout = 1
+  local coolerDrinkTimeout = 5
+  local coolerBusy = false
+
+  local function promptOf(parent)
+    local p = parent and parent:FindFirstChild("InteractPrompt", true)
+    if p and p:IsA("ProximityPrompt") then return p end
+  end
+
+  local function promptPos(p)
+    local x = p and p.Parent
+    if not x then return end
+    if x:IsA("Attachment") then return x.WorldPosition
+    elseif x:IsA("BasePart") then return x.Position
+    elseif x:IsA("Model") then return x:GetPivot().Position end
+    local part = p:FindFirstAncestorWhichIsA("BasePart")
+    return part and part.Position
+  end
+
+  local function nearbyPrompt(p)
+    local char = localPlayer2.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local pos = promptPos(p)
+    return p and p.Parent and p.Enabled and hrp and pos and (hrp.Position - pos).Magnitude <= p.MaxActivationDistance
+  end
+
+  local function findCoolers()
+    local result = {}
+    for _, obj in workspace:GetDescendants() do
+      if obj.Name == "ArchivesWaterCooler" then
+        local cups = obj:FindFirstChild("Cups", true)
+        local cold = obj:FindFirstChild("Cold", true)
+        local hot = obj:FindFirstChild("Hot", true)
+        local cp = promptOf(cups)
+        local fp = promptOf(cold)
+        local hp = promptOf(hot)
+        if cp and fp and hp and nearbyPrompt(cp) then
+          table.insert(result, {
+            model = obj,
+            cups = cp,
+            cold = fp,
+            hot = hp,
+          })
+        end
+      end
+    end
+    return result
+  end
+
+  local function getWaterCup()
+    local char = localPlayer2.Character
+    local cup = char and char:FindFirstChild("WaterCup")
+    if cup and cup:IsA("Tool") then return cup end
+    local bag = localPlayer2:FindFirstChildOfClass("Backpack")
+    local stored = bag and bag:FindFirstChild("WaterCup")
+    if stored and stored:IsA("Tool") then
+      local hum = char and char:FindFirstChildOfClass("Humanoid")
+      if hum then hum:EquipTool(stored) end
+      return stored
+    end
+  end
+
+  local function waitWaterCup()
+    local t = os.clock()
+    repeat
+      local cup = getWaterCup()
+      if cup then return cup end
+      task.wait(0.05)
+    until os.clock() - t >= coolerCupTimeout
+  end
+
+  local function usePrompt(p)
+    if not nearbyPrompt(p) then return false end
+    if fireproximityprompt then
+      fireproximityprompt(p)
+    end
+    return true
+  end
+
+  local function cupGone(cup)
+    local t = os.clock()
+    while cup.Parent and os.clock() - t < coolerDrinkTimeout do
+      task.wait(0.05)
+    end
+    return cup.Parent == nil
+  end
+
+  local function drinkCooler(cooler)
+    if not usePrompt(cooler.cups) then return false end
+    local cup = waitWaterCup()
+    if not cup then return false end
+
+    task.wait(coolerStepDelay)
+    cup = getWaterCup()
+    if not cup or not usePrompt(cooler.cold) then return false end
+
+    task.wait(coolerStepDelay)
+    cup = getWaterCup()
+    if not cup or not usePrompt(cooler.hot) then return false end
+
+    task.wait(coolerStepDelay)
+    cup = getWaterCup()
+    local remote = cup and cup:FindFirstChild("Remote")
+    if not remote or not remote:IsA("RemoteEvent") then return false end
+    remote:FireServer()
+
+    return cupGone(cup)
+  end
+
+  Groupboxes.ArchivesAddons:AddButton({
+    Text = "Drink From Water Cooler",
+    Tooltip = "Automatically takes cup, fills cold & hot water, and drinks it.",
+    Callback = function()
+      if coolerBusy then return end
+      coolerBusy = true
+      task.spawn(function()
+        while true do
+          local list = findCoolers()
+          if #list == 0 then break end
+          local ok = false
+          for _, cooler in ipairs(list) do
+            if drinkCooler(cooler) then
+              ok = true
+              break
+            end
+          end
+          if not ok then break end
+          task.wait(coolerCooldown)
+        end
+        coolerBusy = false
+      end)
+    end,
+  })
+
+  Groupboxes.ArchivesAddons:AddSlider("ArchivesWaterCoolerCooldown", {
+    Text = "Water Cooler Cooldown",
+    Tooltip = "Delay between drinks.",
+    Min = 0.01,
+    Max = 5,
+    Default = 0.5,
+    Rounding = 2,
+    Callback = function(v)
+      coolerCooldown = v
+    end,
+  })
+end
+
+-- ========================================================
+-- General Addons (Right Groupbox)
+-- ========================================================
+Groupboxes.ArchivesGeneralAddons = element3.Archives:AddRightGroupbox("General Addons")
+
+-- 3. Auto Door Skip
+do
+  Groupboxes.ArchivesGeneralAddons:AddToggle("AutoDoorSkip", {
+    Text = "Auto Door Skip",
+    Tooltip = "Automatically teleports to next room's door and opens it as rooms generate.",
+    Default = false,
+  })
+
+  task.spawn(function()
+    while task.wait(0.1) do
+      if toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
+        pcall(function()
+          local char = localPlayer2.Character
+          local root = char and char:FindFirstChild("HumanoidRootPart")
+          if not root then return end
+
+          local rep = game:GetService("ReplicatedStorage")
+          local gameData = rep:FindFirstChild("GameData")
+          local latestRoom = gameData and gameData:FindFirstChild("LatestRoom")
+          if not latestRoom then return end
+
+          local currentRooms = workspace:FindFirstChild("CurrentRooms")
+          local currentRoom = currentRooms and currentRooms:FindFirstChild(tostring(latestRoom.Value))
+          if currentRoom then
+            local door = currentRoom:FindFirstChild("Door")
+            if door then
+              local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
+              if doorPart and root then
+                root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
+              end
+              local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
+              if prompt and fireproximityprompt then
+                fireproximityprompt(prompt)
+              end
+            end
+          end
+        end)
+      end
+    end
+  end)
+end
+
+-- 4. Phantom Noclip
+do
+  local phantomTolerance = 3
+  local phantomEnabled = false
+  local lastSafeCFrame = nil
+  local noclipConn = nil
+  local antiTpConn = nil
+  local charConn = nil
+
+  local function setPhantomCollision(state)
+    local char = localPlayer2.Character
+    if not char then return end
+    for _, obj in ipairs(char:GetDescendants()) do
+      if obj:IsA("BasePart") then
+        obj.CanCollide = not state
+      end
+    end
+  end
+
+  local function disablePhantom()
+    phantomEnabled = false
+    lastSafeCFrame = nil
+    if noclipConn then
+      noclipConn:Disconnect()
+      noclipConn = nil
+    end
+    if antiTpConn then
+      antiTpConn:Disconnect()
+      antiTpConn = nil
+    end
+    setPhantomCollision(false)
+  end
+
+  local function enablePhantom()
+    if phantomEnabled then return end
+    local char = localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    phantomEnabled = true
+    lastSafeCFrame = root.CFrame
+
+    noclipConn = runService.Stepped:Connect(function()
+      if not phantomEnabled then return end
+      setPhantomCollision(true)
+    end)
+
+    local postSim = runService.PostSimulation or runService.Heartbeat
+    antiTpConn = postSim:Connect(function()
+      if not phantomEnabled then return end
+      local c = localPlayer2.Character
+      local currRoot = c and c:FindFirstChild("HumanoidRootPart")
+      if not currRoot then
+        lastSafeCFrame = nil
+        return
+      end
+      if not lastSafeCFrame then
+        lastSafeCFrame = currRoot.CFrame
+        return
+      end
+
+      local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
+      if distMoved > phantomTolerance then
+        currRoot.CFrame = lastSafeCFrame
+        currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+      else
+        lastSafeCFrame = currRoot.CFrame
+      end
+    end)
+  end
+
+  charConn = localPlayer2.CharacterAdded:Connect(function()
+    if not phantomEnabled then return end
+    lastSafeCFrame = nil
+    task.wait(0.5)
+    if phantomEnabled then
+      local c = localPlayer2.Character
+      local r = c and c:FindFirstChild("HumanoidRootPart")
+      if r then lastSafeCFrame = r.CFrame end
+      setPhantomCollision(true)
+    end
+  end)
+
+  Groupboxes.ArchivesGeneralAddons:AddToggle("PhantomNoclip", {
+    Text = "Phantom Noclip",
+    Tooltip = "Noclip with position flashback protection against fall/rollback.",
+    Default = false,
+  })
+
+  toggles.PhantomNoclip:OnChanged(function(val)
+    if val then
+      enablePhantom()
+    else
+      disablePhantom()
+    end
+  end)
+
+  Groupboxes.ArchivesGeneralAddons:AddSlider("PhantomTolerance", {
+    Text = "Phantom Tolerance",
+    Min = 1,
+    Max = 20,
+    Default = 3,
+    Rounding = 1,
+    Callback = function(val)
+      phantomTolerance = val
+    end,
+  })
+end
+
+-- ========================================================
+-- Crucifix Everything (Right Groupbox)
+-- ========================================================
+Groupboxes.ArchivesCrucifix = element3.Archives:AddRightGroupbox("Crucifix Everything")
+
+do
+  local CRUCIFIX_URL = "https://raw.githubusercontent.com/RegularVynixu/DOORS-Crucifix-Everything/main/init.luau"
+  local CrucifixEverything = nil
+
+  local function LoadCrucifix()
+    if CrucifixEverything then return CrucifixEverything end
+    local success, result = pcall(function()
+      local source = game:HttpGet(CRUCIFIX_URL)
+      if not source or source == "" then error("Empty source") end
+      local loader = loadstring(source)
+      if not loader then error("loadstring failed") end
+      return loader()
+    end)
+    if success and result then
+      CrucifixEverything = result
+      return CrucifixEverything
+    else
+      warn("[Crucifix] Failed to load library: " .. tostring(result))
+      return nil
+    end
+  end
+
+  local crucifixType = 1
+  local crucifixUses = nil
+  local crucifixResist = false
+  local crucifixEntitiesOnly = false
+  local crucifixCustomColor = nil
+  local crucifixIgnoreList = {}
+
+  Groupboxes.ArchivesCrucifix:AddDropdown("CrucifixType", {
+    Text = "Crucifix Type",
+    Values = { "guiding light", "curious light" },
+    Default = "guiding light",
+    Callback = function(val)
+      if val == "guiding light" then
+        crucifixType = 1
+      elseif val == "curious light" then
+        crucifixType = 2
+      end
+    end,
+  })
+
+  Groupboxes.ArchivesCrucifix:AddInput("CrucifixUses", {
+    Text = "Crucifix Uses",
+    Default = "nil",
+    Placeholder = "number or nil (infinite)",
+    Callback = function(val)
+      local lowerVal = string.lower(tostring(val or ""))
+      if lowerVal == "nil" or lowerVal == "" then
+        crucifixUses = nil
+      else
+        local n = tonumber(val)
+        if n then crucifixUses = n end
+      end
+    end,
+  })
+
+  Groupboxes.ArchivesCrucifix:AddToggle("CrucifixResist", {
+    Text = "Resist",
+    Tooltip = "Whether the crucifix succeeds or fails against the entity.",
+    Default = false,
+    Callback = function(val)
+      crucifixResist = val
+    end,
+  })
+
+  Groupboxes.ArchivesCrucifix:AddToggle("CrucifixEntitiesOnly", {
+    Text = "Entities Only",
+    Tooltip = "Only target custom entity models.",
+    Default = false,
+    Callback = function(val)
+      crucifixEntitiesOnly = val
+    end,
+  })
+
+  Groupboxes.ArchivesCrucifix:AddInput("CrucifixColor", {
+    Text = "Custom Color",
+    Default = "",
+    Placeholder = "r, g, b (e.g. 255, 0, 0)",
+    Callback = function(val)
+      val = tostring(val or "")
+      if val == "" then
+        crucifixCustomColor = nil
+        return
+      end
+      local r, g, b = string.match(val, "(%d+)%s*,%s*(%d+)%s*,%s*(%d+)")
+      if r and g and b then
+        crucifixCustomColor = Color3.fromRGB(math.clamp(tonumber(r), 0, 255), math.clamp(tonumber(g), 0, 255), math.clamp(tonumber(b), 0, 255))
+      else
+        crucifixCustomColor = nil
+      end
+    end,
+  })
+
+  Groupboxes.ArchivesCrucifix:AddInput("CrucifixIgnoreList", {
+    Text = "Ignore List",
+    Default = "",
+    Placeholder = "entity1, entity2",
+    Callback = function(val)
+      val = tostring(val or "")
+      crucifixIgnoreList = {}
+      if val == "" then return end
+      for name in string.gmatch(val, "([^,]+)") do
+        name = name:gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" then
+          table.insert(crucifixIgnoreList, name)
+        end
+      end
+    end,
+  })
+
+  Groupboxes.ArchivesCrucifix:AddButton({
+    Text = "Give Crucifix",
+    Tooltip = "Spawns the configured crucifix in your inventory.",
+    Callback = function()
+      local lib = LoadCrucifix()
+      if not lib then
+        library:Notify({ Title = "Crucifix", Description = "Failed to load Crucifix library", Time = 5 })
+        return
+      end
+      local ok, err = pcall(function()
+        lib:GiveCrucifix({
+          Type = crucifixType,
+          Uses = crucifixUses,
+          Resist = crucifixResist,
+          EntitiesOnly = crucifixEntitiesOnly,
+          CustomColor = crucifixCustomColor,
+          IgnoreList = crucifixIgnoreList,
+        })
+      end)
+      if ok then
+        library:Notify({ Title = "Crucifix", Description = "Crucifix given successfully!", Time = 4 })
+      else
+        library:Notify({ Title = "Crucifix", Description = "Error: " .. tostring(err), Time = 5 })
+      end
+    end,
+  })
+
+  Groupboxes.ArchivesCrucifix:AddButton({
+    Text = "Remove Crucifix",
+    Tooltip = "Removes any Crucifix from backpack and character.",
+    Callback = function()
+      local removed = false
+      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      if bp then
+        local c = bp:FindFirstChild("Crucifix")
+        if c then c:Destroy(); removed = true end
+      end
+      local ch = localPlayer2.Character
+      if ch then
+        local c = ch:FindFirstChild("Crucifix")
+        if c then c:Destroy(); removed = true end
+      end
+      if removed then
+        library:Notify({ Title = "Crucifix", Description = "Crucifix removed!", Time = 3 })
+      else
+        library:Notify({ Title = "Crucifix", Description = "No Crucifix found in inventory.", Time = 3 })
+      end
+    end,
+  })
+end
+
 Groupboxes.StairwellMain = element3.Stairwell:AddLeftGroupbox("Stairwell")
 
 Groupboxes.StairwellMain:AddToggle("StairwellChairFly", {
