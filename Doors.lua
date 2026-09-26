@@ -11903,10 +11903,6 @@ local function GetFloorPosition(pos)
   return pos
 end
 
-local function TriggerPrompt(prompt)
-  -- Функция фарма не должна трогать интеракции; обработка выполняется через AutoInteract и InstantInteract
-end
-
 local function HasLockpick()
   if Functions and Functions.HasItem then
     local lp = Functions.HasItem("Lockpick") or Functions.HasItem("Lockpicks")
@@ -12072,26 +12068,6 @@ local function IsDoorLocked(door)
   return false, nil
 end
 
-local function IsDoorOpen(door)
-  if not door or not door.Parent then return true end
-  if KnobFarm.OpenedDoors[door] then return true end
-  if door:GetAttribute("Opened") == true or door:GetAttribute("Open") == true then
-    return true
-  end
-  if door:FindFirstChild("Lock") then
-    return false
-  end
-  local p = door:FindFirstChildWhichIsA("ProximityPrompt", true)
-  if p and p.Enabled then
-    return false
-  end
-  local openVal = door:FindFirstChild("Open") or door:FindFirstChild("Opened")
-  if openVal and (openVal:IsA("BoolValue") or openVal:IsA("ValueBase")) then
-    return openVal.Value == true
-  end
-  return false
-end
-
 local function GetDoorCenter(door)
   if not door then return nil end
 
@@ -12205,11 +12181,6 @@ local function HasRoomGate(room)
   if not gate then return false, nil, nil end
   local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
   return true, gate, lever
-end
-
-local function HasDoorLattice(room)
-  if not room then return false end
-  return (room:FindFirstChild("DoorLattice", true) ~= nil)
 end
 
 local obstacleListener = nil
@@ -12330,171 +12301,6 @@ local function IsUserMovingManually()
   return false
 end
 
-local function HasLineOfSight(fromPos, toPos, ignoreModel)
-  local diff = toPos - fromPos
-  local dist = diff.Magnitude
-  if dist < 0.5 then return true end
-
-  local rayParams = RaycastParams.new()
-  rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  local ignoreList = { localPlayer2 and localPlayer2.Character }
-  if ignoreModel then
-    table.insert(ignoreList, ignoreModel)
-  end
-  rayParams.FilterDescendantsInstances = ignoreList
-
-  local result = workspace:Raycast(fromPos + Vector3.new(0, 1.2, 0), diff, rayParams)
-  if not result then return true end
-  local hitPart = result.Instance
-  if hitPart and (not hitPart.CanCollide or hitPart.Transparency >= 0.9) then
-    return true
-  end
-  return (result.Position - (fromPos + Vector3.new(0, 1.2, 0))).Magnitude >= dist - 0.5
-end
-
-local function PhaseTemporary(durationSeconds)
-  if not KnobFarm.Active or _Unloading then return end
-  local char = localPlayer2 and localPlayer2.Character
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if hum then hum:Move(Vector3.zero, false) end
-
-  Phase.TargetPosition = nil
-  Phase.Speed = nil
-
-  pcall(function()
-    if toggles.Phase and not toggles.Phase.Value then
-      toggles.Phase:SetValue(true)
-    end
-  end)
-
-  local t = tick()
-  local dur = durationSeconds or 3.0
-  while (tick() - t < dur) and KnobFarm.Active and not _Unloading do
-    task.wait(0.05)
-  end
-
-  pcall(function()
-    if toggles.Phase and toggles.Phase.Value then
-      toggles.Phase:SetValue(false)
-    end
-    Phase.TargetPosition = nil
-    Phase.Speed = nil
-  end)
-end
-
-local function FlyDirect(targetPos, speed, stopDist, targetType, targetInst)
-  if not targetPos or not KnobFarm.Active or _Unloading then return false end
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not root or not hum or hum.Health <= 0 then return false end
-
-  speed = speed or (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
-    or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 35
-  stopDist = stopDist or 2.5
-
-  -- Always keep Phantom Noclip enabled for passing through walls
-  pcall(function()
-    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
-    end
-  end)
-
-  local bv = root:FindFirstChild("FarmFlyVelocity")
-  if not bv then
-    bv = Instance.new("BodyVelocity")
-    bv.Name = "FarmFlyVelocity"
-    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-    bv.P = 10000
-    bv.Parent = root
-  end
-
-  local bg = root:FindFirstChild("FarmFlyGyro")
-  if not bg then
-    bg = Instance.new("BodyGyro")
-    bg.Name = "FarmFlyGyro"
-    bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    bg.P = 10000
-    bg.Parent = root
-  end
-
-  -- Render straight 2-point visual line
-  if toggles and toggles.AutoFarmShowPath and toggles.AutoFarmShowPath.Value then
-    RenderPathNodes({ root.Position, targetPos })
-  else
-    ClearPathNodes()
-  end
-
-  local startTime = tick()
-  local lastPos = root.Position
-  local lastProgress = tick()
-  local reached = false
-
-  while KnobFarm.Active and not _Unloading and hum.Health > 0 do
-    if IsUserMovingManually() then break end
-
-    local curPos = root.Position
-    local delta = targetPos - curPos
-    local dist = delta.Magnitude
-
-    -- Early approach for doors: equip tool & open ClientOpen on the fly
-    if targetType == "Door" and targetInst then
-      if dist < 14.0 then
-        if IsDoorLocked(targetInst) then
-          EquipUnlockTool()
-        else
-          if targetInst:FindFirstChild("ClientOpen") then
-            pcall(function() targetInst.ClientOpen:FireServer() end)
-          end
-          KnobFarm.OpenedDoors[targetInst] = true
-        end
-      end
-    end
-
-    if dist <= stopDist then
-      reached = true
-      break
-    end
-
-    -- Dynamic timeout based on distance
-    local maxTime = math.max(3.5, (dist / math.max(speed, 10)) * 2.5)
-    if tick() - startTime > maxTime then
-      break
-    end
-
-    -- Anti-stuck: if barely moved in 1.0s, nudge forward towards target
-    if (curPos - lastPos).Magnitude > 0.4 then
-      lastPos = curPos
-      lastProgress = tick()
-    elseif tick() - lastProgress > 1.0 then
-      if delta.Magnitude > 0.1 then
-        root.CFrame = CFrame.new(curPos + delta.Unit * 1.5, targetPos)
-      end
-      lastPos = root.Position
-      lastProgress = tick()
-    end
-
-    local moveDir = delta.Unit
-    local curSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
-      or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or speed
-    bv.Velocity = moveDir * curSpeed
-    bg.CFrame = CFrame.new(curPos, curPos + Vector3.new(moveDir.X, 0, moveDir.Z))
-
-    pcall(function()
-      local cam = workspace.CurrentCamera
-      if cam then
-        cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, cam.CFrame.Position + moveDir), 0.25)
-      end
-    end)
-
-    task.wait(0.02)
-  end
-
-  bv.Velocity = Vector3.zero
-  ClearPathNodes()
-  return reached
-end
-
 local function IsLootablePrompt(prompt)
   if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
   local parent = prompt.Parent
@@ -12547,6 +12353,10 @@ local function IsLootablePrompt(prompt)
   return false
 end
 
+local NavigateTo
+local FollowPath
+local PassDoorStraight
+
 local function LootAllInRoom(room)
   if not room or not KnobFarm.Active or _Unloading then return end
   local char = localPlayer2 and localPlayer2.Character
@@ -12581,6 +12391,9 @@ local function LootAllInRoom(room)
     if item and item.prompt and item.prompt.Enabled and not KnobFarm.LootedObjects[item.prompt] then
       KnobFarm.SetStatus("Looting: " .. (item.parent and item.parent.Name or "Item"))
       NavigateTo(item.pos, item.parent, item.parent and item.parent.Name or "Item", 5.0, "Loot")
+      if item.prompt and item.prompt.Enabled then
+        pcall(function() Functions.ForceFirePrompt(item.prompt) end)
+      end
 
       KnobFarm.LootedObjects[item.prompt] = true
       if item.parent then
@@ -12857,7 +12670,7 @@ local function GetDoorApproachPosition(doorCenter, door)
   return doorCenter
 end
 
-local function PassDoorStraight(door, root, hum)
+PassDoorStraight = function(door, root, hum)
   if not door or not root or not hum or hum.Health <= 0 then return end
   if not KnobFarm.Active or _Unloading then return end
 
@@ -13115,7 +12928,7 @@ local function GetRoomPathfindNodes(room, rootPos, exitPos)
   return points
 end
 
-local function FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
+FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
   if not waypoints or #waypoints == 0 then return end
   RenderPathNodes(waypoints)
 
@@ -13281,7 +13094,6 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
           end)
         end
 
-        PhaseTemporary(2.0)
         h.Jump = true
 
         if targetType == "Drawer" and tick() - lastProgressTime > 3.0 then
@@ -13335,7 +13147,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
   return completed and not IsUserMovingManually()
 end
 
-local function NavigateTo(targetPos, targetInstance, label, maxWaitTime, targetType)
+NavigateTo = function(targetPos, targetInstance, label, maxWaitTime, targetType)
   if not targetPos or not KnobFarm.Active or _Unloading then return false end
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -13653,129 +13465,6 @@ local function handleRoom100(room)
   end)
 end
 
--- ═══════════════════════════════════════════════════════════════════
--- AUTO DOOR SKIP (Rooms 0-1, DoorLattice, Gates, Seek Threat Zones)
--- ═══════════════════════════════════════════════════════════════════
-
-local function ExecuteAutoDoorSkip(room, roomNum)
-  if not room or not KnobFarm.Active or _Unloading then return false end
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not char or not root or not hum or hum.Health <= 0 then return false end
-
-  local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
-  if not exitDoor then
-    local t = tick()
-    while not exitDoor and tick() - t < 1.5 and KnobFarm.Active and not _Unloading do
-      exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
-      task.wait(0.05)
-    end
-  end
-  if not exitDoor then return false end
-
-  local isChase = isSeekChaseActive(room, roomNum)
-  KnobFarm.SetStatus(isChase and ("Seek Chase Door Skip: Room " .. tostring(roomNum)) or ("Auto Door Skip: Room " .. tostring(roomNum)))
-
-  -- Ensure obstacle bypass toggle is on
-  pcall(function()
-    if toggles and toggles.BypassSeekObstructions and not toggles.BypassSeekObstructions.Value then
-      toggles.BypassSeekObstructions:SetValue(true)
-    end
-    if toggles and toggles.RemoveSeekTrigger and not toggles.RemoveSeekTrigger.Value then
-      toggles.RemoveSeekTrigger:SetValue(true)
-    end
-  end)
-
-  -- 1. Disable collisions immediately on door, DoorLattice, and Seek obstacles
-  pcall(function()
-    for _, dp in ipairs(exitDoor:GetDescendants()) do
-      if dp:IsA("BasePart") then dp.CanCollide = false end
-    end
-    local lattice = room:FindFirstChild("DoorLattice", true)
-    if lattice then
-      for _, lp in ipairs(lattice:GetDescendants()) do
-        if lp:IsA("BasePart") then lp.CanCollide = false end
-      end
-    end
-    for _, obsName in ipairs({ "ChandelierObstruction", "Seek_Arm", "SeekFloodline", "TriggerEventCollision" }) do
-      for _, obs in ipairs(room:GetDescendants()) do
-        if obs.Name == obsName and obs:IsA("BasePart") then
-          obs.CanCollide = false
-          obs.CanTouch = false
-        end
-      end
-    end
-  end)
-
-  -- 2. Fast Loot (Gold / Stardust) - SKIP in Seek chase!
-  if not isChase then
-    TeleportLootRoom(room, false)
-  end
-
-  -- 3. Fast Gate / Lever
-  local hasGate, gate, lever = HasRoomGate(room)
-  if hasGate and lever then
-    local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
-    if leverPart then
-      root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
-      task.wait(0.08)
-    end
-  end
-
-  -- 4. Unlock if locked
-  local isLocked, lockPrompt = IsDoorLocked(exitDoor)
-  if isLocked then
-    if not HasLockpick() and not HasKeyTool() then
-      local keyObj, keyPos = FindRoomKey(room)
-      if keyObj and keyPos then
-        KnobFarm.SetStatus("No lockpicks! Picking up key (Skip)...")
-        root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
-        local tWait = tick()
-        while not HasKeyTool() and tick() - tWait < 1.5 and KnobFarm.Active and not _Unloading do
-          task.wait(0.05)
-        end
-      end
-    end
-    EquipUnlockTool()
-    local lock = exitDoor:FindFirstChild("Lock") or exitDoor:FindFirstChild("Lock", true)
-    local lockPart = (lock and lock:IsA("BasePart") and lock)
-      or (lock and lock:FindFirstChildWhichIsA("BasePart", true))
-      or (exitDoor:FindFirstChild("Hidden") and exitDoor.Hidden:IsA("BasePart") and exitDoor.Hidden)
-      or exitDoor.PrimaryPart or exitDoor:FindFirstChildWhichIsA("BasePart", true)
-
-    if lockPart then
-      local lockCF = (lockPart:IsA("BasePart") and lockPart.CFrame) or (lockPart:IsA("Model") and lockPart:GetPivot())
-      if lockCF then
-        root.CFrame = lockCF * CFrame.new(0, 0, 2.5)
-        task.wait(0.08)
-      end
-    end
-  end
-
-  -- 5. TELEPORT DIRECTLY IN FRONT OF EXIT DOOR (DOOR SKIP!)
-  local _, center, approachDir, passDir = GetDoorVectors(exitDoor)
-  if center and approachDir and passDir then
-    local doorFront = center + (approachDir * 3.5)
-    root.CFrame = CFrame.new(doorFront, doorFront + passDir)
-    pcall(function()
-      local cam = workspace.CurrentCamera
-      if cam then
-        cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + passDir)
-      end
-    end)
-    task.wait(0.04)
-  end
-
-  -- 6. Open Door & straight pass-through
-  PassDoorStraight(exitDoor, root, hum)
-  return true
-end
-
--- ═══════════════════════════════════════════════════════════════════
--- MAIN AUTONOMOUS FARM LOOP
--- ═══════════════════════════════════════════════════════════════════
-
 function KnobFarm.RunLoop()
   local ok, err = pcall(function()
     KnobFarm.SetStatus("Knob Farm Active")
@@ -13864,24 +13553,16 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- 4. Stuck detection: Phase temporary
+      -- 4. Stuck detection
       if IsStuck() then
-        KnobFarm.SetStatus("Stuck detected! Turning camera & Phase...")
-        local cam = workspace.CurrentCamera
-        local _, targetPos = GetRoomTarget(room)
-        if cam and targetPos then
-          pcall(function()
-            cam.CFrame = CFrame.new(cam.CFrame.Position, Vector3.new(targetPos.X, cam.CFrame.Position.Y, targetPos.Z))
-          end)
-        end
-        PhaseTemporary(2.5)
+        KnobFarm.SetStatus("Stuck detected! Jumping & recovering...")
+        hum.Jump = true
         KnobFarm.LastPosition = root.Position
         KnobFarm.LastMoveTime = tick()
         continue
       end
 
-      -- 5. Room 0/1 setup: Auto-buy lockpicks & prepare run (NO TELEPORT, normal running to door)
-      -- 5. Room 0/1 setup (NO shop lockpick buying!)
+      -- 5. Room 0/1 setup (ensure Godmode & PhantomNoclip active)
       if roomNum <= 1 or not KnobFarm.PassedFirstDoor then
         if not KnobFarm.StartKnobs then
           local k = GetPlayerKnobs()
@@ -13890,7 +13571,6 @@ function KnobFarm.RunLoop()
             KnobFarm.StartKnobsBeforeShop = false
           end
         end
-        SetCrouched(true)
         pcall(function()
           if toggles and toggles.Godmode and not toggles.Godmode.Value then
             toggles.Godmode:SetValue(true)
@@ -14063,7 +13743,6 @@ function KnobFarm.Start()
   KnobFarm.RoomEntryTime = tick()
   if (curRoomNum or 0) >= 1 then
     KnobFarm.PassedFirstDoor = true
-    SetCrouched(true)
     pcall(function()
       if options and options.Walkspeed then
         KnobFarm.PreviousWalkSpeed = options.Walkspeed.Value
@@ -14122,13 +13801,8 @@ function KnobFarm.Stop()
   local char = localPlayer2 and localPlayer2.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if hum then hum:Move(Vector3.zero, false) end
-  local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if root then
-    local bv = root:FindFirstChild("FarmFlyVelocity")
-    if bv then pcall(function() bv:Destroy() end) end
-    local bg = root:FindFirstChild("FarmFlyGyro")
-    if bg then pcall(function() bg:Destroy() end) end
     root.AssemblyLinearVelocity = Vector3.zero
   end
   KnobFarm.SetStatus("Disabled")
