@@ -11564,6 +11564,22 @@ local function SetCrouched(state)
   LastCrouchCall = tick()
 
   pcall(function()
+    local char = localPlayer2 and localPlayer2.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+      if state then
+        hum.JumpPower = 0
+        hum.JumpHeight = 0
+        hum.UseJumpPower = true
+        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+      else
+        hum.JumpPower = 50
+        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+      end
+    end
+  end)
+
+  pcall(function()
     local mg = GetMainGameModule()
     if mg and mg.crouch then
       mg.crouch(state)
@@ -11844,25 +11860,46 @@ end
 
 local function FindRoomKey(room)
   if not room then return nil end
+
+  local function isRealKey(item)
+    if not item or not item.Parent or KnobFarm.LootedObjects[item] then return false end
+    local name = item.Name
+
+    -- Explicitly reject typewriter keys, keyboard, and props
+    if name == "Keys" or name == "Keyboard" then return false end
+    local pName = item.Parent and item.Parent.Name:lower() or ""
+    if pName:find("typewriter") or pName == "keys" then return false end
+
+    -- Primary: exact Doors key pickup model/part names
+    if name == "KeyObtain" or name == "ElectricalKeyObtain" or name == "KeyIron" or name == "IronKey" or name == "KeyBackdoor" then
+      return true
+    end
+
+    -- Model named "Key" ONLY if it actually has a ProximityPrompt
+    if name == "Key" and item:FindFirstChildWhichIsA("ProximityPrompt", true) then
+      return true
+    end
+
+    return false
+  end
+
+  -- 1. Search current room first
   for _, item in ipairs(room:GetDescendants()) do
-    if (item.Name == "KeyObtain" or item.Name == "ElectricalKeyObtain" or item.Name == "KeyIron" or item.Name == "Key" or item.Name == "IronKey" or item.Name:lower():find("key"))
-        and not KnobFarm.LootedObjects[item] and item.Parent then
-      if item:FindFirstChildWhichIsA("ProximityPrompt", true) or item.Name:lower():find("key") then
+    if isRealKey(item) then
+      return item
+    end
+  end
+
+  -- 2. Fallback: check other rooms only if key not found in current room
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms then
+    for _, item in ipairs(curRooms:GetDescendants()) do
+      if isRealKey(item) then
         return item
       end
     end
   end
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if curRooms then
-    for _, item in ipairs(curRooms:GetDescendants()) do
-      if (item.Name == "KeyObtain" or item.Name == "ElectricalKeyObtain" or item.Name == "KeyIron" or item.Name == "Key" or item.Name == "IronKey" or item.Name:lower():find("key"))
-          and not KnobFarm.LootedObjects[item] and item.Parent then
-        if item:FindFirstChildWhichIsA("ProximityPrompt", true) or item.Name:lower():find("key") then
-          return item
-        end
-      end
-    end
-  end
+
   return nil
 end
 
@@ -12597,11 +12634,25 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       hum:Move(Vector3.zero, false)
     end
 
-    -- Jump if pathfinder placed a jump action
-    local curWp = waypoints[wpIndex]
-    if curWp and curWp.Action == Enum.PathWaypointAction.Jump then
-      hum.Jump = true
-    end
+    -- Keep bot firmly pressed to floor: prevent bouncing/jumping up on bumps or stairs
+    pcall(function()
+      hum.Jump = false
+      if not (toggles.Phase and toggles.Phase.Value) then
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        rayParams.FilterDescendantsInstances = { char, val85.HotelNodesFolder }
+        local hit = workspace:Raycast(root.Position + Vector3.new(0, 1.0, 0), Vector3.new(0, -8, 0), rayParams)
+        if hit and hit.Position then
+          local floorY = hit.Position.Y + (hum.HipHeight > 0 and (hum.HipHeight + root.Size.Y / 2) or 2.1)
+          if root.Position.Y > floorY + 0.35 then
+            root.CFrame = CFrame.new(root.Position.X, floorY, root.Position.Z) * (root.CFrame - root.CFrame.Position)
+            if root.AssemblyLinearVelocity.Y > 0 then
+              root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, -2.0, root.AssemblyLinearVelocity.Z)
+            end
+          end
+        end
+      end
+    end)
 
     -- Target proximity check: doors use 2.5 to reach doorway center; keys use 3.5
     local tDx = targetPos.X - rootPos.X
@@ -13369,20 +13420,23 @@ local function ExecuteAutoDoorSkip(room, roomNum)
   task.wait(0.15)
   -- Step forward through doorway into next room
   pcall(function()
-    local doorPart = exitDoor:FindFirstChild("Hidden")
-      or exitDoor:FindFirstChild("DoorFrame")
-      or exitDoor.PrimaryPart
-      or exitDoor:FindFirstChild("Door")
-    if doorPart and doorPart:IsA("BasePart") then
-      root.CFrame = doorPart.CFrame * CFrame.new(0, 0, -6)
-    elseif doorCenter then
-      local fwd = passDir or root.CFrame.LookVector
-      root.CFrame = CFrame.new(doorCenter + fwd * 6.0 + Vector3.new(0, 1.2, 0))
+    local fwd = passDir or root.CFrame.LookVector
+    local flatFwd = Vector3.new(fwd.X, 0, fwd.Z).Unit
+    if doorCenter then
+      root.CFrame = CFrame.new(doorCenter + flatFwd * 7.0 + Vector3.new(0, 1.2, 0))
     else
-      root.CFrame = root.CFrame * CFrame.new(0, 0, -6)
+      root.CFrame = root.CFrame * CFrame.new(0, 0, -7)
     end
   end)
-  task.wait(0.2)
+
+  -- Physically step forward so Doors room boundary registers entry
+  if hum and passDir then
+    hum:Move(passDir, false)
+    task.wait(0.25)
+    hum:Move(Vector3.zero, false)
+  end
+
+  task.wait(0.15)
   return true
 end
 
@@ -13476,9 +13530,25 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 1. Room 0 / Door 1: Phase Rush to Door 1 -> Crouch Run + Godmode
+      -- ── 1. Room 0 / Door 1: Auto Door Skip -> Key -> Door -> Pass -> Crouch Run + Godmode
       if not KnobFarm.PassedFirstDoor or roomNum == 0 then
-        ExecutePhaseRush(room, roomNum, "Door 1")
+        local success = ExecuteAutoDoorSkip(room, roomNum)
+        if success then
+          KnobFarm.PassedFirstDoor = true
+          SetCrouched(true)
+          pcall(function()
+            if options and options.Walkspeed then
+              local desiredSpeed = (options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
+              options.Walkspeed:SetValue(desiredSpeed)
+            end
+            if toggles and toggles.Godmode and not toggles.Godmode.Value then
+              toggles.Godmode:SetValue(true)
+            end
+            if options and options.GodmodeMethod then
+              options.GodmodeMethod:SetValue("On entity spawn")
+            end
+          end)
+        end
         continue
       end
 
@@ -13524,7 +13594,7 @@ function KnobFarm.RunLoop()
             KnobFarm.SetStatus("Running to " .. drawer.parent.Name)
             local drawerFloor = GetFloorPosition(drawer.pos)
             local path = pathfindingService:CreatePath({
-              AgentCanJump = true,
+              AgentCanJump = false,
               AgentCanClimb = false,
               WaypointSpacing = 4,
               AgentRadius = 1.0,
@@ -13560,7 +13630,7 @@ function KnobFarm.RunLoop()
 
       -- Compute path in crouch
       local path = pathfindingService:CreatePath({
-        AgentCanJump = true,
+        AgentCanJump = false,
         AgentCanClimb = false,
         WaypointSpacing = 4,
         AgentRadius = 1.0,
@@ -13574,7 +13644,7 @@ function KnobFarm.RunLoop()
 
       if not success or path.Status ~= Enum.PathStatus.Success then
         path = pathfindingService:CreatePath({
-          AgentCanJump = true,
+          AgentCanJump = false,
           AgentCanClimb = false,
           WaypointSpacing = 3,
           AgentRadius = 0.6,
@@ -13589,7 +13659,7 @@ function KnobFarm.RunLoop()
       if not path or path.Status ~= Enum.PathStatus.Success then
         -- Micro-agent for narrow sub-room doorways
         path = pathfindingService:CreatePath({
-          AgentCanJump = true,
+          AgentCanJump = false,
           AgentCanClimb = false,
           WaypointSpacing = 2,
           AgentRadius = 0.35,
