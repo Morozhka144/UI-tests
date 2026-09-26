@@ -12175,8 +12175,23 @@ local function GetPlayerCurrentRoom()
   return bestRoom, bestNum
 end
 
+local function IsGateRoomWithThingToOpen(room)
+  if not room then return false end
+  local assets = room:FindFirstChild("Assets")
+  local gate = assets and assets:FindFirstChild("Gate")
+  if gate and gate:FindFirstChild("ThingToOpen") then
+    return true
+  end
+  local thing = room:FindFirstChild("ThingToOpen", true)
+  if thing and thing.Parent and thing.Parent.Name == "Gate" then
+    return true
+  end
+  return false
+end
+
 local function HasRoomGate(room)
   if not room then return false, nil, nil end
+  if IsGateRoomWithThingToOpen(room) then return false, nil, nil end
   local gate = room:FindFirstChild("Gate", true) or room:FindFirstChild("ThingToOpen", true)
   if not gate then return false, nil, nil end
   local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
@@ -12613,46 +12628,53 @@ local function IsStuck()
   return false
 end
 
-local function GetDoorVectors(door)
+local function GetDoorVectors(door, fromPos)
   if not door then return nil, nil, nil, nil end
 
-  local doorPart = door:FindFirstChild("Hidden")
-    or door:FindFirstChild("Door")
-    or door:FindFirstChild("Collision")
-    or door:FindFirstChild("DoorFrame")
-    or door.PrimaryPart
-    or door:FindFirstChildWhichIsA("BasePart", true)
+  local doorCenter = GetDoorCenter(door)
+  if not doorCenter then return nil, nil, nil, nil end
 
-  local doorCenter = nil
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  local pPos = fromPos or (root and root.Position) or doorCenter
+
+  local toDoor = doorCenter - pPos
   local passDir = nil
 
-  if doorPart and doorPart:IsA("BasePart") then
-    doorCenter = doorPart.Position
-    local cf = doorPart.CFrame
-    local flatLv = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-    if flatLv.Magnitude > 0.1 then
-      passDir = flatLv.Unit
+  -- 1. Определяем осевое направление дверного проема (X или Z) по габаритам модели
+  local bboxCf, bboxSize = nil, nil
+  if door:IsA("Model") then
+    pcall(function() bboxCf, bboxSize = door:GetBoundingBox() end)
+  end
+
+  if bboxSize and bboxSize.X > 0.1 and bboxSize.Z > 0.1 then
+    if bboxSize.X < bboxSize.Z then
+      -- Толщина по X -> проход строго вдоль оси X
+      passDir = Vector3.new(toDoor.X >= 0 and 1 or -1, 0, 0)
+    else
+      -- Толщина по Z -> проход строго вдоль оси Z
+      passDir = Vector3.new(0, 0, toDoor.Z >= 0 and 1 or -1)
+    end
+  else
+    -- Фолбэк: берем преобладающую ось движения к двери
+    if math.abs(toDoor.X) > math.abs(toDoor.Z) then
+      passDir = Vector3.new(toDoor.X >= 0 and 1 or -1, 0, 0)
+    else
+      passDir = Vector3.new(0, 0, toDoor.Z >= 0 and 1 or -1)
     end
   end
 
-  if not doorCenter then
-    doorCenter = GetDoorCenter(door)
-  end
-
-  if not passDir then
-    if door:IsA("Model") then
-      local ok, cf = pcall(function() return door:GetPivot() end)
-      if ok and typeof(cf) == "CFrame" then
-        local flatLv = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-        if flatLv.Magnitude > 0.1 then
-          passDir = flatLv.Unit
-        end
+  -- Сверяем с положением следующей комнаты (если она уже создана в workspace)
+  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+  local nextRoom = roomsFolder and roomsFolder:FindFirstChild(tostring((KnobFarm.CurrentRoomNum or 0) + 1))
+  if nextRoom then
+    local nextPos = GetInstancePosition(nextRoom)
+    if nextPos then
+      local toNext = nextPos - doorCenter
+      if toNext:Dot(passDir) < 0 then
+        passDir = -passDir
       end
     end
-  end
-
-  if not passDir then
-    passDir = Vector3.new(0, 0, -1)
   end
 
   local approachDir = -passDir
@@ -12661,11 +12683,20 @@ local function GetDoorVectors(door)
   return normal, doorCenter, approachDir, passDir
 end
 
-local function GetDoorApproachPosition(doorCenter, door)
+local function GetDoorApproachPosition(doorCenter, door, fromPos)
   if not doorCenter then return doorCenter end
-  local _, center, approachDir, passDir = GetDoorVectors(door)
+  local _, center, approachDir = GetDoorVectors(door, fromPos)
   if center and approachDir then
-    return center + (approachDir * 4.5)
+    return center + (approachDir * 2.5)
+  end
+  return doorCenter
+end
+
+local function GetDoorThroughPosition(doorCenter, door, fromPos)
+  if not doorCenter then return doorCenter end
+  local _, center, _, passDir = GetDoorVectors(door, fromPos)
+  if center and passDir then
+    return center + (passDir * 4.5)
   end
   return doorCenter
 end
@@ -12674,8 +12705,19 @@ PassDoorStraight = function(door, root, hum)
   if not door or not root or not hum or hum.Health <= 0 then return end
   if not KnobFarm.Active or _Unloading then return end
 
-  local normal, center, approachDir, passDir = GetDoorVectors(door)
+  local normal, center, approachDir, passDir = GetDoorVectors(door, root.Position)
   if not center or not passDir then return end
+
+  local farmSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
+    or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 35
+
+  -- Поддерживаем максимальную скорость ползунка
+  if options and options.Walkspeed and options.Walkspeed.Value ~= farmSpeed then
+    options.Walkspeed:SetValue(farmSpeed)
+  end
+  if hum and hum.WalkSpeed ~= farmSpeed then
+    hum.WalkSpeed = farmSpeed
+  end
 
   -- 1. Быстрое отпирание двери отмычкой или ключом если заперта
   local isLocked, unPr = IsDoorLocked(door)
@@ -12687,8 +12729,8 @@ PassDoorStraight = function(door, root, hum)
         KnobFarm.SetStatus("No lockpicks! Picking up key...")
         NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
         local pickStart = tick()
-        while not HasKeyTool() and tick() - pickStart < 1.5 and KnobFarm.Active and not _Unloading do
-          task.wait(0.05)
+        while not HasKeyTool() and tick() - pickStart < 1.0 and KnobFarm.Active and not _Unloading do
+          task.wait(0.04)
         end
       end
     end
@@ -12697,9 +12739,9 @@ PassDoorStraight = function(door, root, hum)
     KnobFarm.SetStatus(statusMsg)
     EquipUnlockTool()
     local unStart = tick()
-    while IsDoorLocked(door) and tick() - unStart < 3.0 and KnobFarm.Active and not _Unloading do
+    while IsDoorLocked(door) and tick() - unStart < 1.5 and KnobFarm.Active and not _Unloading do
       EquipUnlockTool()
-      task.wait(0.04)
+      task.wait(0.03)
     end
   end
 
@@ -12709,34 +12751,30 @@ PassDoorStraight = function(door, root, hum)
   end
   KnobFarm.OpenedDoors[door] = true
 
-  -- 3. Отключение коллизии дверей, дверных косяков и хитбокса персонажа
-  local disabledParts = {}
-  for _, dp in ipairs(door:GetDescendants()) do
-    if dp:IsA("BasePart") and dp.CanCollide then
-      disabledParts[dp] = true
-      dp.CanCollide = false
-    end
-  end
-
-  -- 4. Непрерывный проход вперед через проем без застреваний
-  local throughPos = center + (passDir * 5.0)
+  -- 3. Быстрый сквозной импульс вперед через проем на полной скорости
   local passStart = tick()
-  while (root.Position - throughPos).Magnitude > 2.5 and tick() - passStart < 2.5 and KnobFarm.Active and not _Unloading do
+  while tick() - passStart < 0.4 and KnobFarm.Active and not _Unloading do
+    local rel = root.Position - center
+    if rel:Dot(passDir) >= 2.5 then
+      break
+    end
+
+    if options and options.Walkspeed and options.Walkspeed.Value ~= farmSpeed then
+      options.Walkspeed:SetValue(farmSpeed)
+    end
+    if hum and hum.WalkSpeed ~= farmSpeed then
+      hum.WalkSpeed = farmSpeed
+    end
+
     hum:Move(passDir, false)
+
     pcall(function()
       local cam = workspace.CurrentCamera
       if cam then
         cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + passDir)
       end
     end)
-    task.wait(0.03)
-  end
-
-  -- Восстановление коллизий
-  for p in pairs(disabledParts) do
-    if p and p.Parent then
-      p.CanCollide = true
-    end
+    task.wait(0.02)
   end
 
   if not KnobFarm.PassedFirstDoor then
@@ -12751,8 +12789,20 @@ local function GetRoomTarget(room)
   if not exitDoor then return nil, nil, nil end
 
   local doorCenter = GetDoorCenter(exitDoor)
-  local approachPos = GetDoorApproachPosition(doorCenter, exitDoor)
-  return exitDoor, GetFloorPosition(approachPos) or approachPos, "Door"
+  if not doorCenter then return nil, nil, nil end
+
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  local rootPos = root and root.Position
+
+  local isLocked = IsDoorLocked(exitDoor)
+  if isLocked then
+    local approachPos = GetDoorApproachPosition(doorCenter, exitDoor, rootPos)
+    return exitDoor, GetFloorPosition(approachPos) or approachPos, "Door"
+  else
+    local throughPos = GetDoorThroughPosition(doorCenter, exitDoor, rootPos)
+    return exitDoor, GetFloorPosition(throughPos) or throughPos, "Door"
+  end
 end
 
 -- Проверка проходимости прямого отрезка между двумя точками с учетом объема персонажа
@@ -13113,7 +13163,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
 
     -- Early approach when close to target (non-blocking)
     local dist = (targetPos - root.Position).Magnitude
-    if dist < 10.0 then
+    if dist < 14.0 then
       if targetType == "Door" then
         local locked = IsDoorLocked(target)
         if locked then
@@ -13588,14 +13638,19 @@ function KnobFarm.RunLoop()
         or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 35
 
       -- Handle Gate / Lever directly (fly to lever and pull)
-      local hasGate, gate, lever = HasRoomGate(room)
-      if hasGate and lever then
-        local leverPos = GetInstancePosition(lever)
-        if leverPos then
-          KnobFarm.SetStatus("Pulling Gate Lever...")
-          NavigateTo(leverPos, lever, "Gate Lever", 5.0, "Lever")
-          task.wait(0.2)
+      local isGateRoom = IsGateRoomWithThingToOpen(room)
+      if not isGateRoom then
+        local hasGate, gate, lever = HasRoomGate(room)
+        if hasGate and lever then
+          local leverPos = GetInstancePosition(lever)
+          if leverPos then
+            KnobFarm.SetStatus("Pulling Gate Lever...")
+            NavigateTo(leverPos, lever, "Gate Lever", 5.0, "Lever")
+            task.wait(0.2)
+          end
         end
+      else
+        KnobFarm.SetStatus("Gate room detected — ignoring obstacles, heading straight to Door...")
       end
 
       -- 6. Threat wait (Seek zones)
@@ -13614,7 +13669,7 @@ function KnobFarm.RunLoop()
       end
 
       -- 9. Loot EVERYTHING in room (Gold, Stardust, Drawers, Chests, Items)
-      if (roomNum or 0) > 0 and KnobFarm.PassedFirstDoor then
+      if (roomNum or 0) > 0 and KnobFarm.PassedFirstDoor and not isGateRoom then
         LootAllInRoom(room)
       end
 
