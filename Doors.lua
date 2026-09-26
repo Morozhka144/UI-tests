@@ -11466,6 +11466,9 @@ end)
 --               (Hotel AutoWalk - As seen in Video)
 -- =====================================================================
 
+do (function()
+
+
 KnobFarm = KnobFarm or {}
 KnobFarm.Active = false
 KnobFarm.Thread = nil
@@ -11639,6 +11642,23 @@ local function GetFloorPosition(pos)
   end
   return pos
 end
+local function safeFirePrompt(prompt)
+  if not prompt or not prompt:IsA("ProximityPrompt") then return end
+  pcall(function()
+    prompt.HoldDuration = 0
+    prompt.RequiresLineOfSight = false
+    prompt.MaxActivationDistance = 30
+    prompt.Enabled = true
+  end)
+  if Executor and Executor.fireproximityprompt then
+    pcall(Executor.fireproximityprompt, prompt, 0, true)
+    pcall(Executor.fireproximityprompt, prompt)
+  elseif fireproximityprompt then
+    pcall(fireproximityprompt, prompt, 0, true)
+    pcall(fireproximityprompt, prompt)
+  end
+end
+
 local function TriggerPrompt(prompt)
   if not prompt or not prompt.Parent then return end
   pcall(function()
@@ -12085,9 +12105,9 @@ local function LootDrawersInRoom(room)
   return targets
 end
 
-local function WaitForThreats(roomNum)
-  -- 3. Если двери 30-40 или 80-90, то при спавне сущностей раш/амбуш/блитз бот останавливается на месте и ждет пока сущности пропадут.
-  if not roomNum or not ((roomNum >= 30 and roomNum <= 40) or (roomNum >= 80 and roomNum <= 90)) then
+local function WaitForThreats(roomNum, room)
+  -- Ждем только в зоне Сика (глаза на стенах / приближение Сика)
+  if not isSeekThreatZone(room, roomNum) then
     return
   end
 
@@ -13268,32 +13288,48 @@ local function isSeekUpcoming(currentRoom, currentRoomNum)
   return false
 end
 
+local function HasSeekEyes(room)
+  if not room then return false end
+  -- Проверка глаз на стенах: workspace.CurrentRooms["XX"]:GetChildren()[...].Eye или потомок Eye
+  for _, child in ipairs(room:GetChildren()) do
+    if child.Name == "Eye" or child:FindFirstChild("Eye") then
+      return true
+    end
+  end
+  return room:FindFirstChild("Eye", true) ~= nil
+end
+
 local function isSeekThreatZone(currentRoom, currentRoomNum)
-  if currentRoomNum and ((currentRoomNum >= 30 and currentRoomNum <= 40) or (currentRoomNum >= 80 and currentRoomNum <= 90)) then
+  -- 1. Проверяем наличие глаз в текущей комнате
+  if HasSeekEyes(currentRoom) then
     return true
   end
+
+  -- 2. Проверяем наличие глаз в следующей комнате
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms and currentRoomNum then
+    local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
+    if nextRoom and HasSeekEyes(nextRoom) then
+      return true
+    end
+  end
+
+  -- 3. Триггеры погони и приближения Сика
   if isSeekUpcoming(currentRoom, currentRoomNum) then
     return true
   end
+
+  -- 4. Если Сик уже активен и движется
+  if workspace:FindFirstChild("SeekMoving")
+    or workspace:FindFirstChild("SeekMovingNewClone")
+    or workspace:FindFirstChild("SeekRig") then
+    return true
+  end
+
   return false
 end
 
-local function safeFirePrompt(prompt)
-  if not prompt or not prompt:IsA("ProximityPrompt") then return end
-  pcall(function()
-    prompt.HoldDuration = 0
-    prompt.RequiresLineOfSight = false
-    prompt.MaxActivationDistance = 30
-    prompt.Enabled = true
-  end)
-  if Executor and Executor.fireproximityprompt then
-    pcall(Executor.fireproximityprompt, prompt, 0, true)
-    pcall(Executor.fireproximityprompt, prompt)
-  elseif fireproximityprompt then
-    pcall(fireproximityprompt, prompt, 0, true)
-    pcall(fireproximityprompt, prompt)
-  end
-end
+
 
 local function FastLootRoom(room)
   local char = localPlayer2 and localPlayer2.Character
@@ -13636,7 +13672,7 @@ function KnobFarm.RunLoop()
       end
 
       -- ── Threat wait: ONLY in Seek zones (30-40, 80-90) ──
-      WaitForThreats(roomNum)
+      WaitForThreats(roomNum, room)
 
       -- ── Room 50 (Figure): Godmode OFF, Teleport to Books & Paper, then Door ──
       if roomNum == 50 then
@@ -13886,6 +13922,9 @@ if options and options.AutoFarmWalkSpeed then
     end
   end)
 end
+
+
+end)() end
 
 if CurrentFloor == "Lobby" then
   for index81, value126 in ipairs({
