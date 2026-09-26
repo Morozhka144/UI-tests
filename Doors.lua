@@ -12647,6 +12647,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
   local startTime = tick()
   local lastProgressTime = tick()
   local lastRootPos = nil
+  local currentTargetPoint = targetPos
 
   -- Continuous RenderStepped steering: fluid lookahead velocity without MoveTo stutter
   local moveConn
@@ -12716,6 +12717,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
         targetPoint = nextWp.Position
       end
     end
+    currentTargetPoint = targetPoint
 
     local steerX = targetPoint.X - rootPos.X
     local steerZ = targetPoint.Z - rootPos.Z
@@ -12727,6 +12729,21 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     else
       hum:Move(Vector3.zero, false)
     end
+
+    -- Smoothly rotate camera to face walking direction / path targetPoint
+    pcall(function()
+      local cam = workspace.CurrentCamera
+      if cam and steerDist > 0.5 then
+        local camPos = cam.CFrame.Position
+        local camDx = targetPoint.X - camPos.X
+        local camDz = targetPoint.Z - camPos.Z
+        if (camDx * camDx + camDz * camDz) > 0.25 then
+          local lookTarget = Vector3.new(targetPoint.X, camPos.Y, targetPoint.Z)
+          local targetCF = CFrame.new(camPos, lookTarget)
+          cam.CFrame = cam.CFrame:Lerp(targetCF, 0.2)
+        end
+      end
+    end)
 
     -- Keep bot firmly pressed to floor: prevent bouncing/jumping up on bumps or stairs
     pcall(function()
@@ -12785,7 +12802,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
         lastRootPos = root.Position
         lastProgressTime = tick()
       elseif tick() - lastProgressTime > 1.8 then
-        local targetPoint = (curWp and curWp.Position) or targetPos
+        local targetPoint = currentTargetPoint or targetPos
         local cam = workspace.CurrentCamera
         if cam and targetPoint then
           pcall(function()
@@ -12811,6 +12828,14 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
           local flatDir = Vector3.new(dir.X, 0, dir.Z)
           if flatDir.Magnitude > 0.1 then
             hum:Move(flatDir.Unit, false)
+            pcall(function()
+              local cam = workspace.CurrentCamera
+              if cam and targetPoint then
+                local camPos = cam.CFrame.Position
+                local lookTarget = Vector3.new(targetPoint.X, camPos.Y, targetPoint.Z)
+                cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+              end
+            end)
           end
           task.wait(0.05)
         end
@@ -13002,6 +13027,14 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
           end
         end
         hum:Move(passDir, false)
+        pcall(function()
+          local cam = workspace.CurrentCamera
+          if cam and passDir and passDir.Magnitude > 0.1 then
+            local camPos = cam.CFrame.Position
+            local lookTarget = camPos + Vector3.new(passDir.X, 0, passDir.Z)
+            cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+          end
+        end)
         task.wait()
       end
       hum:Move(Vector3.zero, false)
@@ -13052,6 +13085,14 @@ local function handleRoom50(room, door)
       hum:MoveTo(floorPos)
       local t = tick()
       while (root.Position - floorPos).Magnitude > 6 and tick() - t < 5 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+        pcall(function()
+          local cam = workspace.CurrentCamera
+          if cam then
+            local camPos = cam.CFrame.Position
+            local lookTarget = Vector3.new(floorPos.X, camPos.Y, floorPos.Z)
+            cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+          end
+        end)
         task.wait(0.1)
       end
     end
@@ -13421,6 +13462,14 @@ local function FastHandleKeyAndUnlock(room, door, roomNum)
         hum:MoveTo(floorPos)
         local t = tick()
         while (root.Position - floorPos).Magnitude > 6 and tick() - t < 4 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+          pcall(function()
+            local cam = workspace.CurrentCamera
+            if cam then
+              local camPos = cam.CFrame.Position
+              local lookTarget = Vector3.new(floorPos.X, camPos.Y, floorPos.Z)
+              cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+            end
+          end)
           task.wait(0.1)
         end
       end
@@ -13775,6 +13824,15 @@ function KnobFarm.RunLoop()
               FollowPath(path:GetWaypoints(), drawer.parent, drawerFloor or drawer.pos, "Drawer", room, roomNum)
             else
               hum:MoveTo(drawerFloor or drawer.pos)
+              pcall(function()
+                local cam = workspace.CurrentCamera
+                local targetP = drawerFloor or drawer.pos
+                if cam and targetP then
+                  local camPos = cam.CFrame.Position
+                  local lookTarget = Vector3.new(targetP.X, camPos.Y, targetP.Z)
+                  cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+                end
+              end)
               task.wait(0.4)
             end
             TriggerPrompt(drawer.prompt)
