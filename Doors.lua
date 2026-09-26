@@ -12105,6 +12105,77 @@ local function LootDrawersInRoom(room)
   return targets
 end
 
+local function isSeekUpcoming(currentRoom, currentRoomNum)
+  if currentRoom then
+    if currentRoom:FindFirstChild("TriggerEventCollision", true)
+      or currentRoom:FindFirstChild("Seek_Arm", true)
+      or currentRoom:FindFirstChild("SeekTrigger", true)
+      or currentRoom:FindFirstChild("Seeking", true)
+      or currentRoom:FindFirstChild("ChaseStartTrigger", true) then
+      return true
+    end
+  end
+
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms and currentRoomNum then
+    local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
+    if nextRoom then
+      if nextRoom:FindFirstChild("TriggerEventCollision", true)
+        or nextRoom:FindFirstChild("Seek_Arm", true)
+        or nextRoom:FindFirstChild("SeekTrigger", true)
+        or nextRoom:FindFirstChild("Seeking", true)
+        or nextRoom:FindFirstChild("ChaseStartTrigger", true)
+        or nextRoom:FindFirstChild("SeekMoving", true)
+        or nextRoom:FindFirstChild("SeekMovingNewClone", true) then
+        return true
+      end
+    end
+  end
+
+  return false
+end
+
+local function HasSeekEyes(room)
+  if not room then return false end
+  -- Проверка глаз на стенах: workspace.CurrentRooms["XX"]:GetChildren()[...].Eye или потомок Eye
+  for _, child in ipairs(room:GetChildren()) do
+    if child.Name == "Eye" or child:FindFirstChild("Eye") then
+      return true
+    end
+  end
+  return room:FindFirstChild("Eye", true) ~= nil
+end
+
+local function isSeekThreatZone(currentRoom, currentRoomNum)
+  -- 1. Проверяем наличие глаз в текущей комнате
+  if HasSeekEyes(currentRoom) then
+    return true
+  end
+
+  -- 2. Проверяем наличие глаз в следующей комнате
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms and currentRoomNum then
+    local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
+    if nextRoom and HasSeekEyes(nextRoom) then
+      return true
+    end
+  end
+
+  -- 3. Триггеры погони и приближения Сика
+  if isSeekUpcoming(currentRoom, currentRoomNum) then
+    return true
+  end
+
+  -- 4. Если Сик уже активен и движется
+  if workspace:FindFirstChild("SeekMoving")
+    or workspace:FindFirstChild("SeekMovingNewClone")
+    or workspace:FindFirstChild("SeekRig") then
+    return true
+  end
+
+  return false
+end
+
 local function WaitForThreats(roomNum, room)
   -- Ждем только в зоне Сика (глаза на стенах / приближение Сика)
   if not isSeekThreatZone(room, roomNum) then
@@ -13258,76 +13329,7 @@ local function handleRoom100(room)
   end)
 end
 
-local function isSeekUpcoming(currentRoom, currentRoomNum)
-  if currentRoom then
-    if currentRoom:FindFirstChild("TriggerEventCollision", true)
-      or currentRoom:FindFirstChild("Seek_Arm", true)
-      or currentRoom:FindFirstChild("SeekTrigger", true)
-      or currentRoom:FindFirstChild("Seeking", true)
-      or currentRoom:FindFirstChild("ChaseStartTrigger", true) then
-      return true
-    end
-  end
 
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if curRooms and currentRoomNum then
-    local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
-    if nextRoom then
-      if nextRoom:FindFirstChild("TriggerEventCollision", true)
-        or nextRoom:FindFirstChild("Seek_Arm", true)
-        or nextRoom:FindFirstChild("SeekTrigger", true)
-        or nextRoom:FindFirstChild("Seeking", true)
-        or nextRoom:FindFirstChild("ChaseStartTrigger", true)
-        or nextRoom:FindFirstChild("SeekMoving", true)
-        or nextRoom:FindFirstChild("SeekMovingNewClone", true) then
-        return true
-      end
-    end
-  end
-
-  return false
-end
-
-local function HasSeekEyes(room)
-  if not room then return false end
-  -- Проверка глаз на стенах: workspace.CurrentRooms["XX"]:GetChildren()[...].Eye или потомок Eye
-  for _, child in ipairs(room:GetChildren()) do
-    if child.Name == "Eye" or child:FindFirstChild("Eye") then
-      return true
-    end
-  end
-  return room:FindFirstChild("Eye", true) ~= nil
-end
-
-local function isSeekThreatZone(currentRoom, currentRoomNum)
-  -- 1. Проверяем наличие глаз в текущей комнате
-  if HasSeekEyes(currentRoom) then
-    return true
-  end
-
-  -- 2. Проверяем наличие глаз в следующей комнате
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if curRooms and currentRoomNum then
-    local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
-    if nextRoom and HasSeekEyes(nextRoom) then
-      return true
-    end
-  end
-
-  -- 3. Триггеры погони и приближения Сика
-  if isSeekUpcoming(currentRoom, currentRoomNum) then
-    return true
-  end
-
-  -- 4. Если Сик уже активен и движется
-  if workspace:FindFirstChild("SeekMoving")
-    or workspace:FindFirstChild("SeekMovingNewClone")
-    or workspace:FindFirstChild("SeekRig") then
-    return true
-  end
-
-  return false
-end
 
 
 
@@ -13380,139 +13382,172 @@ local function FastHandleGate(room)
   end
 end
 
-local function FastHandleKeyAndUnlock(room, door)
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not root or not hum or hum.Health <= 0 then return end
+local function FastHandleKeyAndUnlock(room, door, roomNum)
+  pcall(function()
+    local char = localPlayer2 and localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
 
-  local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
-  if not lock then return end
+    local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
+    if not lock then return end
 
-  local function runToPos(targetPos, targetInstance, label)
-    if not targetPos or not KnobFarm.Active or _Unloading then return false end
-    local floorPos = GetFloorPosition(targetPos) or targetPos
-    KnobFarm.SetStatus("Running to " .. (label or "target") .. "...")
+    local isTeleportRoom = (roomNum == 0 or roomNum == 1 or not KnobFarm.PassedFirstDoor)
 
-    local path = pathfindingService:CreatePath({
-      AgentCanJump = false,
-      AgentCanClimb = false,
-      WaypointSpacing = 4,
-      AgentRadius = 1.0,
-      AgentHeight = 1.8,
-      Costs = { StuckPart = 8 },
-    })
+    local function runToPos(targetPos, targetInstance, label)
+      if not targetPos or not KnobFarm.Active or _Unloading then return false end
+      local floorPos = GetFloorPosition(targetPos) or targetPos
+      KnobFarm.SetStatus("Running to " .. (label or "target") .. "...")
 
-    local ok = pcall(function()
-      path:ComputeAsync(root.Position, floorPos)
-    end)
+      local path = pathfindingService:CreatePath({
+        AgentCanJump = false,
+        AgentCanClimb = false,
+        WaypointSpacing = 4,
+        AgentRadius = 1.0,
+        AgentHeight = 1.8,
+        Costs = { StuckPart = 8 },
+      })
 
-    if ok and path.Status == Enum.PathStatus.Success then
-      FollowPath(path:GetWaypoints(), targetInstance, floorPos, label or "Key", room)
-    else
-      hum:MoveTo(floorPos)
-      local t = tick()
-      while (root.Position - floorPos).Magnitude > 6 and tick() - t < 4 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
-        task.wait(0.1)
+      local ok = pcall(function()
+        path:ComputeAsync(root.Position, floorPos)
+      end)
+
+      if ok and path.Status == Enum.PathStatus.Success then
+        FollowPath(path:GetWaypoints(), targetInstance, floorPos, label or "Key", room, roomNum)
+      else
+        hum:MoveTo(floorPos)
+        local t = tick()
+        while (root.Position - floorPos).Magnitude > 6 and tick() - t < 4 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+          task.wait(0.1)
+        end
       end
+
+      return true
     end
 
-    return true
-  end
-
-  local function getKeyTool()
-    if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
-    local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-    if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
-    for _, item in ipairs(char:GetChildren()) do
-      if item:IsA("Tool") and item.Name:lower():find("key") then return item end
-    end
-    if bp then
-      for _, item in ipairs(bp:GetChildren()) do
+    local function getKeyTool()
+      if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
+      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
+      for _, item in ipairs(char:GetChildren()) do
         if item:IsA("Tool") and item.Name:lower():find("key") then return item end
       end
-    end
-    return nil
-  end
-
-  local keyTool = getKeyTool()
-  if not keyTool then
-    local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
-    if not keyObj then
-      for _, pr in ipairs(room:GetDescendants()) do
-        if pr:IsA("ProximityPrompt") and (pr.ObjectText:lower():find("key") or pr.Name:lower():find("key")) then
-          keyObj = pr.Parent
-          break
+      if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+          if item:IsA("Tool") and item.Name:lower():find("key") then return item end
         end
       end
+      return nil
     end
 
-    if keyObj then
-      local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
-      if keyPos then
-        -- Run to key in room instead of teleporting
-        runToPos(keyPos, keyObj, "Key")
-
-        local desk = keyObj:FindFirstAncestorWhichIsA("Model")
-        if desk and desk ~= room then
-          for _, pr in ipairs(desk:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") and pr.Enabled and pr.Name ~= "ModulePrompt" then
-              safeFirePrompt(pr)
-            end
+    local keyTool = getKeyTool()
+    if not keyTool then
+      local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
+      if not keyObj then
+        for _, pr in ipairs(room:GetDescendants()) do
+          if pr:IsA("ProximityPrompt") and (pr.ObjectText:lower():find("key") or pr.Name:lower():find("key")) then
+            keyObj = pr.Parent
+            break
           end
         end
+      end
 
-        local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if keyPrompt then
-          safeFirePrompt(keyPrompt)
+      if keyObj then
+        local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
+        if keyPos then
+          if isTeleportRoom then
+            -- В комнатах 0-1 ключ берется именно телепортом
+            root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
+            task.wait(0.06)
+          else
+            -- В остальных комнатах бежим к ключу
+            runToPos(keyPos, keyObj, "Key")
+          end
+
+          local desk = keyObj:FindFirstAncestorWhichIsA("Model")
+          if desk and desk ~= room then
+            for _, pr in ipairs(desk:GetDescendants()) do
+              if pr:IsA("ProximityPrompt") and pr.Enabled and pr.Name ~= "ModulePrompt" then
+                safeFirePrompt(pr)
+              end
+            end
+          end
+
+          local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if keyPrompt then
+            safeFirePrompt(keyPrompt)
+          end
+          task.wait(0.1)
+        end
+      end
+      keyTool = getKeyTool()
+    end
+
+    if keyTool and hum and keyTool.Parent ~= char then
+      pcall(function() hum:EquipTool(keyTool) end)
+      task.wait(0.1)
+    end
+
+    local lockPrompt = door:FindFirstChild("UnlockPrompt", true)
+      or (lock:IsA("ProximityPrompt") and lock)
+      or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+    local lockPart = (lock:IsA("BasePart") and lock)
+      or lock:FindFirstChildWhichIsA("BasePart", true)
+      or (door:FindFirstChild("Hidden") and door.Hidden:IsA("BasePart") and door.Hidden)
+      or door.PrimaryPart
+      or door:FindFirstChildWhichIsA("BasePart", true)
+
+    if lockPart then
+      local lockCF = (lockPart:IsA("BasePart") and lockPart.CFrame) or (lockPart:IsA("Model") and lockPart:GetPivot())
+      if lockCF then
+        if isTeleportRoom then
+          -- В комнатах 0-1 телепортируемся к замку
+          root.CFrame = lockCF * CFrame.new(0, 0, 2.5)
+          task.wait(0.06)
+        else
+          -- В остальных комнатах бежим к замку
+          runToPos(lockCF.Position, lockPart, "Lock")
+        end
+        if lockPrompt then
+          safeFirePrompt(lockPrompt)
         end
         task.wait(0.1)
       end
     end
-    keyTool = getKeyTool()
-  end
-
-  if keyTool and hum and keyTool.Parent ~= char then
-    pcall(function() hum:EquipTool(keyTool) end)
-    task.wait(0.1)
-  end
-
-  local lockPrompt = door:FindFirstChild("UnlockPrompt", true)
-    or (lock:IsA("ProximityPrompt") and lock)
-    or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
-
-  local lockPart = (lock:IsA("BasePart") and lock) or lock:FindFirstChildWhichIsA("BasePart", true) or door:FindFirstChild("Door") or door.PrimaryPart
-  if lockPart then
-    -- Run to lock
-    runToPos(lockPart.Position, lockPart, "Lock")
-    if lockPrompt then
-      safeFirePrompt(lockPrompt)
-    end
-    task.wait(0.1)
-  end
+  end)
 end
 
 local function FastOpenRoomDoor(door)
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  if not root or not door then return end
+  pcall(function()
+    local char = localPlayer2 and localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not door then return end
 
-  local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
-  if doorPart then
-    root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
-  end
-  local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
-  if prompt then
-    safeFirePrompt(prompt)
-  end
-  if door:FindFirstChild("ClientOpen") then
-    pcall(function() door.ClientOpen:FireServer() end)
-  end
-  KnobFarm.OpenedDoors[door] = true
-  task.wait(0.08)
-  if doorPart then
-    root.CFrame = doorPart.CFrame * CFrame.new(0, 0, -4)
-  end
+    local doorPart = (door:FindFirstChild("Hidden") and door.Hidden:IsA("BasePart") and door.Hidden)
+      or (door:FindFirstChild("Door") and door.Door:IsA("BasePart") and door.Door)
+      or door.PrimaryPart
+      or door:FindFirstChildWhichIsA("BasePart", true)
+
+    local doorCF = (doorPart and doorPart:IsA("BasePart") and doorPart.CFrame)
+      or (door:IsA("Model") and door:GetPivot())
+
+    if doorCF then
+      root.CFrame = doorCF * CFrame.new(0, 0, 3)
+    end
+    local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt then
+      safeFirePrompt(prompt)
+    end
+    if door:FindFirstChild("ClientOpen") then
+      pcall(function() door.ClientOpen:FireServer() end)
+    end
+    KnobFarm.OpenedDoors[door] = true
+    task.wait(0.08)
+    if doorCF then
+      root.CFrame = doorCF * CFrame.new(0, 0, -4)
+    end
+  end)
 end
 
 local function ExecuteAutoDoorSkip(room, roomNum)
@@ -13546,8 +13581,8 @@ local function ExecuteAutoDoorSkip(room, roomNum)
   -- 2. Fast Gate / Lever
   FastHandleGate(room)
 
-  -- 3. Fast Key & Unlock
-  FastHandleKeyAndUnlock(room, exitDoor)
+  -- 3. Fast Key & Unlock (room 0-1 uses teleport)
+  FastHandleKeyAndUnlock(room, exitDoor, roomNum)
 
   -- 4. Fast Open Door & step through
   FastOpenRoomDoor(exitDoor)
@@ -13646,11 +13681,11 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── Условие: если номер 0, или моделька DoorLattice, или решетка (Gate/ThingToOpen) -> скип комнаты ──
+      -- ── Условие: если номер 0 или 1, или моделька DoorLattice, или решетка (Gate/ThingToOpen) -> скип комнаты / телепорт ──
       local hasDoorLattice = room:FindFirstChild("DoorLattice", true) ~= nil
       local hasGate = (room:FindFirstChild("Gate", true) ~= nil) or (room:FindFirstChild("ThingToOpen", true) ~= nil)
 
-      if roomNum == 0 or not KnobFarm.PassedFirstDoor or hasDoorLattice or hasGate then
+      if roomNum <= 1 or not KnobFarm.PassedFirstDoor or hasDoorLattice or hasGate then
         local success = ExecuteAutoDoorSkip(room, roomNum)
         if success and not KnobFarm.PassedFirstDoor then
           KnobFarm.PassedFirstDoor = true
