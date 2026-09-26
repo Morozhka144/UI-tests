@@ -12758,7 +12758,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
           end
         end
         local kPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if kPr and kPr.Enabled then TriggerPrompt(kPr) end
+        if kPr and kPr.Enabled then safeFirePrompt(kPr) end
         if PlayerHasKey() then
           completed = true
           break
@@ -12923,7 +12923,8 @@ end
 local function handleRoom50(room, door)
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
-  if not root then return end
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not root or not hum or hum.Health <= 0 then return end
 
   KnobFarm.DisableGodmodeForBoss = true
   pcall(function()
@@ -12931,25 +12932,57 @@ local function handleRoom50(room, door)
       toggles.Godmode:SetValue(false)
     end
   end)
+  SetCrouched(true)
 
-  KnobFarm.SetStatus("Room 50: Teleporting to Books...")
+  local function runToPos(targetPos, targetInstance, label)
+    if not targetPos or not KnobFarm.Active or _Unloading then return false end
+    local floorPos = GetFloorPosition(targetPos) or targetPos
+    KnobFarm.SetStatus("Room 50: Running to " .. (label or "target") .. "...")
 
-  -- 1. Teleport to all LiveHintBooks
+    local path = pathfindingService:CreatePath({
+      AgentCanJump = false,
+      AgentCanClimb = false,
+      WaypointSpacing = 4,
+      AgentRadius = 1.0,
+      AgentHeight = 1.8,
+      Costs = { StuckPart = 8 },
+    })
+
+    local ok = pcall(function()
+      path:ComputeAsync(root.Position, floorPos)
+    end)
+
+    if ok and path.Status == Enum.PathStatus.Success then
+      FollowPath(path:GetWaypoints(), targetInstance, floorPos, label or "Room50", room, 50)
+    else
+      hum:MoveTo(floorPos)
+      local t = tick()
+      while (root.Position - floorPos).Magnitude > 6 and tick() - t < 5 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+        task.wait(0.1)
+      end
+    end
+
+    return true
+  end
+
+  -- 1. Run to all LiveHintBooks
   for _, desc in ipairs(room:GetDescendants()) do
     if not KnobFarm.Active or _Unloading then break end
-    if desc.Name == "LiveHintBook" then
+    if desc.Name == "LiveHintBook" and not KnobFarm.LootedObjects[desc] then
       local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
       local pos = (desc:IsA("BasePart") and desc.Position) or (desc:IsA("Model") and desc:GetPivot().Position)
-      if pos and root then
-        root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-        if pr then TriggerPrompt(pr) end
-        task.wait(0.15)
+      if pos and pr and pr.Enabled then
+        runToPos(pos, desc, "Book")
+        if (root.Position - pos).Magnitude <= 8 then
+          safeFirePrompt(pr)
+          KnobFarm.LootedObjects[desc] = true
+          task.wait(0.1)
+        end
       end
     end
   end
 
-  -- 2. Teleport to LibraryHintPaper
-  KnobFarm.SetStatus("Room 50: Teleporting to Hint Paper...")
+  -- 2. Run to LibraryHintPaper
   local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("PickupItem", true)
   if not paper then
     for _, pr in ipairs(room:GetDescendants()) do
@@ -12959,27 +12992,29 @@ local function handleRoom50(room, door)
       end
     end
   end
-  if paper and root then
+  if paper and not KnobFarm.LootedObjects[paper] then
     local pPos = (paper:IsA("BasePart") and paper.Position) or (paper:IsA("Model") and paper:GetPivot().Position)
-    if pPos then
-      root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 0))
-      local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if pr then TriggerPrompt(pr) end
-      task.wait(0.2)
+    local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pPos and pr and pr.Enabled then
+      runToPos(pPos, paper, "Hint Paper")
+      if (root.Position - pPos).Magnitude <= 8 then
+        safeFirePrompt(pr)
+        KnobFarm.LootedObjects[paper] = true
+        task.wait(0.1)
+      end
     end
   end
 
-  -- 3. Teleport to Padlock / Door
-  KnobFarm.SetStatus("Room 50: Teleporting to Door and Padlock...")
+  -- 3. Run to Padlock / Door
   local padlock = room:FindFirstChild("Padlock", true) or (door and door:FindFirstChild("Padlock", true))
   local padPart = (padlock and padlock:IsA("BasePart") and padlock)
     or (padlock and padlock:FindFirstChildWhichIsA("BasePart", true))
     or (door and door:FindFirstChild("Door"))
     or (door and door.PrimaryPart)
 
-  if padPart and root then
-    root.CFrame = padPart.CFrame * CFrame.new(0, 0, 2.5)
-    task.wait(0.3)
+  if padPart then
+    runToPos(padPart.Position, padPart, "Door 50")
+    task.wait(0.2)
   end
 
   -- 4. Solve Padlock with code / brute force
@@ -13243,6 +13278,207 @@ local function isSeekThreatZone(currentRoom, currentRoomNum)
   return false
 end
 
+local function safeFirePrompt(prompt)
+  if not prompt or not prompt:IsA("ProximityPrompt") then return end
+  pcall(function()
+    prompt.HoldDuration = 0
+    prompt.RequiresLineOfSight = false
+    prompt.MaxActivationDistance = 30
+    prompt.Enabled = true
+  end)
+  if Executor and Executor.fireproximityprompt then
+    pcall(Executor.fireproximityprompt, prompt, 0, true)
+    pcall(Executor.fireproximityprompt, prompt)
+  elseif fireproximityprompt then
+    pcall(fireproximityprompt, prompt, 0, true)
+    pcall(fireproximityprompt, prompt)
+  end
+end
+
+local function FastLootRoom(room)
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then return end
+
+  for _, desc in ipairs(room:GetDescendants()) do
+    if not KnobFarm.Active or _Unloading then break end
+    if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc.Parent] then
+      local parent = desc.Parent
+      if parent then
+        local pName = parent.Name
+        local objText = desc.ObjectText:lower()
+        if pName == "GoldPile" or pName == "TinyGold" or pName == "Gold"
+          or parent:GetAttribute("GoldValue")
+          or objText:find("gold")
+          or pName == "StardustPickup" or pName == "Stardust" or objText:find("stardust") then
+          local pos = GetInstancePosition(parent)
+          if pos then
+            root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+            safeFirePrompt(desc)
+            KnobFarm.LootedObjects[parent] = true
+            task.wait(0.04)
+          end
+        end
+      end
+    end
+  end
+end
+
+local function FastHandleGate(room)
+  local gate = room:FindFirstChild("Gate", true) or room:FindFirstChild("ThingToOpen", true)
+  local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
+  if gate and lever then
+    local char = localPlayer2 and localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+      local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
+      if leverPart then
+        root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
+        local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr then
+          safeFirePrompt(pr)
+        end
+        task.wait(0.12)
+      end
+    end
+  end
+end
+
+local function FastHandleKeyAndUnlock(room, door)
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not root or not hum or hum.Health <= 0 then return end
+
+  local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
+  if not lock then return end
+
+  local function runToPos(targetPos, targetInstance, label)
+    if not targetPos or not KnobFarm.Active or _Unloading then return false end
+    local floorPos = GetFloorPosition(targetPos) or targetPos
+    KnobFarm.SetStatus("Running to " .. (label or "target") .. "...")
+
+    local path = pathfindingService:CreatePath({
+      AgentCanJump = false,
+      AgentCanClimb = false,
+      WaypointSpacing = 4,
+      AgentRadius = 1.0,
+      AgentHeight = 1.8,
+      Costs = { StuckPart = 8 },
+    })
+
+    local ok = pcall(function()
+      path:ComputeAsync(root.Position, floorPos)
+    end)
+
+    if ok and path.Status == Enum.PathStatus.Success then
+      FollowPath(path:GetWaypoints(), targetInstance, floorPos, label or "Key", room)
+    else
+      hum:MoveTo(floorPos)
+      local t = tick()
+      while (root.Position - floorPos).Magnitude > 6 and tick() - t < 4 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+        task.wait(0.1)
+      end
+    end
+
+    return true
+  end
+
+  local function getKeyTool()
+    if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
+    local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+    if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
+    for _, item in ipairs(char:GetChildren()) do
+      if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+    end
+    if bp then
+      for _, item in ipairs(bp:GetChildren()) do
+        if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+      end
+    end
+    return nil
+  end
+
+  local keyTool = getKeyTool()
+  if not keyTool then
+    local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
+    if not keyObj then
+      for _, pr in ipairs(room:GetDescendants()) do
+        if pr:IsA("ProximityPrompt") and (pr.ObjectText:lower():find("key") or pr.Name:lower():find("key")) then
+          keyObj = pr.Parent
+          break
+        end
+      end
+    end
+
+    if keyObj then
+      local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
+      if keyPos then
+        -- Run to key in room instead of teleporting
+        runToPos(keyPos, keyObj, "Key")
+
+        local desk = keyObj:FindFirstAncestorWhichIsA("Model")
+        if desk and desk ~= room then
+          for _, pr in ipairs(desk:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") and pr.Enabled and pr.Name ~= "ModulePrompt" then
+              safeFirePrompt(pr)
+            end
+          end
+        end
+
+        local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if keyPrompt then
+          safeFirePrompt(keyPrompt)
+        end
+        task.wait(0.1)
+      end
+    end
+    keyTool = getKeyTool()
+  end
+
+  if keyTool and hum and keyTool.Parent ~= char then
+    pcall(function() hum:EquipTool(keyTool) end)
+    task.wait(0.1)
+  end
+
+  local lockPrompt = door:FindFirstChild("UnlockPrompt", true)
+    or (lock:IsA("ProximityPrompt") and lock)
+    or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+  local lockPart = (lock:IsA("BasePart") and lock) or lock:FindFirstChildWhichIsA("BasePart", true) or door:FindFirstChild("Door") or door.PrimaryPart
+  if lockPart then
+    -- Run to lock
+    runToPos(lockPart.Position, lockPart, "Lock")
+    if lockPrompt then
+      safeFirePrompt(lockPrompt)
+    end
+    task.wait(0.1)
+  end
+end
+
+local function FastOpenRoomDoor(door)
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root or not door then return end
+
+  local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
+  if doorPart then
+    root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
+  end
+  local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
+  if prompt then
+    safeFirePrompt(prompt)
+  end
+  if door:FindFirstChild("ClientOpen") then
+    pcall(function() door.ClientOpen:FireServer() end)
+  end
+  KnobFarm.OpenedDoors[door] = true
+  task.wait(0.08)
+  if doorPart then
+    root.CFrame = doorPart.CFrame * CFrame.new(0, 0, -4)
+  end
+end
+
 local function ExecuteAutoDoorSkip(room, roomNum)
   if not room or not KnobFarm.Active or _Unloading then return false end
   local char = localPlayer2 and localPlayer2.Character
@@ -13255,15 +13491,12 @@ local function ExecuteAutoDoorSkip(room, roomNum)
 
   KnobFarm.SetStatus("Auto Door Skip: Room " .. tostring(roomNum))
 
-  -- Disable collisions on decorative plants/pots/bushes
-  DisableObstacleCollision(room)
-
-  -- Disable collision on door & gate/lattice immediately
+  -- Disable collisions immediately on door and DoorLattice
   pcall(function()
     for _, dp in ipairs(exitDoor:GetDescendants()) do
       if dp:IsA("BasePart") then dp.CanCollide = false end
     end
-    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
+    local lattice = room:FindFirstChild("DoorLattice", true)
     if lattice then
       for _, lp in ipairs(lattice:GetDescendants()) do
         if lp:IsA("BasePart") then lp.CanCollide = false end
@@ -13271,172 +13504,19 @@ local function ExecuteAutoDoorSkip(room, roomNum)
     end
   end)
 
-  -- 1. Threat wait in Seek zones (30-40, 80-90)
-  WaitForThreats(roomNum)
+  -- 1. Fast Loot (Gold / Stardust)
+  FastLootRoom(room)
 
-  -- 2. Fast Loot in Room (Gold and Stardust)
-  TeleportLootRoom(room)
+  -- 2. Fast Gate / Lever
+  FastHandleGate(room)
 
-  -- 3. Gate handling (if present)
-  local hasGate, gate, lever = HasRoomGate(room)
-  if hasGate and gate and not KnobFarm.PassedGates[gate] then
-    if lever then
-      local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
-      if leverPart then
-        root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
-        local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr then TriggerPrompt(pr) end
-        task.wait(0.2)
-      end
-    end
-    local gatePos = GetInstancePosition(gate) or (gate:IsA("Model") and gate:GetPivot().Position)
-    if gatePos then
-      root.CFrame = CFrame.new(gatePos + Vector3.new(0, 1.2, 0))
-    end
-    PhaseTemporary(3.0)
-    KnobFarm.PassedGates[gate] = true
-    task.wait(0.15)
-  end
+  -- 3. Fast Key & Unlock
+  FastHandleKeyAndUnlock(room, exitDoor)
 
-  -- 4. Key handling and Unlock (ensured for locked doors and Room 0)
-  local locked, unPr = IsDoorLocked(exitDoor)
-  if (locked or roomNum == 0) and not PlayerHasKey() then
-    local keyItem = FindRoomKey(room)
-    local findStart = tick()
-    while not keyItem and tick() - findStart < 2.5 and KnobFarm.Active and not _Unloading do
-      task.wait(0.15)
-      keyItem = FindRoomKey(room)
-    end
-    if keyItem and keyItem.Parent then
-      local keyPos = GetInstancePosition(keyItem)
-      if keyPos then
-        root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
-        local desk = keyItem:FindFirstAncestorWhichIsA("Model")
-        if desk and desk ~= room then
-          for _, pr in ipairs(desk:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") and pr.Enabled then TriggerPrompt(pr) end
-          end
-        end
-        local grabStart = tick()
-        while tick() - grabStart < 2.5 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
-          for _, pr in ipairs(keyItem:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") then TriggerPrompt(pr) end
-          end
-          local directPr = keyItem:FindFirstChildWhichIsA("ProximityPrompt", true)
-          if directPr then TriggerPrompt(directPr) end
-          task.wait(0.12)
-        end
-        if PlayerHasKey() then
-          KnobFarm.LootedObjects[keyItem] = true
-        end
-      end
-    end
-  end
+  -- 4. Fast Open Door & step through
+  FastOpenRoomDoor(exitDoor)
 
-  if IsDoorLocked(exitDoor) then
-    EquipKey()
-    task.wait(0.1)
-    local doorCenter = GetDoorCenter(exitDoor)
-    if doorCenter then
-      root.CFrame = CFrame.new(doorCenter + Vector3.new(0, 1.2, 0))
-    end
-    local unlockStart = tick()
-    while IsDoorLocked(exitDoor) and tick() - unlockStart < 3.0 and KnobFarm.Active and not _Unloading do
-      EquipKey()
-      local _, curUnPr = IsDoorLocked(exitDoor)
-      if curUnPr then TriggerPrompt(curUnPr) end
-      task.wait(0.2)
-    end
-  end
-
-  -- 5. Threat wait before opening
-  WaitForThreats(roomNum)
-
-  -- 6. Teleport to door, open, and pass cleanly into next room
-  local doorCenter = GetDoorCenter(exitDoor)
-  if not doorCenter then return false end
-
-  -- Determine forward direction from player towards and through door
-  local toDoor = Vector3.new(doorCenter.X - root.Position.X, 0, doorCenter.Z - root.Position.Z)
-  local passDir = nil
-  if toDoor.Magnitude > 1.0 then
-    passDir = toDoor.Unit
-  else
-    local staticPart = exitDoor:FindFirstChild("Hidden")
-      or exitDoor:FindFirstChild("DoorFrame")
-      or exitDoor:FindFirstChild("Frame")
-      or exitDoor:FindFirstChild("Sign")
-      or exitDoor.PrimaryPart
-    local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
-    if cf then
-      local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-      if flat.Magnitude > 0.2 then
-        local normal = flat.Unit
-        local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
-        local side = toPlayer:Dot(normal) >= 0 and 1 or -1
-        passDir = normal * (-side)
-      end
-    end
-    if not passDir then
-      local fwd = root.CFrame.LookVector
-      passDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
-    end
-  end
-
-  -- Stand in front of door facing the door
-  pcall(function()
-    local doorPart = exitDoor:FindFirstChild("Hidden")
-      or exitDoor:FindFirstChild("DoorFrame")
-      or exitDoor.PrimaryPart
-      or exitDoor:FindFirstChild("Door")
-    if doorPart and doorPart:IsA("BasePart") then
-      root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
-    elseif doorCenter then
-      root.CFrame = CFrame.new(doorCenter + Vector3.new(0, 1.2, 0))
-    end
-  end)
-
-  -- Open door
-  if exitDoor:FindFirstChild("ClientOpen") then
-    pcall(function() exitDoor.ClientOpen:FireServer() end)
-  end
-  local dPr = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
-  if dPr and dPr.Enabled then TriggerPrompt(dPr) end
-  KnobFarm.OpenedDoors[exitDoor] = true
-
-  -- Disable collision on door & lattice
-  pcall(function()
-    for _, dp in ipairs(exitDoor:GetDescendants()) do
-      if dp:IsA("BasePart") then dp.CanCollide = false end
-    end
-    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
-    if lattice then
-      for _, lp in ipairs(lattice:GetDescendants()) do
-        if lp:IsA("BasePart") then lp.CanCollide = false end
-      end
-    end
-  end)
-
-  task.wait(0.15)
-  -- Step forward through doorway into next room
-  pcall(function()
-    local fwd = passDir or root.CFrame.LookVector
-    local flatFwd = Vector3.new(fwd.X, 0, fwd.Z).Unit
-    if doorCenter then
-      root.CFrame = CFrame.new(doorCenter + flatFwd * 7.0 + Vector3.new(0, 1.2, 0))
-    else
-      root.CFrame = root.CFrame * CFrame.new(0, 0, -7)
-    end
-  end)
-
-  -- Physically step forward so Doors room boundary registers entry
-  if hum and passDir then
-    hum:Move(passDir, false)
-    task.wait(0.25)
-    hum:Move(Vector3.zero, false)
-  end
-
-  task.wait(0.15)
+  task.wait(0.08)
   return true
 end
 
