@@ -13530,10 +13530,13 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 1. Room 0 / Door 1: Auto Door Skip -> Key -> Door -> Pass -> Crouch Run + Godmode
-      if not KnobFarm.PassedFirstDoor or roomNum == 0 then
+      -- ── Условие: если номер 0, или моделька DoorLattice, или решетка (Gate/ThingToOpen) -> скип комнаты ──
+      local hasDoorLattice = room:FindFirstChild("DoorLattice", true) ~= nil
+      local hasGate = (room:FindFirstChild("Gate", true) ~= nil) or (room:FindFirstChild("ThingToOpen", true) ~= nil)
+
+      if roomNum == 0 or not KnobFarm.PassedFirstDoor or hasDoorLattice or hasGate then
         local success = ExecuteAutoDoorSkip(room, roomNum)
-        if success then
+        if success and not KnobFarm.PassedFirstDoor then
           KnobFarm.PassedFirstDoor = true
           SetCrouched(true)
           pcall(function()
@@ -13552,33 +13555,24 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 2. Threat wait: ONLY in Seek zones (30-40, 80-90) ──
+      -- ── Threat wait: ONLY in Seek zones (30-40, 80-90) ──
       WaitForThreats(roomNum)
 
-      -- ── 3. Room 50 (Figure): Godmode OFF, Teleport to Books & Paper, then Door ──
+      -- ── Room 50 (Figure): Godmode OFF, Teleport to Books & Paper, then Door ──
       if roomNum == 50 then
         handleRoom50(room, room:FindFirstChild("Door"))
         continue
       end
 
-      -- ── 4. Room 100 (Figure): Check threats, Godmode OFF, Teleport Fuses, Lever & Breaker ──
+      -- ── Room 100 (Figure): Check threats, Godmode OFF, Teleport Fuses, Lever & Breaker ──
       if roomNum >= 100 then
         handleRoom100(room)
         continue
       end
 
-      -- ── 5. Seek zones (30-40, 80-90): ONLY Teleport (Auto Door Skip), NO running! ──
+      -- ── Seek zones (30-40, 80-90): ONLY Teleport (Auto Door Skip), NO running! ──
       if isSeekThreatZone(room, roomNum) and roomNum ~= 50 and roomNum < 100 then
         ExecuteAutoDoorSkip(room, roomNum)
-        continue
-      end
-
-      -- ── 6. Special Obstacle Rooms (Gate / ThingToOpen / DoorLattice in ANY room): Auto Door Skip ──
-      if IsSpecialObstacleRoom(room) and not KnobFarm.PassedPhaseRooms[room] then
-        local success = ExecuteAutoDoorSkip(room, roomNum)
-        if success then
-          KnobFarm.PassedPhaseRooms[room] = true
-        end
         continue
       end
 
