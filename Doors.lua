@@ -12678,185 +12678,15 @@ local function GetDoorVectors(door)
   return normal, doorCenter, approachDir, passDir
 end
 
-local function GetDoorApproachPosition(doorCenter, door)
-  if not doorCenter then return doorCenter end
-  local _, center, approachDir, passDir = GetDoorVectors(door)
-  if center and approachDir then
-    return center + (approachDir * 4.5)
-  end
-  return doorCenter
-end
-
 local function PassDoorStraight(door, root, hum)
-  if not door or not root or not hum or hum.Health <= 0 then return end
-  if not KnobFarm.Active or _Unloading then return end
-
-  local normal, center, approachDir, passDir = GetDoorVectors(door)
-  if not center or not passDir then return end
-
-  -- 1. Быстрое отпирание двери отмычкой или ключом если заперта
-  local isLocked, unPr = IsDoorLocked(door)
-  if isLocked then
-    if not HasLockpick() and not HasKeyTool() then
-      local room = door.Parent
-      local keyObj, keyPos = FindRoomKey(room)
-      if keyObj and keyPos then
-        KnobFarm.SetStatus("No lockpicks! Picking up key...")
-        NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
-        local pickStart = tick()
-        while not HasKeyTool() and tick() - pickStart < 1.5 and KnobFarm.Active and not _Unloading do
-          task.wait(0.05)
-        end
-      end
-    end
-
-    local statusMsg = HasLockpick() and "Unlocking door with lockpick..." or "Unlocking door with key..."
-    KnobFarm.SetStatus(statusMsg)
-    EquipUnlockTool()
-    local unStart = tick()
-    while IsDoorLocked(door) and tick() - unStart < 3.0 and KnobFarm.Active and not _Unloading do
-      EquipUnlockTool()
-      task.wait(0.04)
-    end
-  end
-
-  -- 2. Открытие створки
+  if not door then return end
   if door:FindFirstChild("ClientOpen") then
     pcall(function() door.ClientOpen:FireServer() end)
   end
   KnobFarm.OpenedDoors[door] = true
-
-  -- 3. Отключение коллизии дверей, дверных косяков и хитбокса персонажа
-  local disabledParts = {}
-  for _, dp in ipairs(door:GetDescendants()) do
-    if dp:IsA("BasePart") and dp.CanCollide then
-      disabledParts[dp] = true
-      dp.CanCollide = false
-    end
+  if not KnobFarm.PassedFirstDoor then
+    KnobFarm.PassedFirstDoor = true
   end
-
-  local doorParent = door.Parent
-  local nextRoom = nil
-  if doorParent then
-    local pNum = tonumber(doorParent.Name)
-    if pNum and doorParent.Parent then
-      nextRoom = doorParent.Parent:FindFirstChild(tostring(pNum + 1))
-    end
-  end
-
-  local frameNames = { "RoomExit", "RoomEntrance", "End_DoorFrame", "Start_DoorFrame", "DoorFrame" }
-  for _, rFolder in ipairs({ doorParent, nextRoom }) do
-    if rFolder then
-      for _, name in ipairs(frameNames) do
-        local f = rFolder:FindFirstChild(name, true)
-        if f then
-          for _, fp in ipairs(f:GetDescendants()) do
-            if fp:IsA("BasePart") and fp.CanCollide then
-              disabledParts[fp] = true
-              fp.CanCollide = false
-            end
-          end
-          if f:IsA("BasePart") and f.CanCollide then
-            disabledParts[f] = true
-            f.CanCollide = false
-          end
-        end
-      end
-    end
-  end
-
-  local char = root.Parent
-  local charParts = {}
-  if char then
-    for _, cp in ipairs(char:GetChildren()) do
-      if cp:IsA("BasePart") and cp.Name ~= "HumanoidRootPart" and cp.CanCollide then
-        charParts[cp] = true
-        cp.CanCollide = false
-      end
-    end
-  end
-
-  -- 4. Мягкое боковое центрирование (только если смещен, выравниваем по центру проема)
-  local lateralDir = Vector3.new(-passDir.Z, 0, passDir.X).Unit
-  local toBot = root.Position - center
-  local lateralOffset = toBot:Dot(lateralDir)
-
-  if math.abs(lateralOffset) > 0.8 then
-    local newX = root.Position.X - (lateralDir.X * (lateralOffset * 0.85))
-    local newZ = root.Position.Z - (lateralDir.Z * (lateralOffset * 0.85))
-    root.CFrame = CFrame.new(Vector3.new(newX, root.Position.Y, newZ), Vector3.new(newX + passDir.X, root.Position.Y, newZ + passDir.Z))
-  end
-
-  pcall(function()
-    local cam = workspace.CurrentCamera
-    if cam then
-      local camPos = cam.CFrame.Position
-      cam.CFrame = CFrame.new(camPos, camPos + passDir)
-    end
-  end)
-
-  -- 5. Безостановочный рывок вперед сквозь дверь строго по вектору passDir в следующую комнату
-  KnobFarm.SetStatus("Running through door...")
-  local passStart = tick()
-  local runSpeed = (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
-  hum.WalkSpeed = math.max(hum.WalkSpeed, runSpeed)
-
-  while tick() - passStart < 2.5 and KnobFarm.Active and not _Unloading and hum.Health > 0 do
-    hum:Move(passDir, false)
-
-    -- Порожек в дверном проеме: подъем по высоте если пол в следующей комнате выше
-    pcall(function()
-      local rayParams = RaycastParams.new()
-      rayParams.FilterType = Enum.RaycastFilterType.Exclude
-      rayParams.FilterDescendantsInstances = { char, val85.HotelNodesFolder }
-      local stepHit = workspace:Raycast(root.Position + (passDir * 1.5) + Vector3.new(0, 2.0, 0), Vector3.new(0, -6.0, 0), rayParams)
-      if stepHit and stepHit.Position then
-        local expectedY = stepHit.Position.Y + (hum.HipHeight > 0 and (hum.HipHeight + root.Size.Y / 2) or 2.1)
-        if expectedY > root.Position.Y + 0.25 then
-          root.CFrame = CFrame.new(root.Position.X, expectedY, root.Position.Z) * (root.CFrame - root.CFrame.Position)
-        end
-      end
-    end)
-
-    pcall(function()
-      local cam = workspace.CurrentCamera
-      if cam then
-        local camPos = cam.CFrame.Position
-        cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, camPos + passDir), 0.3)
-      end
-    end)
-
-    local distPast = (root.Position - center):Dot(passDir)
-    if distPast >= 6.5 then
-      break
-    end
-    task.wait()
-  end
-
-  -- 6. Восстановление коллизий персонажа
-  for cp, _ in pairs(charParts) do
-    if cp and cp.Parent then cp.CanCollide = true end
-  end
-
-  local distPastFinal = (root.Position - center):Dot(passDir)
-  if distPastFinal >= 3.0 then
-    if not KnobFarm.PassedFirstDoor then
-      KnobFarm.PassedFirstDoor = true
-    end
-
-    local parentRoomNum = tonumber(door.Parent and door.Parent.Name)
-    if parentRoomNum then
-      KnobFarm.CurrentRoomNum = math.max(KnobFarm.CurrentRoomNum or 0, parentRoomNum + 1)
-    end
-  end
-
-  task.delay(0.5, function()
-    pcall(function()
-      for dp, _ in pairs(disabledParts) do
-        if dp and dp.Parent then dp.CanCollide = true end
-      end
-    end)
-  end)
 end
 
 local function GetRoomTarget(room)
@@ -12865,11 +12695,16 @@ local function GetRoomTarget(room)
   local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
   if not exitDoor then return nil, nil, nil end
 
-  local doorCenter = GetDoorCenter(exitDoor)
-  local approachPos = GetDoorApproachPosition(doorCenter, exitDoor)
-  return exitDoor, GetFloorPosition(approachPos) or approachPos, "Door"
-end
+  local _, center, _, passDir = GetDoorVectors(exitDoor)
+  if center and passDir then
+    -- Точка пути: прямо через дверной проем на 3.5 стада в следующую комнату (проход как по обычному коридору)
+    local throughPos = center + (passDir * 3.5)
+    return exitDoor, GetFloorPosition(throughPos) or throughPos, "Door"
+  end
 
+  local doorCenter = GetDoorCenter(exitDoor)
+  return exitDoor, GetFloorPosition(doorCenter) or doorCenter, "Door"
+end
 
 -- Проверка проходимости прямого отрезка между двумя точками с учетом объема персонажа
 local function IsDirectPathClear(startPos, endPos, char)
@@ -12882,11 +12717,15 @@ local function IsDirectPathClear(startPos, endPos, char)
 
   local hit = workspace:Blockcast(CFrame.new(startPos + Vector3.new(0, 1.2, 0)), Vector3.new(1.8, 2.0, 1.8), dir, rayParams)
   if hit and hit.Instance and hit.Instance.CanCollide and hit.Instance.Transparency < 0.9 then
+    local hitName = hit.Instance.Name:lower()
+    local pName = hit.Instance.Parent and hit.Instance.Parent.Name:lower() or ""
+    if hitName == "door" or hitName == "collision" or hitName:find("door", 1, true) or pName == "door" then
+      return true
+    end
     return false
   end
   return true
 end
-
 -- Построение пути исключительно перпендикулярными прямыми (вдоль осей X и Z) по середине комнат
 local function OrthogonalizeWaypoints(rawPoints, char)
   if not rawPoints or #rawPoints < 2 then return rawPoints end
@@ -13239,7 +13078,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
 
     -- Early approach when close to target (non-blocking)
     local dist = (targetPos - root.Position).Magnitude
-    if dist < 10.0 then
+    if dist < 14.0 then
       if targetType == "Door" then
         local locked = IsDoorLocked(target)
         if locked then
@@ -13248,6 +13087,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
           if target:FindFirstChild("ClientOpen") then
             pcall(function() target.ClientOpen:FireServer() end)
           end
+          KnobFarm.OpenedDoors[target] = true
         end
       end
     end
