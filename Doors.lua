@@ -545,6 +545,7 @@ function library:CreateWindow(cfg)
     MoroWindow = Lumina:CreateWindow({
         Title = cfg.Title or "MOROLUMINA.lua",
         ToggleKey = cfg.ToggleKeybind or cfg.ToggleKey or Enum.KeyCode.RightShift,
+        TeleportFile = cfg.TeleportFile or "Doors.lua",
     })
     library.ScreenGui = MoroWindow.Gui or MoroWindow.ScreenGui
 
@@ -11482,6 +11483,8 @@ KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
 KnobFarm.PreviousWalkSpeed = nil
 KnobFarm.LastPosition = nil
 KnobFarm.LastMoveTime = 0
+KnobFarm.LastRoomNum = nil
+KnobFarm.RoomEntryTime = 0
 
 if not val85.HotelNodesFolder then
   val85.HotelNodesFolder = Instance.new("Folder")
@@ -13665,6 +13668,25 @@ function KnobFarm.RunLoop()
       end
       KnobFarm.CurrentRoomNum = roomNum
 
+      if not KnobFarm.LastRoomNum or KnobFarm.LastRoomNum ~= roomNum then
+        KnobFarm.LastRoomNum = roomNum
+        KnobFarm.RoomEntryTime = tick()
+      end
+
+      -- ── Если уже 10 минут бот в одной комнате -> Play Again (во вкладке Misc) ──
+      if KnobFarm.RoomEntryTime and (tick() - KnobFarm.RoomEntryTime >= 600) then
+        KnobFarm.SetStatus("10m timeout in Room " .. tostring(roomNum) .. "! Triggering Play Again...")
+        pcall(function()
+          local playAgain = (remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain"))
+            or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder") and replicatedStorage.RemotesFolder:FindFirstChild("PlayAgain"))
+          if playAgain then
+            playAgain:FireServer()
+          end
+        end)
+        task.wait(5.0)
+        continue
+      end
+
       -- ── 8. Stuck detection: Turn camera towards path & Phase ────────────
       if IsStuck() then
         KnobFarm.SetStatus("Stuck detected! Turning camera & Phase...")
@@ -13851,6 +13873,8 @@ function KnobFarm.Start()
 
   local _, curRoomNum = GetPlayerCurrentRoom()
   KnobFarm.CurrentRoomNum = curRoomNum or 0
+  KnobFarm.LastRoomNum = curRoomNum
+  KnobFarm.RoomEntryTime = tick()
   if (curRoomNum or 0) >= 1 then
     KnobFarm.PassedFirstDoor = true
     SetCrouched(true)
@@ -13887,6 +13911,8 @@ function KnobFarm.Stop()
   KnobFarm.Active = false
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.PassedFirstDoor = false
+  KnobFarm.LastRoomNum = nil
+  KnobFarm.RoomEntryTime = 0
   KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
   KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
