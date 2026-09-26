@@ -2191,6 +2191,10 @@ Groupboxes.AutoFarm:AddToggle("AutoFarmEnabled", {
 })
 
 Groupboxes.AutoFarm_Status = Groupboxes.AutoFarm:AddLabel("Status: Idle")
+Groupboxes.AutoFarm:AddDivider()
+Groupboxes.AutoFarm_StatsNet = Groupboxes.AutoFarm:AddLabel("Net Profit: +0 Knobs")
+Groupboxes.AutoFarm_StatsEarned = Groupboxes.AutoFarm:AddLabel("Total Earned: 0 Knobs")
+Groupboxes.AutoFarm_StatsRuns = Groupboxes.AutoFarm:AddLabel("Runs: 0 (Spent: 0)")
 
 Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmShowPath", {
   Text = "Show Path (Neon Nodes)",
@@ -2905,6 +2909,84 @@ toggles.ShowSkeletonKey:OnChanged(function(visible4)
 
   if itemShopSkeletonKey then
     itemShopSkeletonKey.Visible = visible4
+  end
+end)
+
+Groupboxes.SpamBuy:AddToggle("AutoBuyLockpicks", {
+  Text = "Auto Buy Lockpicks (1x)",
+  Default = false,
+  Tooltip = "Automatically purchases 1 lockpick in pre-run shop",
+  DisabledTooltip = "This feature doesn't work in this floor",
+})
+
+local lastAutoLockpickBuy = 0
+
+function Functions.CheckAndAutoBuyLockpick()
+  if not toggles.AutoBuyLockpicks or not toggles.AutoBuyLockpicks.Value then
+    return
+  end
+
+  if tick() - lastAutoLockpickBuy < 4.0 then
+    return
+  end
+
+  local char = (localPlayer2 and localPlayer2.Character) or character
+  local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+  if (char and char:FindFirstChild("Lockpick")) or (bp and bp:FindFirstChild("Lockpick")) then
+    return
+  end
+
+  if Functions.HasItem and (Functions.HasItem("Lockpick") or Functions.HasItem("Lockpick", true)) then
+    return
+  end
+
+  local preRunShop = (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder") and replicatedStorage.RemotesFolder:FindFirstChild("PreRunShop"))
+    or (remotesFolder2 and remotesFolder2:FindFirstChild("PreRunShop"))
+
+  if preRunShop then
+    lastAutoLockpickBuy = tick()
+    if KnobFarm then
+      KnobFarm.LockpickBoughtThisRun = true
+    end
+    pcall(function()
+      preRunShop:FireServer({ "Lockpick" }, false)
+    end)
+  end
+end
+
+toggles.AutoBuyLockpicks:OnChanged(function(enabled)
+  if enabled then
+    task.spawn(Functions.CheckAndAutoBuyLockpick)
+  end
+end)
+
+task.spawn(function()
+  local function setupItemShopListener(mainUI)
+    if not mainUI then return end
+    local itemShop = mainUI:WaitForChild("ItemShop", 5)
+    if itemShop then
+      itemShop:GetPropertyChangedSignal("Visible"):Connect(function()
+        if itemShop.Visible and toggles.AutoBuyLockpicks and toggles.AutoBuyLockpicks.Value then
+          task.wait(0.5)
+          Functions.CheckAndAutoBuyLockpick()
+        end
+      end)
+      if itemShop.Visible and toggles.AutoBuyLockpicks and toggles.AutoBuyLockpicks.Value then
+        task.spawn(Functions.CheckAndAutoBuyLockpick)
+      end
+    end
+  end
+
+  if localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") then
+    local mainUI = localPlayer2.PlayerGui:FindFirstChild("MainUI")
+    if mainUI then
+      setupItemShopListener(mainUI)
+    end
+    localPlayer2.PlayerGui.ChildAdded:Connect(function(child)
+      if child.Name == "MainUI" then
+        setupItemShopListener(child)
+      end
+    end)
   end
 end)
 
@@ -8090,6 +8172,10 @@ local function helper64()
     pcall(function() options.SpamBuyItems:SetDisabled(val215) end)
   end
 
+  if toggles.AutoBuyLockpicks then
+    pcall(function() toggles.AutoBuyLockpicks:SetDisabled(val215) end)
+  end
+
   if val206 and options.SpamBuyItems then
     local val216 = { "Lockpick", "Lighter", "Flashlight", "Vitamins" }
 
@@ -11469,7 +11555,6 @@ end)
 
 do (function()
 
-
 KnobFarm = KnobFarm or {}
 KnobFarm.Active = false
 KnobFarm.Thread = nil
@@ -11477,14 +11562,150 @@ KnobFarm.CurrentRoomNum = 0
 KnobFarm.DisableGodmodeForBoss = false
 KnobFarm.PassedFirstDoor = false
 KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
-KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
 KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
-KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
 KnobFarm.PreviousWalkSpeed = nil
 KnobFarm.LastPosition = nil
 KnobFarm.LastMoveTime = 0
 KnobFarm.LastRoomNum = nil
 KnobFarm.RoomEntryTime = 0
+KnobFarm.StartKnobs = nil
+KnobFarm.StartKnobsBeforeShop = false
+KnobFarm.LockpickBoughtThisRun = false
+KnobFarm.StatsRecordedThisRun = false
+KnobFarm.RunGold = 0
+
+local STATS_FILE = "Doors_Farm_Stats.json"
+
+local function GetPlayerKnobs()
+  local val = nil
+  if localPlayer2 then
+    val = localPlayer2:GetAttribute("Knobs") or localPlayer2:GetAttribute("Knob")
+    if typeof(val) == "number" then return val end
+
+    local leaderstats = localPlayer2:FindFirstChild("leaderstats")
+    if leaderstats then
+      local k = leaderstats:FindFirstChild("Knobs") or leaderstats:FindFirstChild("Knob")
+      if k and typeof(k.Value) == "number" then return k.Value end
+    end
+  end
+
+  local gameData = replicatedStorage and replicatedStorage:FindFirstChild("GameData")
+  if gameData then
+    local k = gameData:FindFirstChild("Knobs") or gameData:FindFirstChild("Knob")
+    if k and typeof(k.Value) == "number" then return k.Value end
+  end
+
+  pcall(function()
+    local mainUI = localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") and localPlayer2.PlayerGui:FindFirstChild("MainUI")
+    if mainUI then
+      local itemShop = mainUI:FindFirstChild("ItemShop")
+      if itemShop then
+        for _, desc in ipairs(itemShop:GetDescendants()) do
+          if desc:IsA("TextLabel") and desc.Text:match("^%d+$") and desc.Name:lower():find("knob") then
+            local n = tonumber(desc.Text)
+            if n then val = n break end
+          end
+        end
+      end
+    end
+  end)
+  if typeof(val) == "number" then return val end
+
+  return nil
+end
+
+local function LoadStats()
+  local stats = {
+    TotalEarned = 0,
+    TotalSpent = 0,
+    NetProfit = 0,
+    RunsCompleted = 0,
+  }
+
+  if isfile and isfile(STATS_FILE) then
+    local ok, content = pcall(readfile, STATS_FILE)
+    if ok and content and #content > 0 then
+      local decodeOk, data = pcall(function()
+        return httpService:JSONDecode(content)
+      end)
+      if decodeOk and typeof(data) == "table" then
+        stats.TotalEarned = tonumber(data.TotalEarned) or 0
+        stats.TotalSpent = tonumber(data.TotalSpent) or 0
+        stats.NetProfit = tonumber(data.NetProfit) or 0
+        stats.RunsCompleted = tonumber(data.RunsCompleted) or 0
+      end
+    end
+  end
+
+  return stats
+end
+
+local function SaveStats(stats)
+  if writefile then
+    pcall(function()
+      local json = httpService:JSONEncode(stats)
+      writefile(STATS_FILE, json)
+    end)
+  end
+end
+
+local function UpdateStatsGUI(stats, lastNet)
+  if not stats then stats = LoadStats() end
+  pcall(function()
+    if Groupboxes and Groupboxes.AutoFarm_StatsNet then
+      local sign = stats.NetProfit >= 0 and "+" or ""
+      local lastTxt = lastNet and (" (Last: " .. (lastNet >= 0 and "+" or "") .. tostring(lastNet) .. ")") or ""
+      Groupboxes.AutoFarm_StatsNet:SetText("Net Profit: " .. sign .. tostring(stats.NetProfit) .. " Knobs" .. lastTxt)
+    end
+    if Groupboxes and Groupboxes.AutoFarm_StatsEarned then
+      Groupboxes.AutoFarm_StatsEarned:SetText("Total Earned: " .. tostring(stats.TotalEarned) .. " Knobs")
+    end
+    if Groupboxes and Groupboxes.AutoFarm_StatsRuns then
+      Groupboxes.AutoFarm_StatsRuns:SetText("Runs: " .. tostring(stats.RunsCompleted) .. " (Spent: " .. tostring(stats.TotalSpent) .. ")")
+    end
+  end)
+end
+
+local function RecordRunStats()
+  if KnobFarm.StatsRecordedThisRun then return end
+  KnobFarm.StatsRecordedThisRun = true
+
+  local currentKnobs = GetPlayerKnobs()
+  local startKnobs = KnobFarm.StartKnobs
+  local lockpickBought = KnobFarm.LockpickBoughtThisRun or false
+  local spent = lockpickBought and 50 or 0
+  local earned = 0
+  local net = 0
+
+  if currentKnobs and startKnobs then
+    local diff = currentKnobs - startKnobs
+    if KnobFarm.StartKnobsBeforeShop then
+      net = diff
+      earned = net + spent
+    else
+      earned = math.max(0, diff)
+      net = earned - spent
+    end
+  else
+    local gold = KnobFarm.RunGold or 0
+    earned = math.floor(gold / 20)
+    net = earned - spent
+  end
+
+  local stats = LoadStats()
+  stats.TotalEarned = (stats.TotalEarned or 0) + math.max(0, earned)
+  stats.TotalSpent = (stats.TotalSpent or 0) + spent
+  stats.NetProfit = (stats.NetProfit or 0) + net
+  stats.RunsCompleted = (stats.RunsCompleted or 0) + 1
+
+  SaveStats(stats)
+  UpdateStatsGUI(stats, net)
+end
+
+task.spawn(function()
+  task.wait(1.0)
+  UpdateStatsGUI()
+end)
 
 if not val85.HotelNodesFolder then
   val85.HotelNodesFolder = Instance.new("Folder")
@@ -11517,6 +11738,25 @@ local function ClearPathNodes()
       end
     end
   end
+end
+
+local function ResetFarmState()
+  ClearPathNodes()
+  KnobFarm.PassedFirstDoor = false
+  KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
+  KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
+  KnobFarm.StartKnobs = nil
+  KnobFarm.StartKnobsBeforeShop = false
+  KnobFarm.LockpickBoughtThisRun = false
+  KnobFarm.StatsRecordedThisRun = false
+  KnobFarm.RunGold = 0
+  pcall(function()
+    if toggles.Phase and toggles.Phase.Value then
+      toggles.Phase:SetValue(false)
+    end
+    Phase.TargetPosition = nil
+    Phase.Speed = nil
+  end)
 end
 
 local function RenderPathNodes(waypoints)
@@ -11645,22 +11885,6 @@ local function GetFloorPosition(pos)
   end
   return pos
 end
-local function safeFirePrompt(prompt)
-  if not prompt or not prompt:IsA("ProximityPrompt") then return end
-  pcall(function()
-    prompt.HoldDuration = 0
-    prompt.RequiresLineOfSight = false
-    prompt.MaxActivationDistance = 30
-    prompt.Enabled = true
-  end)
-  if Executor and Executor.fireproximityprompt then
-    pcall(Executor.fireproximityprompt, prompt, 0, true)
-    pcall(Executor.fireproximityprompt, prompt)
-  elseif fireproximityprompt then
-    pcall(fireproximityprompt, prompt, 0, true)
-    pcall(fireproximityprompt, prompt)
-  end
-end
 
 local function TriggerPrompt(prompt)
   if not prompt or not prompt.Parent then return end
@@ -11671,10 +11895,10 @@ local function TriggerPrompt(prompt)
     prompt.HoldDuration = 0
   end)
   if Executor and Executor.fireproximityprompt then
-    pcall(Executor.fireproximityprompt, prompt, 0)
+    pcall(Executor.fireproximityprompt, prompt, 0, true)
     pcall(Executor.fireproximityprompt, prompt)
   elseif fireproximityprompt then
-    pcall(fireproximityprompt, prompt, 0)
+    pcall(fireproximityprompt, prompt, 0, true)
     pcall(fireproximityprompt, prompt)
   end
   pcall(function()
@@ -11689,41 +11913,34 @@ local function TriggerPrompt(prompt)
   end)
 end
 
-local function PlayerHasKey()
+local function EquipUnlockTool()
   local char = localPlayer2 and localPlayer2.Character
-  local bp = localPlayer2 and localPlayer2:FindFirstChild("Backpack")
-  local keyNames = { "Key", "KeyObtain", "KeyElectrical", "ElectricalKey", "KeyBackdoor", "KeyIron", "IronKey", "SkeletonKey" }
+  local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not hum then return end
+
+  if char and char:FindFirstChild("Lockpick") then
+    return
+  end
+
+  local lockpick = bp and bp:FindFirstChild("Lockpick")
+  if lockpick then
+    pcall(function() hum:EquipTool(lockpick) end)
+    return
+  end
 
   if char then
-    for _, name in ipairs(keyNames) do
-      local item = char:FindFirstChild(name)
-      if item and item:IsA("Tool") then return true, item end
-    end
     for _, item in ipairs(char:GetChildren()) do
-      if item:IsA("Tool") and item.Name:lower():find("key") then return true, item end
+      if item:IsA("Tool") and item.Name:lower():find("key", 1, true) then return end
     end
   end
-
   if bp then
-    for _, name in ipairs(keyNames) do
-      local item = bp:FindFirstChild(name)
-      if item and item:IsA("Tool") then return true, item end
-    end
     for _, item in ipairs(bp:GetChildren()) do
-      if item:IsA("Tool") and item.Name:lower():find("key") then return true, item end
+      if item:IsA("Tool") and item.Name:lower():find("key", 1, true) then
+        pcall(function() hum:EquipTool(item) end)
+        return
+      end
     end
-  end
-
-  return false, nil
-end
-
-local function EquipKey()
-  local hasKey, keyTool = PlayerHasKey()
-  if not hasKey or not keyTool then return end
-  local char = localPlayer2 and localPlayer2.Character
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if hum and keyTool.Parent ~= char then
-    pcall(function() hum:EquipTool(keyTool) end)
   end
 end
 
@@ -11766,7 +11983,6 @@ end
 local function GetDoorCenter(door)
   if not door then return nil end
 
-  -- 1. Sign (number plate e.g. "0024" mounted directly above center of door frame)
   local sign = door:FindFirstChild("Sign")
   local signPos = nil
   if sign then
@@ -11778,7 +11994,6 @@ local function GetDoorCenter(door)
     end
   end
 
-  -- 2. Actual door leaf BasePart named "Door"
   local doorLeaf = nil
   for _, ch in ipairs(door:GetChildren()) do
     if ch.Name == "Door" and ch:IsA("BasePart") then
@@ -11793,7 +12008,6 @@ local function GetDoorCenter(door)
     end
   end
 
-  -- 3. Model Bounding Box (geometric midpoint of the left & right door jambs)
   local bboxCenter = nil
   if door:IsA("Model") then
     local ok, cf = pcall(function() return door:GetBoundingBox() end)
@@ -11802,28 +12016,21 @@ local function GetDoorCenter(door)
     end
   end
 
-  -- Calculate the exact doorway center (dead center of opening, NOT the hinge corner)
-  local chosenPos = nil
   if signPos then
     local y = (doorLeaf and doorLeaf.Position.Y) or (bboxCenter and bboxCenter.Y) or (signPos.Y - 2.5)
-    chosenPos = Vector3.new(signPos.X, y, signPos.Z)
+    return Vector3.new(signPos.X, y, signPos.Z)
   elseif doorLeaf then
-    chosenPos = doorLeaf.Position
+    return doorLeaf.Position
   elseif bboxCenter then
-    chosenPos = bboxCenter
-  else
-    for _, p in ipairs(door:GetDescendants()) do
-      if p:IsA("BasePart") and p.Name ~= "Hinge" then
-        chosenPos = p.Position
-        break
-      end
-    end
-    if not chosenPos then
-      chosenPos = GetInstancePosition(door)
-    end
+    return bboxCenter
   end
 
-  return chosenPos
+  for _, p in ipairs(door:GetDescendants()) do
+    if p:IsA("BasePart") and p.Name ~= "Hinge" then
+      return p.Position
+    end
+  end
+  return GetInstancePosition(door)
 end
 
 local function GetPlayerCurrentRoom()
@@ -11834,7 +12041,7 @@ local function GetPlayerCurrentRoom()
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return nil, 0 end
 
-  -- 1. Raycast downward: check which room's floor/part the player is on
+  -- 1. Raycast downward
   local rayParams = RaycastParams.new()
   rayParams.FilterType = Enum.RaycastFilterType.Exclude
   rayParams.FilterDescendantsInstances = { char, val85.HotelNodesFolder }
@@ -11849,7 +12056,7 @@ local function GetPlayerCurrentRoom()
     end
   end
 
-  -- 2. Fallback: Find room by closest exit door or center
+  -- 2. Fallback: Find closest room
   local bestRoom = nil
   local bestDist = math.huge
   local bestNum = 0
@@ -11860,8 +12067,7 @@ local function GetPlayerCurrentRoom()
       local rPos = nil
       local door = r:FindFirstChild("Door")
       if door then
-        local dCenter = GetDoorCenter(door)
-        if dCenter then rPos = dCenter end
+        rPos = GetDoorCenter(door)
       end
       if not rPos then
         local prim = r.PrimaryPart or r:FindFirstChildWhichIsA("BasePart", true)
@@ -11881,55 +12087,6 @@ local function GetPlayerCurrentRoom()
   return bestRoom, bestNum
 end
 
-local function FindRoomKey(room)
-  if not room then return nil end
-
-  local function isRealKey(item)
-    if not item or not item.Parent or KnobFarm.LootedObjects[item] then return false end
-    local name = item.Name
-
-    -- Explicitly reject typewriter keys, keyboard, and props
-    if name == "Keys" or name == "Keyboard" then return false end
-    local pName = item.Parent and item.Parent.Name:lower() or ""
-    if pName:find("typewriter") or pName == "keys" then return false end
-
-    -- Primary: exact Doors key pickup model/part names
-    if name == "KeyObtain" or name == "ElectricalKeyObtain" or name == "KeyIron" or name == "IronKey" or name == "KeyBackdoor" then
-      return true
-    end
-
-    -- Model named "Key" ONLY if it actually has a ProximityPrompt
-    if name == "Key" and item:FindFirstChildWhichIsA("ProximityPrompt", true) then
-      return true
-    end
-
-    return false
-  end
-
-  -- 1. Search current room first
-  for _, item in ipairs(room:GetDescendants()) do
-    if isRealKey(item) then
-      return item
-    end
-  end
-
-  -- 2. Fallback: check other rooms only if key not found in current room
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if curRooms then
-    for _, item in ipairs(curRooms:GetDescendants()) do
-      if isRealKey(item) then
-        return item
-      end
-    end
-  end
-
-  return nil
-end
-
--- ═══════════════════════════════════════════════════════════════════
--- KNOB FARM: Hotel flow helpers
--- ═══════════════════════════════════════════════════════════════════
-
 local function HasRoomGate(room)
   if not room then return false, nil, nil end
   local gate = room:FindFirstChild("Gate", true) or room:FindFirstChild("ThingToOpen", true)
@@ -11940,34 +12097,21 @@ end
 
 local function HasDoorLattice(room)
   if not room then return false end
-  return (room:FindFirstChild("DoorLattice") ~= nil) or (room:FindFirstChild("DoorLattice", true) ~= nil)
-end
-
-local function IsSpecialObstacleRoom(room)
-  if not room then return false end
-  if HasDoorLattice(room) then return true end
-  local hasGate, gate = HasRoomGate(room)
-  if hasGate and gate then return true end
-  return false
+  return (room:FindFirstChild("DoorLattice", true) ~= nil)
 end
 
 local function DisableObstacleCollision(room)
   if not room then return end
+  local terms = { "plant", "pot", "bush", "flower", "fern", "leaf", "leaves", "foliage", "vase", "bonsai", "hedge", "cactus", "shrub", "vine", "tree", "planter" }
   pcall(function()
     for _, desc in ipairs(room:GetDescendants()) do
       if desc:IsA("BasePart") then
-        local name = desc.Name:lower()
-        local pName = desc.Parent and desc.Parent.Name:lower() or ""
-        local gpName = desc.Parent and desc.Parent.Parent and desc.Parent.Parent.Name:lower() or ""
-        if name:find("plant") or name:find("pot") or name:find("bush") or name:find("flower")
-            or name:find("fern") or name:find("leaf") or name:find("leaves") or name:find("foliage")
-            or name:find("vase") or name:find("bonsai") or name:find("hedge") or name:find("cactus")
-            or name:find("shrub") or name:find("vine") or name:find("tree") or name:find("planter")
-            or pName:find("plant") or pName:find("pot") or pName:find("bush") or pName:find("flower")
-            or pName:find("fern") or pName:find("foliage") or pName:find("vase") or pName:find("bonsai")
-            or pName:find("hedge") or pName:find("cactus") or pName:find("shrub") or pName:find("tree")
-            or pName:find("planter") or gpName:find("plant") or gpName:find("pot") or gpName:find("bush") then
-          desc.CanCollide = false
+        local s = (desc.Name .. " " .. (desc.Parent and desc.Parent.Name or "")):lower()
+        for _, t in ipairs(terms) do
+          if s:find(t, 1, true) then
+            desc.CanCollide = false
+            break
+          end
         end
       end
     end
@@ -11981,9 +12125,7 @@ local function IsUserMovingManually()
     Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Left, Enum.KeyCode.Right
   }
   for _, k in ipairs(keys) do
-    if userInputService:IsKeyDown(k) then
-      return true
-    end
+    if userInputService:IsKeyDown(k) then return true end
   end
   return false
 end
@@ -12002,9 +12144,7 @@ local function HasLineOfSight(fromPos, toPos, ignoreModel)
   rayParams.FilterDescendantsInstances = ignoreList
 
   local result = workspace:Raycast(fromPos + Vector3.new(0, 1.2, 0), diff, rayParams)
-  if not result then
-    return true
-  end
+  if not result then return true end
   local hitPart = result.Instance
   if hitPart and (not hitPart.CanCollide or hitPart.Transparency >= 0.9) then
     return true
@@ -12042,65 +12182,61 @@ local function PhaseTemporary(durationSeconds)
   end)
 end
 
-local function TeleportLootRoom(room)
+local function TeleportLootRoom(room, returnToOrigin)
   if not room or not KnobFarm.Active or _Unloading then return end
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return end
 
-  local savedCFrame = root.CFrame
+  local savedCFrame = returnToOrigin and root.CFrame or nil
 
   for _, desc in ipairs(room:GetDescendants()) do
     if not KnobFarm.Active or _Unloading then break end
     if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc.Parent] then
       local parent = desc.Parent
-      if not parent then continue end
-      local parentName = parent.Name
-      local objText = desc.ObjectText:lower()
-      local actionText = desc.ActionText:lower()
+      if parent then
+        local pName = parent.Name
+        local objText = desc.ObjectText:lower()
+        local isGold = pName == "GoldPile" or pName == "TinyGold" or pName == "Gold"
+          or parent:GetAttribute("GoldValue") or objText:find("gold", 1, true)
+        local isStardust = pName == "StardustPickup" or pName == "Stardust" or objText:find("stardust", 1, true)
 
-      -- Only teleport to visible gold and stardust
-      local isGold = parentName == "GoldPile" or parentName == "TinyGold" or parentName == "Gold"
-        or parent:GetAttribute("GoldValue")
-        or objText:find("gold")
-      local isStardust = parentName == "StardustPickup" or parentName == "Stardust"
-        or objText:find("stardust")
-
-      if isGold or isStardust then
-        local pos = GetInstancePosition(parent) or GetInstancePosition(desc)
-        if pos then
-          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-          TriggerPrompt(desc)
-          KnobFarm.LootedObjects[parent] = true
-          task.wait(0.06)
+        if isGold or isStardust then
+          local pos = GetInstancePosition(parent) or GetInstancePosition(desc)
+          if pos then
+            root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+            TriggerPrompt(desc)
+            KnobFarm.LootedObjects[parent] = true
+            if isGold then
+              local gVal = parent:GetAttribute("GoldValue") or 10
+              KnobFarm.RunGold = (KnobFarm.RunGold or 0) + gVal
+            end
+            task.wait(0.04)
+          end
         end
       end
     end
   end
 
-  -- Return to previous position
-  if root and root.Parent then
+  if savedCFrame and root and root.Parent then
     root.CFrame = savedCFrame
-    task.wait(0.05)
+    task.wait(0.04)
   end
 end
 
 local function LootDrawersInRoom(room)
-  if not room or not KnobFarm.Active or _Unloading then return end
-  -- Find non-locked chests/drawers within the room (bot runs to them)
+  if not room or not KnobFarm.Active or _Unloading then return {} end
   local targets = {}
   for _, desc in ipairs(room:GetDescendants()) do
     if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc.Parent] then
       local parent = desc.Parent
-      if not parent then continue end
-      local pName = parent.Name
-      -- Non-locked containers only
-      if (pName == "ChestBox" or pName == "Toolbox" or pName == "Toolshed_Small"
-          or pName == "Drawer" or pName:find("Drawer"))
-          and not pName:find("Locked") and not pName:find("locked") then
-        local pos = GetInstancePosition(parent)
-        if pos then
-          table.insert(targets, { prompt = desc, pos = pos, parent = parent })
+      if parent then
+        local pName = parent.Name
+        if (pName == "ChestBox" or pName == "ChestBoxLocked" or pName == "Toolbox" or pName == "Toolbox_Locked" or pName == "Toolshed_Small" or pName:find("Drawer", 1, true) or (pName:find("Chest", 1, true) and pName:lower():find("locked", 1, true))) then
+          local pos = GetInstancePosition(parent)
+          if pos then
+            table.insert(targets, { prompt = desc, pos = pos, parent = parent })
+          end
         end
       end
     end
@@ -12108,108 +12244,70 @@ local function LootDrawersInRoom(room)
   return targets
 end
 
+local THREAT_NAMES = {
+  RushMoving = true, Rush = true,
+  AmbushMoving = true, Ambush = true,
+  BlitzMoving = true, Blitz = true,
+  ["RNIUSHCG=="] = true, AR0xMBUSH = true,
+  GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
+}
+
 local function isSeekUpcoming(currentRoom, currentRoomNum)
+  local triggers = { "TriggerEventCollision", "Seek_Arm", "SeekTrigger", "Seeking", "ChaseStartTrigger", "SeekMoving", "SeekMovingNewClone" }
   if currentRoom then
-    if currentRoom:FindFirstChild("TriggerEventCollision", true)
-      or currentRoom:FindFirstChild("Seek_Arm", true)
-      or currentRoom:FindFirstChild("SeekTrigger", true)
-      or currentRoom:FindFirstChild("Seeking", true)
-      or currentRoom:FindFirstChild("ChaseStartTrigger", true) then
-      return true
+    for _, t in ipairs(triggers) do
+      if currentRoom:FindFirstChild(t, true) then return true end
     end
   end
-
   local curRooms = workspace:FindFirstChild("CurrentRooms")
   if curRooms and currentRoomNum then
     local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
     if nextRoom then
-      if nextRoom:FindFirstChild("TriggerEventCollision", true)
-        or nextRoom:FindFirstChild("Seek_Arm", true)
-        or nextRoom:FindFirstChild("SeekTrigger", true)
-        or nextRoom:FindFirstChild("Seeking", true)
-        or nextRoom:FindFirstChild("ChaseStartTrigger", true)
-        or nextRoom:FindFirstChild("SeekMoving", true)
-        or nextRoom:FindFirstChild("SeekMovingNewClone", true) then
-        return true
+      for _, t in ipairs(triggers) do
+        if nextRoom:FindFirstChild(t, true) then return true end
       end
     end
   end
-
   return false
 end
 
 local function HasSeekEyes(room)
   if not room then return false end
-  -- Проверка глаз на стенах: workspace.CurrentRooms["XX"]:GetChildren()[...].Eye или потомок Eye
   for _, child in ipairs(room:GetChildren()) do
-    if child.Name == "Eye" or child:FindFirstChild("Eye") then
-      return true
-    end
+    if child.Name == "Eye" or child:FindFirstChild("Eye") then return true end
   end
   return room:FindFirstChild("Eye", true) ~= nil
 end
 
 local function isSeekThreatZone(currentRoom, currentRoomNum)
-  -- 1. Проверяем наличие глаз в текущей комнате
-  if HasSeekEyes(currentRoom) then
-    return true
-  end
-
-  -- 2. Проверяем наличие глаз в следующей комнате
+  if HasSeekEyes(currentRoom) then return true end
   local curRooms = workspace:FindFirstChild("CurrentRooms")
   if curRooms and currentRoomNum then
     local nextRoom = curRooms:FindFirstChild(tostring(currentRoomNum + 1))
-    if nextRoom and HasSeekEyes(nextRoom) then
-      return true
-    end
+    if nextRoom and HasSeekEyes(nextRoom) then return true end
   end
-
-  -- 3. Триггеры погони и приближения Сика
-  if isSeekUpcoming(currentRoom, currentRoomNum) then
+  if isSeekUpcoming(currentRoom, currentRoomNum) then return true end
+  if workspace:FindFirstChild("SeekMoving") or workspace:FindFirstChild("SeekMovingNewClone") or workspace:FindFirstChild("SeekRig") then
     return true
   end
-
-  -- 4. Если Сик уже активен и движется
-  if workspace:FindFirstChild("SeekMoving")
-    or workspace:FindFirstChild("SeekMovingNewClone")
-    or workspace:FindFirstChild("SeekRig") then
-    return true
-  end
-
   return false
 end
 
 local function WaitForThreats(roomNum, room)
-  -- Ждем только в зоне Сика (глаза на стенах / приближение Сика)
-  if not isSeekThreatZone(room, roomNum) then
-    return
-  end
-
-  local threatNames = {
-    RushMoving = true, Rush = true,
-    AmbushMoving = true, Ambush = true,
-    BlitzMoving = true, Blitz = true,
-    ["RNIUSHCG=="] = true, AR0xMBUSH = true,
-    GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
-  }
-
+  if not isSeekThreatZone(room, roomNum) then return end
   local function hasThreat()
     if val83 and val83.ActiveThreats then
       for threat, active in pairs(val83.ActiveThreats) do
-        if active and threat and threat.Parent and threatNames[threat.Name] then
-          return true
-        end
+        if active and threat and threat.Parent and THREAT_NAMES[threat.Name] then return true end
       end
     end
-    for name in pairs(threatNames) do
-      local obj = workspace:FindFirstChild(name)
-      if obj then return true end
+    for name in pairs(THREAT_NAMES) do
+      if workspace:FindFirstChild(name) then return true end
     end
     local curRooms = workspace:FindFirstChild("CurrentRooms")
     if curRooms then
-      for name in pairs(threatNames) do
-        local obj = curRooms:FindFirstChild(name, true)
-        if obj then return true end
+      for name in pairs(THREAT_NAMES) do
+        if curRooms:FindFirstChild(name, true) then return true end
       end
     end
     return false
@@ -12258,44 +12356,20 @@ local function IsStuck()
   return false
 end
 
-local function GetKeyApproachPosition(keyPos, rootPos)
-  if not keyPos then return rootPos end
-  local rayParams = RaycastParams.new()
-  rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  local char = localPlayer2 and localPlayer2.Character
-  if char then
-    rayParams.FilterDescendantsInstances = { char, val85.HotelNodesFolder }
-  end
-  local dir = (rootPos - keyPos)
-  local flatDir = Vector3.new(dir.X, 0, dir.Z)
-  local standPos = keyPos
-  if flatDir.Magnitude > 0.5 then
-    standPos = keyPos + flatDir.Unit * 3.0
-  end
-  local hit = workspace:Raycast(Vector3.new(standPos.X, rootPos.Y + 2, standPos.Z), Vector3.new(0, -25, 0), rayParams)
-  if hit and hit.Position then
-    return hit.Position
-  end
-  return Vector3.new(standPos.X, rootPos.Y, standPos.Z)
-end
-
 local function GetDoorApproachPosition(doorCenter, rootPos, door)
   if not doorCenter then return rootPos end
 
-  -- If door is already opened, do not push character backwards into the room
   if door and KnobFarm.OpenedDoors[door] then
     return doorCenter
   end
 
   if rootPos then
     local toPlayer = Vector3.new(rootPos.X - doorCenter.X, 0, rootPos.Z - doorCenter.Z)
-    -- If character is already within 2.5 studs of doorway, head directly to doorway center
     if toPlayer.Magnitude < 2.5 then
       return doorCenter
     end
   end
 
-  -- Determine perpendicular normal of doorway using STATIC parts (avoid swinging Door leaf!)
   local normal = nil
   if door then
     local staticPart = door:FindFirstChild("Hidden")
@@ -12309,8 +12383,7 @@ local function GetDoorApproachPosition(doorCenter, rootPos, door)
       if ok and piv then cf = piv end
     end
     if cf and typeof(cf) == "CFrame" then
-      local lv = cf.LookVector
-      local flatLv = Vector3.new(lv.X, 0, lv.Z)
+      local flatLv = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
       if flatLv.Magnitude > 0.2 then
         normal = flatLv.Unit
       end
@@ -12337,301 +12410,13 @@ local function GetRoomTarget(room)
   local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
   if not exitDoor then return nil, nil, nil end
 
-  -- Note: Lever is completely skipped! The bot walks directly through gates or uses Phase.
-
-  -- 1. Check if Door is Locked
-  local locked, unPr = IsDoorLocked(exitDoor)
-  if locked then
-    local hasKey = PlayerHasKey()
-    if not hasKey then
-      local keyItem = FindRoomKey(room)
-      if keyItem and keyItem.Parent and not KnobFarm.LootedObjects[keyItem] then
-        local keyPos = GetInstancePosition(keyItem)
-        if keyPos then
-          local char = localPlayer2 and localPlayer2.Character
-          local root = char and char:FindFirstChild("HumanoidRootPart")
-          local rootPos = root and root.Position or keyPos
-          local approachPos = GetKeyApproachPosition(keyPos, rootPos)
-          return keyItem, approachPos, "Key"
-        end
-      end
-    end
-  end
-
-  -- 2. Primary Goal: Exit Door (aimed strictly at the doorway center, not corner/hinge)
+  -- Primary Goal: Exit Door
   local doorCenter = GetDoorCenter(exitDoor)
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local rootPos = root and root.Position or doorCenter
   local approachPos = GetDoorApproachPosition(doorCenter, rootPos, exitDoor)
   return exitDoor, GetFloorPosition(approachPos), "Door"
-end
-
-local function PhaseFlyTo(targetPos, speed, stopDistance, timeout)
-  if not targetPos then return false end
-  speed = speed or (Phase.Speed or 2.25)
-  stopDistance = stopDistance or 2.5
-  timeout = timeout or 8.0
-
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  if not char or not root then return false end
-
-  Phase.Speed = speed
-  Phase.TargetPosition = targetPos
-
-  if toggles.Phase and not toggles.Phase.Value then
-    toggles.Phase:SetValue(true)
-  end
-
-  local startTime = tick()
-  local arrived = false
-
-  while KnobFarm.Active and not _Unloading do
-    local c = localPlayer2 and localPlayer2.Character
-    local r = c and c:FindFirstChild("HumanoidRootPart")
-    local h = c and c:FindFirstChildOfClass("Humanoid")
-    if not r or not h or h.Health <= 0 then break end
-
-    local dist = (targetPos - r.Position).Magnitude
-    if dist <= stopDistance then
-      arrived = true
-      break
-    end
-
-    if tick() - startTime > timeout then
-      break
-    end
-
-    task.wait(0.03)
-  end
-
-  Phase.TargetPosition = nil
-  Phase.Speed = nil
-  if Phase.Body then
-    Phase.Body.Velocity = Vector3.zero
-  end
-  return arrived
-end
-
-local function IsPhotoRoom(room)
-  if not room then return false end
-  return (room:FindFirstChild("DoorLattice") ~= nil) or (room:FindFirstChild("DoorLattice", true) ~= nil)
-end
-
-local function ExecutePhaseRush(room, roomNum, reason)
-  if not room then return false end
-  local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
-  if not exitDoor then return false end
-
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not char or not root or not hum or hum.Health <= 0 then return false end
-
-  KnobFarm.SetStatus("Phase Rush: " .. tostring(reason) .. " (Room " .. tostring(roomNum) .. ")")
-
-  -- Disable collision on door & gate/lattice and room obstacles IMMEDIATELY
-  pcall(function()
-    for _, dp in ipairs(exitDoor:GetDescendants()) do
-      if dp:IsA("BasePart") then dp.CanCollide = false end
-    end
-    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
-    if lattice then
-      for _, lp in ipairs(lattice:GetDescendants()) do
-        if lp:IsA("BasePart") then lp.CanCollide = false end
-      end
-    end
-  end)
-  DisableObstacleCollision(room)
-
-  -- 1. If door is locked or this is Room 0, ensure we have the key
-  local locked, unPr = IsDoorLocked(exitDoor)
-  if (locked or roomNum == 0) and not PlayerHasKey() then
-    KnobFarm.SetStatus("Phase -> Searching Key (Room " .. tostring(roomNum) .. ")")
-    local keyItem = FindRoomKey(room)
-    local findStart = tick()
-    while not keyItem and tick() - findStart < 3.0 and KnobFarm.Active and not _Unloading do
-      task.wait(0.2)
-      keyItem = FindRoomKey(room)
-    end
-
-    if keyItem and keyItem.Parent then
-      local keyPos = GetInstancePosition(keyItem)
-      if keyPos then
-        KnobFarm.SetStatus("Phase -> Flying to Key...")
-        PhaseFlyTo(keyPos + Vector3.new(0, 1.2, 0), nil, 2.5, 6.0)
-
-        -- Trigger prompts on parent/desk/container
-        local desk = keyItem:FindFirstAncestorWhichIsA("Model")
-        if desk and desk ~= room then
-          for _, pr in ipairs(desk:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") and pr.Enabled then
-              TriggerPrompt(pr)
-            end
-          end
-        end
-
-        -- Repeatedly trigger all prompts on keyItem until key is in inventory
-        local grabStart = tick()
-        while tick() - grabStart < 3.0 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
-          for _, pr in ipairs(keyItem:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") then
-              TriggerPrompt(pr)
-            end
-          end
-          local directPr = keyItem:FindFirstChildWhichIsA("ProximityPrompt", true)
-          if directPr then
-            TriggerPrompt(directPr)
-          end
-          task.wait(0.12)
-        end
-
-        if PlayerHasKey() then
-          KnobFarm.LootedObjects[keyItem] = true
-          KnobFarm.SetStatus("Key Acquired!")
-        else
-          KnobFarm.SetStatus("Key pickup failed, will retry...")
-        end
-      end
-    end
-  end
-
-  -- 2. Phase fly directly to Exit Door approach (using original script Phase speed)
-  local doorCenter = GetDoorCenter(exitDoor)
-  local rootPos = root.Position
-  local doorApproach = GetDoorApproachPosition(doorCenter, rootPos, exitDoor)
-
-  KnobFarm.SetStatus("Phase -> Door " .. tostring(roomNum + 1))
-  PhaseFlyTo(doorApproach, nil, 2.5, 6.0)
-
-  -- 3. Unlock door if locked
-  if IsDoorLocked(exitDoor) then
-    KnobFarm.SetStatus("Unlocking Door " .. tostring(roomNum + 1) .. "...")
-    EquipKey()
-    task.wait(0.1)
-
-    local unlockStart = tick()
-    while IsDoorLocked(exitDoor) and tick() - unlockStart < 3.5 and KnobFarm.Active and not _Unloading do
-      EquipKey()
-      local _, curUnPr = IsDoorLocked(exitDoor)
-      if curUnPr then
-        TriggerPrompt(curUnPr)
-      else
-        local lock = exitDoor:FindFirstChild("Lock")
-        if lock then
-          for _, pr in ipairs(lock:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") then
-              TriggerPrompt(pr)
-            end
-          end
-        end
-      end
-      task.wait(0.2)
-    end
-  end
-
-  -- 4. Open door
-  KnobFarm.SetStatus("Opening Door " .. tostring(roomNum + 1) .. "...")
-  if exitDoor:FindFirstChild("ClientOpen") then
-    pcall(function() exitDoor.ClientOpen:FireServer() end)
-  end
-  local dPr = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
-  if dPr and dPr.Enabled then
-    TriggerPrompt(dPr)
-  end
-  KnobFarm.OpenedDoors[exitDoor] = true
-
-  -- 5. Disable collision on door & gate/lattice again before flying through
-  pcall(function()
-    for _, dp in ipairs(exitDoor:GetDescendants()) do
-      if dp:IsA("BasePart") then dp.CanCollide = false end
-    end
-    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
-    if lattice then
-      for _, lp in ipairs(lattice:GetDescendants()) do
-        if lp:IsA("BasePart") then lp.CanCollide = false end
-      end
-    end
-  end)
-
-  -- 6. Fly forward into next room with Phase ON at original Phase speed (2.25)
-  local passDir = nil
-  local toDoor = Vector3.new(doorCenter.X - root.Position.X, 0, doorCenter.Z - root.Position.Z)
-  if toDoor.Magnitude > 1.0 then
-    passDir = toDoor.Unit
-  else
-    local staticPart = exitDoor:FindFirstChild("Hidden")
-      or exitDoor:FindFirstChild("DoorFrame")
-      or exitDoor:FindFirstChild("Frame")
-      or exitDoor:FindFirstChild("Sign")
-      or exitDoor.PrimaryPart
-    local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
-    if cf then
-      local flatLv = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-      if flatLv.Magnitude > 0.2 then
-        local normal = flatLv.Unit
-        local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
-        local side = toPlayer:Dot(normal) >= 0 and 1 or -1
-        passDir = normal * (-side)
-      end
-    end
-  end
-  if not passDir then
-    local fwd = root.CFrame.LookVector
-    passDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
-  end
-
-  KnobFarm.SetStatus("Flying into Room " .. tostring(roomNum + 1) .. "...")
-  local floorPos = GetFloorPosition(doorCenter + passDir * 10.0)
-  local flyTarget = floorPos and (floorPos + Vector3.new(0, 2.0, 0)) or (doorCenter + passDir * 10.0)
-  PhaseFlyTo(flyTarget, nil, 2.0, 6.0)
-  task.wait(0.2)
-
-  -- 7. Verify we entered next room
-  local curRoom, curNum = GetPlayerCurrentRoom()
-  local passedSuccessfully = false
-  if curNum and curNum > roomNum then
-    passedSuccessfully = true
-  else
-    local distPast = (root.Position - doorCenter):Dot(passDir)
-    if distPast > 4.0 then
-      passedSuccessfully = true
-    end
-  end
-
-  -- 8. Turn off Phase AFTER passing through
-  if toggles.Phase and toggles.Phase.Value then
-    toggles.Phase:SetValue(false)
-  end
-  Phase.TargetPosition = nil
-  Phase.Speed = nil
-
-  if passedSuccessfully then
-    if reason == "Door 1" or roomNum == 0 then
-      KnobFarm.PassedFirstDoor = true
-      SetCrouched(true)
-      pcall(function()
-        if options and options.Walkspeed then
-          local desiredSpeed = (options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
-          options.Walkspeed:SetValue(desiredSpeed)
-        end
-        if toggles and toggles.Godmode and not toggles.Godmode.Value then
-          toggles.Godmode:SetValue(true)
-        end
-        if options and options.GodmodeMethod then
-          options.GodmodeMethod:SetValue("On entity spawn")
-        end
-      end)
-    else
-      KnobFarm.PassedPhaseRooms[room] = true
-    end
-    KnobFarm.SetStatus(tostring(reason) .. " passed! Phase OFF.")
-  else
-    KnobFarm.SetStatus(tostring(reason) .. " not completed, retrying...")
-  end
-  task.wait(0.2)
-  return passedSuccessfully
 end
 
 local function FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
@@ -12675,7 +12460,6 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       local dz = curPos.Z - rootPos.Z
       local flatDist = math.sqrt(dx * dx + dz * dz)
 
-      -- Only consume node when close enough (2.4 studs), preventing skipping doorway waypoints from inside subrooms
       if flatDist < 2.4 then
         if currentNodes[wpIndex] and currentNodes[wpIndex].Parent then
           pcall(function() currentNodes[wpIndex]:Destroy() end)
@@ -12684,7 +12468,6 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
         wpIndex = wpIndex + 1
       else
         local nextWp = waypoints[wpIndex + 1]
-        -- Only allow skipping to next waypoint if within 4.5 studs AND we have direct Line Of Sight without hitting a wall!
         if nextWp and flatDist < 4.5 then
           local nextPos = nextWp.Position
           local segX = nextPos.X - curPos.X
@@ -12706,8 +12489,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       end
     end
 
-    -- Steering target: aim at current waypoint (e.g. subroom doorway exit).
-    -- ONLY look ahead to next waypoint if there is direct Line Of Sight (no wall between player and next waypoint)!
+    -- Steering target
     local curWp = waypoints[wpIndex]
     local targetPoint = (curWp and curWp.Position) or targetPos
 
@@ -12745,7 +12527,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       end
     end)
 
-    -- Keep bot firmly pressed to floor: prevent bouncing/jumping up on bumps or stairs
+    -- Keep bot firmly pressed to floor
     pcall(function()
       hum.Jump = false
       if not (toggles.Phase and toggles.Phase.Value) then
@@ -12765,12 +12547,12 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       end
     end)
 
-    -- Target proximity check: doors use 2.5 to reach doorway center; keys use 3.5
+    -- Target proximity check
     local tDx = targetPos.X - rootPos.X
     local tDz = targetPos.Z - rootPos.Z
     local targetDist = math.sqrt(tDx * tDx + tDz * tDz)
 
-    local stopThreshold = (targetType == "Door" and 2.5) or (targetType == "Key" and 3.5) or 4.5
+    local stopThreshold = (targetType == "Door" and 2.5) or 4.5
     if targetDist < stopThreshold then
       completed = true
     elseif wpIndex >= #waypoints and steerDist < 2.0 then
@@ -12822,7 +12604,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
           local distToTarget = (targetPoint - root.Position).Magnitude
           local distFromStuck = (root.Position - stuckStartPos).Magnitude
           if distFromStuck > 3.5 or distToTarget < 2.5 then
-            break -- Obstacle passed!
+            break
           end
           local dir = (targetPoint - root.Position)
           local flatDir = Vector3.new(dir.X, 0, dir.Z)
@@ -12849,9 +12631,9 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
         end)
 
         if targetType == "Drawer" and tick() - lastProgressTime > 3.0 then
-          break -- drawer stuck, don't waste time
+          break
         elseif tick() - lastProgressTime > 4.5 then
-          break -- recompute path
+          break
         end
         lastRootPos = root.Position
         lastProgressTime = tick()
@@ -12866,97 +12648,46 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     -- Early interaction when close to target
     local dist = (targetPos - root.Position).Magnitude
     if dist < 9.0 then
-      if targetType == "Key" then
-        -- Open any closed drawers on desk so key is exposed
-        local desk = target:FindFirstAncestorWhichIsA("Model")
-        if desk then
-          for _, pr in ipairs(desk:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") and pr.Enabled and pr.Name ~= "ModulePrompt" then
-              TriggerPrompt(pr)
-            end
-          end
-        end
-        local kPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if kPr and kPr.Enabled then safeFirePrompt(kPr) end
-        if PlayerHasKey() then
-          completed = true
-          break
-        end
-      elseif targetType == "Lever" then
-        local pr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr and pr.Enabled then TriggerPrompt(pr) end
-        local gate = room:FindFirstChild("Gate")
-        if gate then KnobFarm.PassedGates[gate] = true end
-        completed = true
-        break
-      elseif targetType == "Door" then
+      if targetType == "Door" then
         local locked, unPr = IsDoorLocked(target)
         if locked then
-          local hasKey = PlayerHasKey()
-          if hasKey then
-            EquipKey()
-            if unPr and unPr.Enabled then TriggerPrompt(unPr) end
+          EquipUnlockTool()
+          if unPr and unPr.Enabled then TriggerPrompt(unPr) end
+        else
+          if target:FindFirstChild("ClientOpen") then
+            pcall(function() target.ClientOpen:FireServer() end)
           end
+          local dPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if dPr and dPr.Enabled then TriggerPrompt(dPr) end
         end
-        if target:FindFirstChild("ClientOpen") then
-          pcall(function() target.ClientOpen:FireServer() end)
-        end
-        local dPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if dPr and dPr.Enabled then TriggerPrompt(dPr) end
       end
     end
   end
 
   if moveConn then
     moveConn:Disconnect()
-    moveConn = nil
   end
+
+  local char = localPlayer2 and localPlayer2.Character
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  local root = char and char:FindFirstChild("HumanoidRootPart")
   if hum then hum:Move(Vector3.zero, false) end
 
-  -- Target Finalization
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  -- Clean up nodes
+  ClearPathNodes()
 
-  if targetType == "Key" then
-    local pickStart = tick()
-    while tick() - pickStart < 2.5 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
-      for _, pr in ipairs(target:GetDescendants()) do
-        if pr:IsA("ProximityPrompt") then TriggerPrompt(pr) end
-      end
-      local kPr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if kPr then TriggerPrompt(kPr) end
-      task.wait(0.12)
-    end
-    if PlayerHasKey() then
-      KnobFarm.LootedObjects[target] = true
-    end
-    task.wait(0.08)
-  elseif targetType == "Lever" then
-    local pr = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if pr and pr.Enabled then TriggerPrompt(pr) end
-    local gate = room:FindFirstChild("Gate")
-    if gate then KnobFarm.PassedGates[gate] = true end
-    task.wait(0.15)
-  elseif targetType == "Door" then
-    -- 1. Unlock lock if present
+  -- Post-path actions
+  if targetType == "Door" then
     local locked, unPr = IsDoorLocked(target)
     if locked then
-      local hasKey, keyTool = PlayerHasKey()
-      if hasKey and keyTool then
-        EquipKey()
-        task.wait(0.1)
-        local unlockStart = tick()
-        while IsDoorLocked(target) and tick() - unlockStart < 3.0 and KnobFarm.Active and not _Unloading do
-          EquipKey()
-          local _, curUnPr = IsDoorLocked(target)
-          if curUnPr then TriggerPrompt(curUnPr) end
-          task.wait(0.2)
-        end
+      EquipUnlockTool()
+      task.wait(0.08)
+      if unPr and unPr.Enabled then
+        TriggerPrompt(unPr)
+        task.wait(0.2)
       end
     end
 
-    -- 2. Open door
     if target:FindFirstChild("ClientOpen") then
       pcall(function() target.ClientOpen:FireServer() end)
     end
@@ -12966,54 +12697,24 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     end
     KnobFarm.OpenedDoors[target] = true
 
-    -- 3. Disable can-collide on door parts so character passes right through
-    pcall(function()
-      for _, dp in ipairs(target:GetDescendants()) do
-        if dp:IsA("BasePart") then
-          dp.CanCollide = false
-        end
-      end
-    end)
-
-    -- 4. Walk forward through the doorway into the next room
-    if root and hum then
+    -- Step cleanly through doorway
+    if root and hum and not IsUserMovingManually() then
       local passDir = nil
-      -- Priority 1: Path waypoint approach direction (the direction the player was running towards the door)
-      if #waypoints >= 2 then
-        local p1 = waypoints[#waypoints].Position
-        local p0 = waypoints[#waypoints - 1].Position
-        local seg = Vector3.new(p1.X - p0.X, 0, p1.Z - p0.Z)
-        if seg.Magnitude > 0.2 then
-          passDir = seg.Unit
+      local staticPart = target:FindFirstChild("Hidden")
+        or target:FindFirstChild("DoorFrame")
+        or target:FindFirstChild("Frame")
+        or target:FindFirstChild("Sign")
+        or target.PrimaryPart
+      local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
+      if cf then
+        local flatLv = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+        if flatLv.Magnitude > 0.2 then
+          local normal = flatLv.Unit
+          local toPlayer = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
+          local side = toPlayer:Dot(normal) >= 0 and 1 or -1
+          passDir = normal * (-side)
         end
       end
-      -- Priority 2: Direction from player's position to door target position
-      if not passDir then
-        local toDoor = Vector3.new(targetPos.X - root.Position.X, 0, targetPos.Z - root.Position.Z)
-        if toDoor.Magnitude > 0.3 then
-          passDir = toDoor.Unit
-        end
-      end
-      -- Priority 3: Static doorway normal (from static frame/hidden, NOT swinging Door leaf)
-      if not passDir then
-        local staticPart = target:FindFirstChild("Hidden")
-          or target:FindFirstChild("DoorFrame")
-          or target:FindFirstChild("Frame")
-          or target:FindFirstChild("Sign")
-          or target.PrimaryPart
-        local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
-        if cf then
-          local lv = cf.LookVector
-          local flatLv = Vector3.new(lv.X, 0, lv.Z)
-          if flatLv.Magnitude > 0.2 then
-            local normal = flatLv.Unit
-            local toPlayer = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
-            local side = toPlayer:Dot(normal) >= 0 and 1 or -1
-            passDir = normal * (-side)
-          end
-        end
-      end
-      -- Fallback: current character facing direction
       if not passDir then
         local fwd = root.CFrame.LookVector
         passDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
@@ -13043,6 +12744,50 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
   return completed and not IsUserMovingManually()
 end
 
+local function NavigateTo(targetPos, targetInstance, label, maxWaitTime, targetType)
+  if not targetPos or not KnobFarm.Active or _Unloading then return false end
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not root or not hum or hum.Health <= 0 then return false end
+
+  local floorPos = GetFloorPosition(targetPos) or targetPos
+  KnobFarm.SetStatus("Running to " .. (label or "target") .. "...")
+
+  local path = pathfindingService:CreatePath({
+    AgentCanJump = false,
+    AgentCanClimb = false,
+    WaypointSpacing = 4,
+    AgentRadius = 1.0,
+    AgentHeight = 1.8,
+    Costs = { StuckPart = 8 },
+  })
+
+  local ok = pcall(function()
+    path:ComputeAsync(root.Position, floorPos)
+  end)
+
+  if ok and path.Status == Enum.PathStatus.Success then
+    FollowPath(path:GetWaypoints(), targetInstance, floorPos, targetType or label or "Target", nil, KnobFarm.CurrentRoomNum)
+  else
+    hum:MoveTo(floorPos)
+    local t = tick()
+    local timeout = maxWaitTime or 4.0
+    while (root.Position - floorPos).Magnitude > 6 and tick() - t < timeout and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+      pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+          local camPos = cam.CFrame.Position
+          local lookTarget = Vector3.new(floorPos.X, camPos.Y, floorPos.Z)
+          cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+        end
+      end)
+      task.wait(0.1)
+    end
+  end
+  return true
+end
+
 -- ═══════════════════════════════════════════════════════════════════
 -- BOSS ROOM SOLVERS (Room 50 and Room 100)
 -- ═══════════════════════════════════════════════════════════════════
@@ -13061,45 +12806,6 @@ local function handleRoom50(room, door)
   end)
   SetCrouched(true)
 
-  local function runToPos(targetPos, targetInstance, label)
-    if not targetPos or not KnobFarm.Active or _Unloading then return false end
-    local floorPos = GetFloorPosition(targetPos) or targetPos
-    KnobFarm.SetStatus("Room 50: Running to " .. (label or "target") .. "...")
-
-    local path = pathfindingService:CreatePath({
-      AgentCanJump = false,
-      AgentCanClimb = false,
-      WaypointSpacing = 4,
-      AgentRadius = 1.0,
-      AgentHeight = 1.8,
-      Costs = { StuckPart = 8 },
-    })
-
-    local ok = pcall(function()
-      path:ComputeAsync(root.Position, floorPos)
-    end)
-
-    if ok and path.Status == Enum.PathStatus.Success then
-      FollowPath(path:GetWaypoints(), targetInstance, floorPos, label or "Room50", room, 50)
-    else
-      hum:MoveTo(floorPos)
-      local t = tick()
-      while (root.Position - floorPos).Magnitude > 6 and tick() - t < 5 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
-        pcall(function()
-          local cam = workspace.CurrentCamera
-          if cam then
-            local camPos = cam.CFrame.Position
-            local lookTarget = Vector3.new(floorPos.X, camPos.Y, floorPos.Z)
-            cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
-          end
-        end)
-        task.wait(0.1)
-      end
-    end
-
-    return true
-  end
-
   -- 1. Run to all LiveHintBooks
   for _, desc in ipairs(room:GetDescendants()) do
     if not KnobFarm.Active or _Unloading then break end
@@ -13107,9 +12813,9 @@ local function handleRoom50(room, door)
       local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
       local pos = (desc:IsA("BasePart") and desc.Position) or (desc:IsA("Model") and desc:GetPivot().Position)
       if pos and pr and pr.Enabled then
-        runToPos(pos, desc, "Book")
+        NavigateTo(pos, desc, "Book", 5.0, "Book")
         if (root.Position - pos).Magnitude <= 8 then
-          safeFirePrompt(pr)
+          TriggerPrompt(pr)
           KnobFarm.LootedObjects[desc] = true
           task.wait(0.1)
         end
@@ -13121,7 +12827,7 @@ local function handleRoom50(room, door)
   local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("PickupItem", true)
   if not paper then
     for _, pr in ipairs(room:GetDescendants()) do
-      if pr:IsA("ProximityPrompt") and pr.ObjectText:lower():find("paper") then
+      if pr:IsA("ProximityPrompt") and pr.ObjectText:lower():find("paper", 1, true) then
         paper = pr.Parent
         break
       end
@@ -13131,9 +12837,9 @@ local function handleRoom50(room, door)
     local pPos = (paper:IsA("BasePart") and paper.Position) or (paper:IsA("Model") and paper:GetPivot().Position)
     local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
     if pPos and pr and pr.Enabled then
-      runToPos(pPos, paper, "Hint Paper")
+      NavigateTo(pPos, paper, "Hint Paper", 5.0, "Hint Paper")
       if (root.Position - pPos).Magnitude <= 8 then
-        safeFirePrompt(pr)
+        TriggerPrompt(pr)
         KnobFarm.LootedObjects[paper] = true
         task.wait(0.1)
       end
@@ -13148,7 +12854,7 @@ local function handleRoom50(room, door)
     or (door and door.PrimaryPart)
 
   if padPart then
-    runToPos(padPart.Position, padPart, "Door 50")
+    NavigateTo(padPart.Position, padPart, "Door 50", 5.0, "Door")
     task.wait(0.2)
   end
 
@@ -13202,7 +12908,6 @@ local function handleRoom50(room, door)
 
   task.wait(0.5)
   KnobFarm.DisableGodmodeForBoss = false
-  -- Re-enable godmode on entity spawn
   pcall(function()
     if toggles and toggles.Godmode and not toggles.Godmode.Value then
       toggles.Godmode:SetValue(true)
@@ -13217,20 +12922,13 @@ local function handleRoom100(room)
   if not root then return end
 
   -- 0. Check threats before disabling Godmode
-  local threatNames = {
-    RushMoving = true, Rush = true,
-    AmbushMoving = true, Ambush = true,
-    BlitzMoving = true, Blitz = true,
-    ["RNIUSHCG=="] = true, AR0xMBUSH = true,
-    GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
-  }
   local function hasThreat()
     if val83 and val83.ActiveThreats then
       for threat, active in pairs(val83.ActiveThreats) do
-        if active and threat and threat.Parent and threatNames[threat.Name] then return true end
+        if active and threat and threat.Parent and THREAT_NAMES[threat.Name] then return true end
       end
     end
-    for name in pairs(threatNames) do
+    for name in pairs(THREAT_NAMES) do
       if workspace:FindFirstChild(name) then return true end
     end
     return false
@@ -13251,7 +12949,7 @@ local function handleRoom100(room)
     end
   end)
 
-  -- 1. Teleport to all Breaker Switches & Fuses (collect all)
+  -- 1. Teleport to all Breaker Switches & Fuses
   KnobFarm.SetStatus("Room 100: Teleporting to Breaker Switches & Fuses...")
   for _, desc in ipairs(room:GetDescendants()) do
     if not KnobFarm.Active or _Unloading then break end
@@ -13260,7 +12958,7 @@ local function handleRoom100(room)
     if not isFuse and desc:IsA("ProximityPrompt") then
       local ot = desc.ObjectText:lower()
       local at = desc.ActionText:lower()
-      if ot:find("fuse") or at:find("fuse") or ot:find("breaker") or ot:find("switch") then
+      if ot:find("fuse", 1, true) or at:find("fuse", 1, true) or ot:find("breaker", 1, true) or at:find("switch", 1, true) then
         isFuse = true
       end
     end
@@ -13342,7 +13040,6 @@ local function handleRoom100(room)
       end
       task.wait(0.5)
 
-      -- Solve breaker minigame
       if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
         pcall(function() remotesFolder2.EBF:FireServer() end)
       end
@@ -13364,8 +13061,11 @@ local function handleRoom100(room)
   end
 
   -- 6. Game complete: wait 10 seconds and Play Again
-  KnobFarm.SetStatus("Game Completed! Waiting 10s for Play Again...")
-  task.wait(10.0)
+  KnobFarm.SetStatus("Game Completed! Waiting for results...")
+  task.wait(6.0)
+  RecordRunStats()
+  KnobFarm.SetStatus("Game Completed! Waiting for Play Again...")
+  task.wait(4.0)
   pcall(function()
     if remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain") then
       remotesFolder2.PlayAgain:FireServer()
@@ -13373,234 +13073,9 @@ local function handleRoom100(room)
   end)
 end
 
-
-
-
-
-local function FastLootRoom(room)
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  if not root then return end
-
-  for _, desc in ipairs(room:GetDescendants()) do
-    if not KnobFarm.Active or _Unloading then break end
-    if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc.Parent] then
-      local parent = desc.Parent
-      if parent then
-        local pName = parent.Name
-        local objText = desc.ObjectText:lower()
-        if pName == "GoldPile" or pName == "TinyGold" or pName == "Gold"
-          or parent:GetAttribute("GoldValue")
-          or objText:find("gold")
-          or pName == "StardustPickup" or pName == "Stardust" or objText:find("stardust") then
-          local pos = GetInstancePosition(parent)
-          if pos then
-            root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-            safeFirePrompt(desc)
-            KnobFarm.LootedObjects[parent] = true
-            task.wait(0.04)
-          end
-        end
-      end
-    end
-  end
-end
-
-local function FastHandleGate(room)
-  local gate = room:FindFirstChild("Gate", true) or room:FindFirstChild("ThingToOpen", true)
-  local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
-  if gate and lever then
-    local char = localPlayer2 and localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if root then
-      local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
-      if leverPart then
-        root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
-        local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr then
-          safeFirePrompt(pr)
-        end
-        task.wait(0.12)
-      end
-    end
-  end
-end
-
-local function FastHandleKeyAndUnlock(room, door, roomNum)
-  pcall(function()
-    local char = localPlayer2 and localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not root or not hum or hum.Health <= 0 then return end
-
-    local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
-    if not lock then return end
-
-    local isTeleportRoom = (roomNum == 0 or roomNum == 1 or not KnobFarm.PassedFirstDoor)
-
-    local function runToPos(targetPos, targetInstance, label)
-      if not targetPos or not KnobFarm.Active or _Unloading then return false end
-      local floorPos = GetFloorPosition(targetPos) or targetPos
-      KnobFarm.SetStatus("Running to " .. (label or "target") .. "...")
-
-      local path = pathfindingService:CreatePath({
-        AgentCanJump = false,
-        AgentCanClimb = false,
-        WaypointSpacing = 4,
-        AgentRadius = 1.0,
-        AgentHeight = 1.8,
-        Costs = { StuckPart = 8 },
-      })
-
-      local ok = pcall(function()
-        path:ComputeAsync(root.Position, floorPos)
-      end)
-
-      if ok and path.Status == Enum.PathStatus.Success then
-        FollowPath(path:GetWaypoints(), targetInstance, floorPos, label or "Key", room, roomNum)
-      else
-        hum:MoveTo(floorPos)
-        local t = tick()
-        while (root.Position - floorPos).Magnitude > 6 and tick() - t < 4 and hum.Health > 0 and KnobFarm.Active and not _Unloading do
-          pcall(function()
-            local cam = workspace.CurrentCamera
-            if cam then
-              local camPos = cam.CFrame.Position
-              local lookTarget = Vector3.new(floorPos.X, camPos.Y, floorPos.Z)
-              cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
-            end
-          end)
-          task.wait(0.1)
-        end
-      end
-
-      return true
-    end
-
-    local function getKeyTool()
-      if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-      if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
-      for _, item in ipairs(char:GetChildren()) do
-        if item:IsA("Tool") and item.Name:lower():find("key") then return item end
-      end
-      if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-          if item:IsA("Tool") and item.Name:lower():find("key") then return item end
-        end
-      end
-      return nil
-    end
-
-    local keyTool = getKeyTool()
-    if not keyTool then
-      local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
-      if not keyObj then
-        for _, pr in ipairs(room:GetDescendants()) do
-          if pr:IsA("ProximityPrompt") and (pr.ObjectText:lower():find("key") or pr.Name:lower():find("key")) then
-            keyObj = pr.Parent
-            break
-          end
-        end
-      end
-
-      if keyObj then
-        local keyPos = (keyObj:IsA("BasePart") and keyObj.Position) or (keyObj:IsA("Model") and keyObj:GetPivot().Position)
-        if keyPos then
-          if isTeleportRoom then
-            -- В комнатах 0-1 ключ берется именно телепортом
-            root.CFrame = CFrame.new(keyPos + Vector3.new(0, 1.2, 0))
-            task.wait(0.06)
-          else
-            -- В остальных комнатах бежим к ключу
-            runToPos(keyPos, keyObj, "Key")
-          end
-
-          local desk = keyObj:FindFirstAncestorWhichIsA("Model")
-          if desk and desk ~= room then
-            for _, pr in ipairs(desk:GetDescendants()) do
-              if pr:IsA("ProximityPrompt") and pr.Enabled and pr.Name ~= "ModulePrompt" then
-                safeFirePrompt(pr)
-              end
-            end
-          end
-
-          local keyPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
-          if keyPrompt then
-            safeFirePrompt(keyPrompt)
-          end
-          task.wait(0.1)
-        end
-      end
-      keyTool = getKeyTool()
-    end
-
-    if keyTool and hum and keyTool.Parent ~= char then
-      pcall(function() hum:EquipTool(keyTool) end)
-      task.wait(0.1)
-    end
-
-    local lockPrompt = door:FindFirstChild("UnlockPrompt", true)
-      or (lock:IsA("ProximityPrompt") and lock)
-      or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
-
-    local lockPart = (lock:IsA("BasePart") and lock)
-      or lock:FindFirstChildWhichIsA("BasePart", true)
-      or (door:FindFirstChild("Hidden") and door.Hidden:IsA("BasePart") and door.Hidden)
-      or door.PrimaryPart
-      or door:FindFirstChildWhichIsA("BasePart", true)
-
-    if lockPart then
-      local lockCF = (lockPart:IsA("BasePart") and lockPart.CFrame) or (lockPart:IsA("Model") and lockPart:GetPivot())
-      if lockCF then
-        if isTeleportRoom then
-          -- В комнатах 0-1 телепортируемся к замку
-          root.CFrame = lockCF * CFrame.new(0, 0, 2.5)
-          task.wait(0.06)
-        else
-          -- В остальных комнатах бежим к замку
-          runToPos(lockCF.Position, lockPart, "Lock")
-        end
-        if lockPrompt then
-          safeFirePrompt(lockPrompt)
-        end
-        task.wait(0.1)
-      end
-    end
-  end)
-end
-
-local function FastOpenRoomDoor(door)
-  pcall(function()
-    local char = localPlayer2 and localPlayer2.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root or not door then return end
-
-    local doorPart = (door:FindFirstChild("Hidden") and door.Hidden:IsA("BasePart") and door.Hidden)
-      or (door:FindFirstChild("Door") and door.Door:IsA("BasePart") and door.Door)
-      or door.PrimaryPart
-      or door:FindFirstChildWhichIsA("BasePart", true)
-
-    local doorCF = (doorPart and doorPart:IsA("BasePart") and doorPart.CFrame)
-      or (door:IsA("Model") and door:GetPivot())
-
-    if doorCF then
-      root.CFrame = doorCF * CFrame.new(0, 0, 3)
-    end
-    local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if prompt then
-      safeFirePrompt(prompt)
-    end
-    if door:FindFirstChild("ClientOpen") then
-      pcall(function() door.ClientOpen:FireServer() end)
-    end
-    KnobFarm.OpenedDoors[door] = true
-    task.wait(0.08)
-    if doorCF then
-      root.CFrame = doorCF * CFrame.new(0, 0, -4)
-    end
-  end)
-end
+-- ═══════════════════════════════════════════════════════════════════
+-- AUTO DOOR SKIP (Rooms 0-1, DoorLattice, Gates, Seek Threat Zones)
+-- ═══════════════════════════════════════════════════════════════════
 
 local function ExecuteAutoDoorSkip(room, roomNum)
   if not room or not KnobFarm.Active or _Unloading then return false end
@@ -13628,17 +13103,72 @@ local function ExecuteAutoDoorSkip(room, roomNum)
   end)
 
   -- 1. Fast Loot (Gold / Stardust)
-  FastLootRoom(room)
+  TeleportLootRoom(room, false)
 
   -- 2. Fast Gate / Lever
-  FastHandleGate(room)
+  local hasGate, gate, lever = HasRoomGate(room)
+  if hasGate and lever then
+    local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
+    if leverPart then
+      root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
+      local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if pr then TriggerPrompt(pr) end
+      task.wait(0.1)
+    end
+  end
 
-  -- 3. Fast Key & Unlock (room 0-1 uses teleport)
-  FastHandleKeyAndUnlock(room, exitDoor, roomNum)
+  -- 3. Unlock if locked
+  local isLocked, lockPrompt = IsDoorLocked(exitDoor)
+  local isTeleportRoom = (roomNum <= 1 or not KnobFarm.PassedFirstDoor)
 
-  -- 4. Fast Open Door & step through
-  FastOpenRoomDoor(exitDoor)
+  if isLocked then
+    EquipUnlockTool()
+    task.wait(0.05)
 
+    local lock = exitDoor:FindFirstChild("Lock")
+    local lockPart = (lock and lock:IsA("BasePart") and lock)
+      or (lock and lock:FindFirstChildWhichIsA("BasePart", true))
+      or (exitDoor:FindFirstChild("Hidden") and exitDoor.Hidden:IsA("BasePart") and exitDoor.Hidden)
+      or exitDoor.PrimaryPart or exitDoor:FindFirstChildWhichIsA("BasePart", true)
+
+    if lockPart then
+      local lockCF = (lockPart:IsA("BasePart") and lockPart.CFrame) or (lockPart:IsA("Model") and lockPart:GetPivot())
+      if lockCF then
+        if isTeleportRoom then
+          root.CFrame = lockCF * CFrame.new(0, 0, 2.5)
+          task.wait(0.06)
+        else
+          NavigateTo(lockCF.Position, lockPart, "Lock", 4.0, "Door")
+        end
+        local lp = lockPrompt or exitDoor:FindFirstChild("UnlockPrompt", true)
+          or (lock and lock:FindFirstChildWhichIsA("ProximityPrompt", true))
+        if lp then TriggerPrompt(lp) end
+        task.wait(0.1)
+      end
+    end
+  end
+
+  -- 4. Open Door & step through
+  local doorPart = (exitDoor:FindFirstChild("Hidden") and exitDoor.Hidden:IsA("BasePart") and exitDoor.Hidden)
+    or (exitDoor:FindFirstChild("Door") and exitDoor.Door:IsA("BasePart") and exitDoor.Door)
+    or exitDoor.PrimaryPart or exitDoor:FindFirstChildWhichIsA("BasePart", true)
+
+  local doorCF = (doorPart and doorPart:IsA("BasePart") and doorPart.CFrame) or (exitDoor:IsA("Model") and exitDoor:GetPivot())
+  if doorCF then
+    root.CFrame = doorCF * CFrame.new(0, 0, 3)
+  end
+
+  local dp = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
+  if dp then TriggerPrompt(dp) end
+  if exitDoor:FindFirstChild("ClientOpen") then
+    pcall(function() exitDoor.ClientOpen:FireServer() end)
+  end
+  KnobFarm.OpenedDoors[exitDoor] = true
+  task.wait(0.08)
+
+  if doorCF then
+    root.CFrame = doorCF * CFrame.new(0, 0, -4)
+  end
   task.wait(0.08)
   return true
 end
@@ -13663,49 +13193,38 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 9. Death handler: wait 10s and Play Again ─────────
+      -- 1. Death handler
       if hum.Health <= 0 then
-        KnobFarm.SetStatus("Dead. Waiting 10s for Play Again...")
-        ClearPathNodes()
-        KnobFarm.PassedFirstDoor = false
-        KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
-        KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
-        KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
-        KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
-        pcall(function()
-          if toggles.Phase and toggles.Phase.Value then
-            toggles.Phase:SetValue(false)
-          end
-          Phase.TargetPosition = nil
-          Phase.Speed = nil
-        end)
-        task.wait(10.0)
+        KnobFarm.SetStatus("Dead. Waiting for results...")
+        task.wait(6.0)
+        RecordRunStats()
+        KnobFarm.SetStatus("Dead. Waiting for Play Again...")
+        task.wait(4.0)
         pcall(function()
           if remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain") then
             remotesFolder2.PlayAgain:FireServer()
           end
         end)
+        ResetFarmState()
         task.wait(1.0)
         continue
       end
 
-      -- ── Lobby / waiting for rooms ──────────────────────────
+      -- 2. Lobby / waiting for rooms
       local roomsFolder = workspace:FindFirstChild("CurrentRooms")
       if not roomsFolder or #roomsFolder:GetChildren() == 0 then
         KnobFarm.SetStatus("Waiting for rooms...")
-        ClearPathNodes()
-        KnobFarm.PassedFirstDoor = false
-        KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
-        KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
-        KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
-        KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
-        pcall(function()
-          if toggles.Phase and toggles.Phase.Value then
-            toggles.Phase:SetValue(false)
+        if not KnobFarm.StartKnobs then
+          local k = GetPlayerKnobs()
+          if k then
+            KnobFarm.StartKnobs = k
+            KnobFarm.StartKnobsBeforeShop = not KnobFarm.LockpickBoughtThisRun
           end
-          Phase.TargetPosition = nil
-          Phase.Speed = nil
-        end)
+        end
+        ResetFarmState()
+        if Functions.CheckAndAutoBuyLockpick then
+          Functions.CheckAndAutoBuyLockpick()
+        end
         task.wait(1.0)
         continue
       end
@@ -13722,7 +13241,7 @@ function KnobFarm.RunLoop()
         KnobFarm.RoomEntryTime = tick()
       end
 
-      -- ── Если уже 10 минут бот в одной комнате -> Play Again (во вкладке Misc) ──
+      -- 3. 10 minutes timeout in same room -> Play Again
       if KnobFarm.RoomEntryTime and (tick() - KnobFarm.RoomEntryTime >= 600) then
         KnobFarm.SetStatus("10m timeout in Room " .. tostring(roomNum) .. "! Triggering Play Again...")
         pcall(function()
@@ -13736,11 +13255,11 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 8. Stuck detection: Turn camera towards path & Phase ────────────
+      -- 4. Stuck detection: Phase temporary
       if IsStuck() then
         KnobFarm.SetStatus("Stuck detected! Turning camera & Phase...")
         local cam = workspace.CurrentCamera
-        local target, targetPos = GetRoomTarget(room)
+        local _, targetPos = GetRoomTarget(room)
         if cam and targetPos then
           pcall(function()
             cam.CFrame = CFrame.new(cam.CFrame.Position, Vector3.new(targetPos.X, cam.CFrame.Position.Y, targetPos.Z))
@@ -13752,11 +13271,23 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── Условие: если номер 0 или 1, или моделька DoorLattice, или решетка (Gate/ThingToOpen) -> скип комнаты / телепорт ──
-      local hasDoorLattice = room:FindFirstChild("DoorLattice", true) ~= nil
-      local hasGate = (room:FindFirstChild("Gate", true) ~= nil) or (room:FindFirstChild("ThingToOpen", true) ~= nil)
+      -- 5. Special Skip: room 0-1, DoorLattice, or Gate -> Auto Door Skip
+      local hasDoorLattice = HasDoorLattice(room)
+      local hasGate = HasRoomGate(room)
 
       if roomNum <= 1 or not KnobFarm.PassedFirstDoor or hasDoorLattice or hasGate then
+        if (roomNum <= 1 or not KnobFarm.PassedFirstDoor) then
+          if not KnobFarm.StartKnobs then
+            local k = GetPlayerKnobs()
+            if k then
+              KnobFarm.StartKnobs = k
+              KnobFarm.StartKnobsBeforeShop = not KnobFarm.LockpickBoughtThisRun
+            end
+          end
+          if Functions.CheckAndAutoBuyLockpick then
+            Functions.CheckAndAutoBuyLockpick()
+          end
+        end
         local success = ExecuteAutoDoorSkip(room, roomNum)
         if success and not KnobFarm.PassedFirstDoor then
           KnobFarm.PassedFirstDoor = true
@@ -13777,73 +13308,49 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── Threat wait: ONLY in Seek zones (30-40, 80-90) ──
+      -- 6. Threat wait (Seek zones)
       WaitForThreats(roomNum, room)
 
-      -- ── Room 50 (Figure): Godmode OFF, Teleport to Books & Paper, then Door ──
+      -- 7. Room 50 (Figure)
       if roomNum == 50 then
         handleRoom50(room, room:FindFirstChild("Door"))
         continue
       end
 
-      -- ── Room 100 (Figure): Check threats, Godmode OFF, Teleport Fuses, Lever & Breaker ──
+      -- 8. Room 100 (Figure)
       if roomNum >= 100 then
         handleRoom100(room)
         continue
       end
 
-      -- ── Seek zones (30-40, 80-90): ONLY Teleport (Auto Door Skip), NO running! ──
+      -- 9. Seek zones: Auto Door Skip
       if isSeekThreatZone(room, roomNum) and roomNum ~= 50 and roomNum < 100 then
         ExecuteAutoDoorSkip(room, roomNum)
         continue
       end
 
-      -- ── 2. Fast Loot Room (Visible Gold & Stardust teleport) ─
-      TeleportLootRoom(room)
+      -- 10. Loot room (Gold & Stardust)
+      TeleportLootRoom(room, true)
 
-      -- ── 2. Unlocked drawers / chests in room: run to them ───
+      -- 11. Loot Drawers / Containers
       local drawers = LootDrawersInRoom(room)
       if drawers and #drawers > 0 then
         for _, drawer in ipairs(drawers) do
           if not KnobFarm.Active or _Unloading then break end
           if drawer.prompt and drawer.prompt.Enabled and not KnobFarm.LootedObjects[drawer.parent] then
-            KnobFarm.SetStatus("Running to " .. drawer.parent.Name)
-            local drawerFloor = GetFloorPosition(drawer.pos)
-            local path = pathfindingService:CreatePath({
-              AgentCanJump = false,
-              AgentCanClimb = false,
-              WaypointSpacing = 4,
-              AgentRadius = 1.0,
-              AgentHeight = 1.8,
-              Costs = { StuckPart = 8 },
-            })
-            local pSuccess = pcall(function()
-              path:ComputeAsync(root.Position, drawerFloor or drawer.pos)
-            end)
-            if pSuccess and path.Status == Enum.PathStatus.Success then
-              FollowPath(path:GetWaypoints(), drawer.parent, drawerFloor or drawer.pos, "Drawer", room, roomNum)
-            else
-              hum:MoveTo(drawerFloor or drawer.pos)
-              pcall(function()
-                local cam = workspace.CurrentCamera
-                local targetP = drawerFloor or drawer.pos
-                if cam and targetP then
-                  local camPos = cam.CFrame.Position
-                  local lookTarget = Vector3.new(targetP.X, camPos.Y, targetP.Z)
-                  cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
-                end
-              end)
-              task.wait(0.4)
+            NavigateTo(drawer.pos, drawer.parent, drawer.parent.Name, 4.0, "Drawer")
+            if drawer.parent.Name:lower():find("locked", 1, true) then
+              EquipUnlockTool()
             end
             TriggerPrompt(drawer.prompt)
             KnobFarm.LootedObjects[drawer.parent] = true
             task.wait(0.06)
-            TeleportLootRoom(room)
+            TeleportLootRoom(room, true)
           end
         end
       end
 
-      -- ── Primary Goal: Key or Exit Door ──────────────────────
+      -- 12. Primary Goal: Exit Door
       local target, targetPos, targetType = GetRoomTarget(room)
       if not target or not targetPos then
         KnobFarm.SetStatus("Searching path (Room " .. tostring(roomNum) .. ")...")
@@ -13853,7 +13360,6 @@ function KnobFarm.RunLoop()
 
       KnobFarm.SetStatus("Running to " .. targetType .. " (Room " .. tostring(roomNum) .. ")")
 
-      -- Compute path in crouch
       local path = pathfindingService:CreatePath({
         AgentCanJump = false,
         AgentCanClimb = false,
@@ -13882,7 +13388,6 @@ function KnobFarm.RunLoop()
       end
 
       if not path or path.Status ~= Enum.PathStatus.Success then
-        -- Micro-agent for narrow sub-room doorways
         path = pathfindingService:CreatePath({
           AgentCanJump = false,
           AgentCanClimb = false,
@@ -13897,8 +13402,7 @@ function KnobFarm.RunLoop()
       end
 
       if path and path.Status == Enum.PathStatus.Success then
-        local waypoints = path:GetWaypoints()
-        FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
+        FollowPath(path:GetWaypoints(), target, targetPos, targetType, room, roomNum)
       else
         KnobFarm.SetStatus("Path obstructed (Room " .. tostring(roomNum) .. "), calculating...")
         task.wait(0.2)
@@ -13921,9 +13425,7 @@ function KnobFarm.Start()
   if KnobFarm.Active then return end
   KnobFarm.Active = true
   KnobFarm.PassedFirstDoor = false
-  KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
-  KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
   KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.LastPosition = nil
@@ -13955,7 +13457,6 @@ function KnobFarm.Start()
 
   KnobFarm.SetStatus("Started (Room " .. tostring(KnobFarm.CurrentRoomNum) .. ")")
 
-  -- Ensure InstantInteract is enabled so prompts fire instantly
   pcall(function()
     if toggles and toggles.InstantInteract and not toggles.InstantInteract.Value then
       toggles.InstantInteract:SetValue(true)
@@ -13971,26 +13472,15 @@ function KnobFarm.Stop()
   KnobFarm.PassedFirstDoor = false
   KnobFarm.LastRoomNum = nil
   KnobFarm.RoomEntryTime = 0
-  KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
-  KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
   KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
   if KnobFarm.Thread then
     pcall(task.cancel, KnobFarm.Thread)
     KnobFarm.Thread = nil
   end
-  ClearPathNodes()
+  ResetFarmState()
   SetCrouched(false)
 
-  pcall(function()
-    if toggles.Phase and toggles.Phase.Value then
-      toggles.Phase:SetValue(false)
-    end
-    Phase.TargetPosition = nil
-    Phase.Speed = nil
-  end)
-
-  -- Restore previous walkspeed
   pcall(function()
     if options and options.Walkspeed and KnobFarm.PreviousWalkSpeed then
       options.Walkspeed:SetValue(KnobFarm.PreviousWalkSpeed)
@@ -14000,24 +13490,11 @@ function KnobFarm.Stop()
 
   local char = localPlayer2 and localPlayer2.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if hum then
-    hum:Move(Vector3.zero, false)
-  end
+  if hum then hum:Move(Vector3.zero, false) end
   KnobFarm.SetStatus("Disabled")
 end
 
-KnobFarm.StopFlight = function() end
 KnobFarm.SetCrouched = SetCrouched
-KnobFarm.EnableGodmodeOnSpawn = function()
-  pcall(function()
-    if toggles and toggles.Godmode and not toggles.Godmode.Value then
-      toggles.Godmode:SetValue(true)
-    end
-    if options and options.GodmodeMethod then
-      options.GodmodeMethod:SetValue("On entity spawn")
-    end
-  end)
-end
 
 -- Connect UI toggle & slider
 if toggles and toggles.AutoFarmEnabled then
@@ -14041,7 +13518,6 @@ if options and options.AutoFarmWalkSpeed then
     end
   end)
 end
-
 
 end)() end
 
