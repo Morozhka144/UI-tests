@@ -2203,13 +2203,13 @@ Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmShowPath", {
 })
 
 Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmSpeed", {
-  Text = "Farm Fly Speed",
+  Text = "Farm Speed",
   Min = 16,
   Max = 80,
   Default = 35,
   Rounding = 0,
   Compact = true,
-  Tooltip = "Flight speed for moving between doors and loot (default: 35)",
+  Tooltip = "Movement speed for navigating paths between rooms and loot (default: 35)",
 })
 
 Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmLootDrawers", {
@@ -12580,7 +12580,7 @@ local function LootAllInRoom(room)
     local item = table.remove(targets, 1)
     if item and item.prompt and item.prompt.Enabled and not KnobFarm.LootedObjects[item.prompt] then
       KnobFarm.SetStatus("Looting: " .. (item.parent and item.parent.Name or "Item"))
-      FlyDirect(item.pos, speed, 3.5, "Loot", item.parent)
+      NavigateTo(item.pos, item.parent, item.parent and item.parent.Name or "Item", 5.0, "Loot")
 
       KnobFarm.LootedObjects[item.prompt] = true
       if item.parent then
@@ -12848,12 +12848,84 @@ local function GetDoorVectors(door)
   return normal, doorCenter, approachDir, passDir
 end
 
+local function GetDoorApproachPosition(doorCenter, door)
+  if not doorCenter then return doorCenter end
+  local _, center, approachDir, passDir = GetDoorVectors(door)
+  if center and approachDir then
+    return center + (approachDir * 4.5)
+  end
+  return doorCenter
+end
+
 local function PassDoorStraight(door, root, hum)
-  if not door then return end
+  if not door or not root or not hum or hum.Health <= 0 then return end
+  if not KnobFarm.Active or _Unloading then return end
+
+  local normal, center, approachDir, passDir = GetDoorVectors(door)
+  if not center or not passDir then return end
+
+  -- 1. Быстрое отпирание двери отмычкой или ключом если заперта
+  local isLocked, unPr = IsDoorLocked(door)
+  if isLocked then
+    if not HasLockpick() and not HasKeyTool() then
+      local room = door.Parent
+      local keyObj, keyPos = FindRoomKey(room)
+      if keyObj and keyPos then
+        KnobFarm.SetStatus("No lockpicks! Picking up key...")
+        NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
+        local pickStart = tick()
+        while not HasKeyTool() and tick() - pickStart < 1.5 and KnobFarm.Active and not _Unloading do
+          task.wait(0.05)
+        end
+      end
+    end
+
+    local statusMsg = HasLockpick() and "Unlocking door with lockpick..." or "Unlocking door with key..."
+    KnobFarm.SetStatus(statusMsg)
+    EquipUnlockTool()
+    local unStart = tick()
+    while IsDoorLocked(door) and tick() - unStart < 3.0 and KnobFarm.Active and not _Unloading do
+      EquipUnlockTool()
+      task.wait(0.04)
+    end
+  end
+
+  -- 2. Открытие створки
   if door:FindFirstChild("ClientOpen") then
     pcall(function() door.ClientOpen:FireServer() end)
   end
   KnobFarm.OpenedDoors[door] = true
+
+  -- 3. Отключение коллизии дверей, дверных косяков и хитбокса персонажа
+  local disabledParts = {}
+  for _, dp in ipairs(door:GetDescendants()) do
+    if dp:IsA("BasePart") and dp.CanCollide then
+      disabledParts[dp] = true
+      dp.CanCollide = false
+    end
+  end
+
+  -- 4. Непрерывный проход вперед через проем без застреваний
+  local throughPos = center + (passDir * 5.0)
+  local passStart = tick()
+  while (root.Position - throughPos).Magnitude > 2.5 and tick() - passStart < 2.5 and KnobFarm.Active and not _Unloading do
+    hum:Move(passDir, false)
+    pcall(function()
+      local cam = workspace.CurrentCamera
+      if cam then
+        cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + passDir)
+      end
+    end)
+    task.wait(0.03)
+  end
+
+  -- Восстановление коллизий
+  for p in pairs(disabledParts) do
+    if p and p.Parent then
+      p.CanCollide = true
+    end
+  end
+
   if not KnobFarm.PassedFirstDoor then
     KnobFarm.PassedFirstDoor = true
   end
@@ -12865,15 +12937,9 @@ local function GetRoomTarget(room)
   local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
   if not exitDoor then return nil, nil, nil end
 
-  local _, center, _, passDir = GetDoorVectors(exitDoor)
-  if center and passDir then
-    -- Точка пути: прямо через дверной проем на 3.5 стада в следующую комнату (проход как по обычному коридору)
-    local throughPos = center + (passDir * 3.5)
-    return exitDoor, throughPos, "Door"
-  end
-
   local doorCenter = GetDoorCenter(exitDoor)
-  return exitDoor, doorCenter, "Door"
+  local approachPos = GetDoorApproachPosition(doorCenter, exitDoor)
+  return exitDoor, GetFloorPosition(approachPos) or approachPos, "Door"
 end
 
 -- Проверка проходимости прямого отрезка между двумя точками с учетом объема персонажа
@@ -13050,23 +13116,274 @@ local function GetRoomPathfindNodes(room, rootPos, exitPos)
 end
 
 local function FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
-  if not targetPos or not KnobFarm.Active or _Unloading then return false end
-  local speed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
-    or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 35
-  local stopDist = (targetType == "Door" and 2.5) or 3.5
-  local res = FlyDirect(targetPos, speed, stopDist, targetType, target)
-  if targetType == "Door" and target then
-    PassDoorStraight(target)
+  if not waypoints or #waypoints == 0 then return end
+  RenderPathNodes(waypoints)
+
+  local wpIndex = 2
+  if #waypoints < 2 then
+    wpIndex = 1
   end
-  return res
+
+  local completed = false
+  local startTime = tick()
+  local lastProgressTime = tick()
+  local lastRootPos = nil
+  local currentTargetPoint = targetPos
+
+  -- Apply speed from slider
+  local char = localPlayer2 and localPlayer2.Character
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  local desiredSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
+    or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
+  if options and options.Walkspeed then
+    if options.Walkspeed.Value ~= desiredSpeed then
+      options.Walkspeed:SetValue(desiredSpeed)
+    end
+  elseif hum then
+    hum.WalkSpeed = desiredSpeed
+  end
+
+  -- Continuous RenderStepped steering: fluid lookahead velocity without MoveTo stutter
+  local moveConn
+  moveConn = runService.RenderStepped:Connect(function()
+    if not KnobFarm.Active or _Unloading or IsUserMovingManually() then
+      completed = true
+      return
+    end
+
+    local c = localPlayer2 and localPlayer2.Character
+    local root = c and c:FindFirstChild("HumanoidRootPart")
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    if not c or not root or not h or h.Health <= 0 then
+      completed = true
+      return
+    end
+
+    local curDesiredSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
+      or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or desiredSpeed
+    if options and options.Walkspeed and options.Walkspeed.Value ~= curDesiredSpeed then
+      options.Walkspeed:SetValue(curDesiredSpeed)
+    elseif h and h.WalkSpeed ~= curDesiredSpeed then
+      h.WalkSpeed = curDesiredSpeed
+    end
+
+    local rootPos = root.Position
+
+    -- Advance waypoint index forward: строго по перпендикулярным прямым без срезания углов
+    while wpIndex < #waypoints do
+      local curWp = waypoints[wpIndex]
+      local curPos = (typeof(curWp) == "Vector3" and curWp) or (curWp and curWp.Position)
+      if not curPos then break end
+      local dx = curPos.X - rootPos.X
+      local dz = curPos.Z - rootPos.Z
+      local flatDist = math.sqrt(dx * dx + dz * dz)
+
+      if flatDist < 2.2 then
+        if currentNodes[wpIndex] and currentNodes[wpIndex].Parent then
+          pcall(function() currentNodes[wpIndex]:Destroy() end)
+          currentNodes[wpIndex] = nil
+        end
+        wpIndex = wpIndex + 1
+      else
+        local nextWp = waypoints[wpIndex + 1]
+        if nextWp and flatDist < 3.5 then
+          local nextPos = (typeof(nextWp) == "Vector3" and nextWp) or (nextWp and nextWp.Position)
+          if nextPos then
+            local segX = nextPos.X - curPos.X
+            local segZ = nextPos.Z - curPos.Z
+            local pastX = rootPos.X - curPos.X
+            local pastZ = rootPos.Z - curPos.Z
+            if (pastX * segX + pastZ * segZ) > 0 then
+              if currentNodes[wpIndex] and currentNodes[wpIndex].Parent then
+                pcall(function() currentNodes[wpIndex]:Destroy() end)
+                currentNodes[wpIndex] = nil
+              end
+              wpIndex = wpIndex + 1
+            else
+              break
+            end
+          else
+            break
+          end
+        else
+          break
+        end
+      end
+    end
+
+    -- Steering target: строго к текущему узлу перпендикулярной прямой (без диагонального срезания)
+    local curWp = waypoints[wpIndex]
+    local targetPoint = (curWp and ((typeof(curWp) == "Vector3" and curWp) or curWp.Position)) or targetPos
+    currentTargetPoint = targetPoint
+
+    local steerX = targetPoint.X - rootPos.X
+    local steerZ = targetPoint.Z - rootPos.Z
+    local steerDist = math.sqrt(steerX * steerX + steerZ * steerZ)
+
+    if steerDist > 0.1 then
+      local moveDir = Vector3.new(steerX / steerDist, 0, steerZ / steerDist)
+      h:Move(moveDir, false)
+
+      pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+          local camPos = cam.CFrame.Position
+          local lookTarget = Vector3.new(targetPoint.X, camPos.Y, targetPoint.Z)
+          cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+        end
+      end)
+    else
+      h:Move(Vector3.zero, false)
+    end
+
+    -- Jump action
+    if curWp and curWp.Action == Enum.PathWaypointAction.Jump then
+      h.Jump = true
+    end
+
+    -- Goal reached condition
+    if (rootPos - targetPos).Magnitude < 2.5 then
+      completed = true
+    elseif wpIndex >= #waypoints and steerDist < 2.0 then
+      completed = true
+    end
+  end)
+
+  -- Wait loop with stuck detection and early interaction
+  while not completed and KnobFarm.Active and not _Unloading do
+    task.wait(0.04)
+
+    if IsUserMovingManually() then
+      completed = true
+      break
+    end
+
+    local c = localPlayer2 and localPlayer2.Character
+    local root = c and c:FindFirstChild("HumanoidRootPart")
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    if not root or not h or h.Health <= 0 then break end
+
+    -- Stuck detection: if barely moved in 1.8 seconds, rotate camera to path & activate Phase until cleared
+    if not lastRootPos then
+      lastRootPos = root.Position
+      lastProgressTime = tick()
+    else
+      local moved = (root.Position - lastRootPos).Magnitude
+      if moved > 1.2 then
+        lastRootPos = root.Position
+        lastProgressTime = tick()
+      elseif tick() - lastProgressTime > 1.8 then
+        local targetPoint = currentTargetPoint or targetPos
+        local cam = workspace.CurrentCamera
+        if cam and targetPoint then
+          pcall(function()
+            cam.CFrame = CFrame.new(cam.CFrame.Position, Vector3.new(targetPoint.X, cam.CFrame.Position.Y, targetPoint.Z))
+          end)
+        end
+
+        PhaseTemporary(2.0)
+        h.Jump = true
+
+        if targetType == "Drawer" and tick() - lastProgressTime > 3.0 then
+          break
+        elseif tick() - lastProgressTime > 4.5 then
+          break
+        end
+        lastRootPos = root.Position
+        lastProgressTime = tick()
+      end
+    end
+
+    -- Path timeout
+    if tick() - startTime > 12.0 then
+      break
+    end
+
+    -- Early approach when close to target (non-blocking)
+    local dist = (targetPos - root.Position).Magnitude
+    if dist < 10.0 then
+      if targetType == "Door" then
+        local locked = IsDoorLocked(target)
+        if locked then
+          EquipUnlockTool()
+        else
+          if target:FindFirstChild("ClientOpen") then
+            pcall(function() target.ClientOpen:FireServer() end)
+          end
+        end
+      end
+    end
+  end
+
+  if moveConn then
+    moveConn:Disconnect()
+  end
+
+  local c = localPlayer2 and localPlayer2.Character
+  local h = c and c:FindFirstChildOfClass("Humanoid")
+  local root = c and c:FindFirstChild("HumanoidRootPart")
+
+  -- Clean up nodes
+  ClearPathNodes()
+
+  -- Post-path actions: for Door, NEVER stop movement to zero, run straight through!
+  if targetType == "Door" then
+    PassDoorStraight(target, root, h)
+  else
+    if h then h:Move(Vector3.zero, false) end
+  end
+  return completed and not IsUserMovingManually()
 end
 
 local function NavigateTo(targetPos, targetInstance, label, maxWaitTime, targetType)
   if not targetPos or not KnobFarm.Active or _Unloading then return false end
-  KnobFarm.SetStatus("Flying to " .. (label or "target") .. "...")
-  local speed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
-    or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 35
-  return FlyDirect(targetPos, speed, 3.5, targetType or label or "Target", targetInstance)
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not root or not hum or hum.Health <= 0 then return false end
+
+  local floorPos = GetFloorPosition(targetPos) or targetPos
+  KnobFarm.SetStatus("Running to " .. (label or "target") .. "...")
+
+  local path = pathfindingService:CreatePath({
+    AgentCanJump = false,
+    AgentCanClimb = false,
+    WaypointSpacing = 4,
+    AgentRadius = 1.8,
+    AgentHeight = 2.0,
+    Costs = { StuckPart = 8 },
+  })
+
+  local ok = pcall(function()
+    path:ComputeAsync(root.Position, floorPos)
+  end)
+
+  local orthoWaypoints = nil
+  if ok and path.Status == Enum.PathStatus.Success then
+    orthoWaypoints = OrthogonalizeWaypoints(path:GetWaypoints(), char)
+  else
+    orthoWaypoints = OrthogonalizeWaypoints({ root.Position, floorPos }, char)
+  end
+
+  if orthoWaypoints and #orthoWaypoints > 1 then
+    FollowPath(orthoWaypoints, targetInstance, floorPos, targetType or label or "Target", nil, KnobFarm.CurrentRoomNum)
+  else
+    hum:MoveTo(floorPos)
+    local t = tick()
+    local timeout = maxWaitTime or 4.0
+    while (root.Position - floorPos).Magnitude > 6 and tick() - t < timeout and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+      pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+          local camPos = cam.CFrame.Position
+          local lookTarget = Vector3.new(floorPos.X, camPos.Y, floorPos.Z)
+          cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
+        end
+      end)
+      task.wait(0.1)
+    end
+  end
+  return true
 end
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -13596,7 +13913,7 @@ function KnobFarm.RunLoop()
         local leverPos = GetInstancePosition(lever)
         if leverPos then
           KnobFarm.SetStatus("Pulling Gate Lever...")
-          FlyDirect(leverPos, farmSpeed, 3.5, "Lever", lever)
+          NavigateTo(leverPos, lever, "Gate Lever", 5.0, "Lever")
           task.wait(0.2)
         end
       end
@@ -13629,7 +13946,7 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- Если дверь заперта, а отмычек нет — летим напрямую к ключу (2 точки)
+      -- Если дверь заперта, а отмычек нет — идем к ключу по перпендикулярным линиям
       local isLocked = IsDoorLocked(target)
       if isLocked and not HasLockpick() and not HasKeyTool() then
         local keyObj, keyPos = FindRoomKey(room)
@@ -13642,8 +13959,8 @@ function KnobFarm.RunLoop()
         end
 
         if keyObj and keyPos then
-          KnobFarm.SetStatus("No lockpicks! Flying to key (Room " .. tostring(roomNum) .. ")...")
-          FlyDirect(keyPos, farmSpeed, 3.0, "Key", keyObj)
+          KnobFarm.SetStatus("No lockpicks! Walking to key (Room " .. tostring(roomNum) .. ")...")
+          NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
 
           local pickStart = tick()
           while not HasKeyTool() and tick() - pickStart < 1.5 and KnobFarm.Active and not _Unloading do
@@ -13656,11 +13973,45 @@ function KnobFarm.RunLoop()
         end
       end
 
-      -- Летим напрямую к двери (2 точки: от текущей позиции до выхода сквозь дверной проем)
-      KnobFarm.SetStatus("Flying to Door (Room " .. tostring(roomNum) .. ")...")
-      local reachedDoor = FlyDirect(targetPos, farmSpeed, 2.5, "Door", target)
-      if target then
-        PassDoorStraight(target)
+      KnobFarm.SetStatus("Running to Door (Room " .. tostring(roomNum) .. ")")
+
+      -- 1. Сначала проверяем официальные PathfindNodes комнаты (центр коридоров от разработчиков DOORS)
+      local roomNodes = GetRoomPathfindNodes(room, root.Position, targetPos)
+      local waypoints = nil
+      if roomNodes and #roomNodes >= 2 then
+        waypoints = OrthogonalizeWaypoints(roomNodes, char)
+      end
+
+      -- 2. Если узлов комнаты нет (прямая комната), вычисляем путь через PathfindingService
+      if not waypoints or #waypoints == 0 then
+        local path = pathfindingService:CreatePath({
+          AgentCanJump = false,
+          AgentCanClimb = false,
+          WaypointSpacing = 4,
+          AgentRadius = 1.8,
+          AgentHeight = 2.0,
+          Costs = { StuckPart = 8 },
+        })
+
+        local okPath = pcall(function()
+          path:ComputeAsync(root.Position, targetPos)
+        end)
+
+        if okPath and path.Status == Enum.PathStatus.Success then
+          waypoints = OrthogonalizeWaypoints(path:GetWaypoints(), char)
+        end
+      end
+
+      -- 3. Надежный фолбэк: строго перпендикулярная траектория напрямую между игроком и дверью
+      if not waypoints or #waypoints == 0 then
+        waypoints = OrthogonalizeWaypoints({ root.Position, targetPos }, char)
+      end
+
+      if waypoints and #waypoints > 0 then
+        FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
+      else
+        KnobFarm.SetStatus("Path obstructed (Room " .. tostring(roomNum) .. "), calculating...")
+        task.wait(0.2)
       end
     end
   end)
@@ -13716,7 +14067,8 @@ function KnobFarm.Start()
     pcall(function()
       if options and options.Walkspeed then
         KnobFarm.PreviousWalkSpeed = options.Walkspeed.Value
-        local desiredSpeed = (options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
+        local desiredSpeed = (options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
+          or (options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
         if options.Walkspeed.Value < desiredSpeed then
           options.Walkspeed:SetValue(desiredSpeed)
         end
@@ -13799,8 +14151,9 @@ if toggles and toggles.AutoFarmEnabled then
   end
 end
 
-if options and options.AutoFarmWalkSpeed then
-  options.AutoFarmWalkSpeed:OnChanged(function(val)
+local farmSpeedOpt = (options and options.AutoFarmSpeed) or (options and options.AutoFarmWalkSpeed)
+if farmSpeedOpt then
+  farmSpeedOpt:OnChanged(function(val)
     if KnobFarm.Active and options.Walkspeed then
       options.Walkspeed:SetValue(val)
     end
