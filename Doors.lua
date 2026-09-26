@@ -11784,18 +11784,21 @@ local function RenderPathNodes(waypoints)
   if not showPath then return end
 
   for i, wp in ipairs(waypoints) do
-    local node = Instance.new("Part")
-    node.Transparency = 0.35
-    node.Size = Vector3.new(0.85, 0.85, 0.85)
-    node.Position = wp.Position
-    node.Shape = Enum.PartType.Ball
-    node.CanCollide = false
-    node.Anchored = true
-    node.Name = "PathNode"
-    node.Color = Color3.fromRGB(0, 255, 0)
-    node.Material = Enum.Material.Neon
-    node.Parent = val85.HotelNodesFolder
-    currentNodes[i] = node
+    local pos = (typeof(wp) == "Vector3" and wp) or (wp and wp.Position)
+    if pos then
+      local node = Instance.new("Part")
+      node.Transparency = 0.35
+      node.Size = Vector3.new(0.85, 0.85, 0.85)
+      node.Position = pos
+      node.Shape = Enum.PartType.Ball
+      node.CanCollide = false
+      node.Anchored = true
+      node.Name = "PathNode"
+      node.Color = Color3.fromRGB(0, 255, 0)
+      node.Material = Enum.Material.Neon
+      node.Parent = val85.HotelNodesFolder
+      currentNodes[i] = node
+    end
   end
 end
 
