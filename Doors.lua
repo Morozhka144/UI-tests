@@ -11475,7 +11475,6 @@ KnobFarm.PassedFirstDoor = false
 KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
 KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
 KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
-KnobFarm.PassedSpecialRooms = setmetatable({}, { __mode = "k" })
 KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
 KnobFarm.PreviousWalkSpeed = nil
 KnobFarm.LastPosition = nil
@@ -11873,9 +11872,7 @@ end
 
 local function HasRoomGate(room)
   if not room then return false, nil, nil end
-  local gate = (room:FindFirstChild("Assets") and room.Assets:FindFirstChild("Gate"))
-    or room:FindFirstChild("Gate")
-    or room:FindFirstChild("Gate", true)
+  local gate = room:FindFirstChild("Gate", true) or room:FindFirstChild("ThingToOpen", true)
   if not gate then return false, nil, nil end
   local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
   return true, gate, lever
@@ -11883,7 +11880,15 @@ end
 
 local function HasDoorLattice(room)
   if not room then return false end
-  return room:FindFirstChild("DoorLattice") ~= nil or room:FindFirstChild("DoorLattice", true) ~= nil
+  return (room:FindFirstChild("DoorLattice") ~= nil) or (room:FindFirstChild("DoorLattice", true) ~= nil)
+end
+
+local function IsSpecialObstacleRoom(room)
+  if not room then return false end
+  if HasDoorLattice(room) then return true end
+  local hasGate, gate = HasRoomGate(room)
+  if hasGate and gate then return true end
+  return false
 end
 
 local function DisableObstacleCollision(room)
@@ -12021,41 +12026,34 @@ local function TeleportLootRoom(room)
 end
 
 local function LootDrawersInRoom(room)
-  if not room or not KnobFarm.Active or _Unloading then return {} end
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local rootPos = root and root.Position
-
-  -- Find non-locked chests/drawers within the room (bot runs to them along the way)
+  if not room or not KnobFarm.Active or _Unloading then return end
+  -- Find non-locked chests/drawers within the room (bot runs to them)
   local targets = {}
   for _, desc in ipairs(room:GetDescendants()) do
     if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc.Parent] then
       local parent = desc.Parent
       if not parent then continue end
       local pName = parent.Name
-      local isLocked = parent:FindFirstChild("Lock") ~= nil
-        or pName:lower():find("locked") ~= nil
-        or desc.ObjectText:lower():find("lock") ~= nil
-        or desc.ActionText:lower():find("unlock") ~= nil
-
       -- Non-locked containers only
-      if not isLocked and (pName == "ChestBox" or pName == "Toolbox" or pName == "Toolshed_Small"
-          or pName == "Drawer" or pName:find("Drawer") or pName == "DeskDrawer") then
+      if (pName == "ChestBox" or pName == "Toolbox" or pName == "Toolshed_Small"
+          or pName == "Drawer" or pName:find("Drawer"))
+          and not pName:find("Locked") and not pName:find("locked") then
         local pos = GetInstancePosition(parent)
         if pos then
-          local dist = rootPos and (pos - rootPos).Magnitude or 0
-          if dist < 65 then
-            table.insert(targets, { prompt = desc, pos = pos, parent = parent, dist = dist })
-          end
+          table.insert(targets, { prompt = desc, pos = pos, parent = parent })
         end
       end
     end
   end
-  table.sort(targets, function(a, b) return a.dist < b.dist end)
   return targets
 end
 
-local function HasRushAmbushBlitz()
+local function WaitForThreats(roomNum)
+  -- 3. Если двери 30-40 или 80-90, то при спавне сущностей раш/амбуш/блитз бот останавливается на месте и ждет пока сущности пропадут.
+  if not roomNum or not ((roomNum >= 30 and roomNum <= 40) or (roomNum >= 80 and roomNum <= 90)) then
+    return
+  end
+
   local threatNames = {
     RushMoving = true, Rush = true,
     AmbushMoving = true, Ambush = true,
@@ -12064,44 +12062,39 @@ local function HasRushAmbushBlitz()
     GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
   }
 
-  if val83 and val83.ActiveThreats then
-    for threat, active in pairs(val83.ActiveThreats) do
-      if active and threat and threat.Parent and threatNames[threat.Name] then
-        return true
+  local function hasThreat()
+    if val83 and val83.ActiveThreats then
+      for threat, active in pairs(val83.ActiveThreats) do
+        if active and threat and threat.Parent and threatNames[threat.Name] then
+          return true
+        end
       end
     end
-  end
-  for name in pairs(threatNames) do
-    local obj = workspace:FindFirstChild(name)
-    if obj then return true end
-  end
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if curRooms then
     for name in pairs(threatNames) do
-      local obj = curRooms:FindFirstChild(name, true)
+      local obj = workspace:FindFirstChild(name)
       if obj then return true end
     end
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if curRooms then
+      for name in pairs(threatNames) do
+        local obj = curRooms:FindFirstChild(name, true)
+        if obj then return true end
+      end
+    end
+    return false
   end
-  return false
-end
 
-local function WaitForThreats(roomNum)
-  -- 3. Если двери 30-40 или 80-90, то при спавне сущностей раш/амбуш/блитз бот останавливается на месте и ждет пока сущности пропадут и идет дальше(только в этих комнатах!).
-  if not roomNum or not ((roomNum >= 30 and roomNum <= 40) or (roomNum >= 80 and roomNum <= 90)) then
-    return
-  end
-
-  if HasRushAmbushBlitz() then
-    KnobFarm.SetStatus("Threat detected (Room " .. tostring(roomNum) .. ")! Waiting on the spot...")
+  if hasThreat() then
+    KnobFarm.SetStatus("Threat detected (Seek zone " .. tostring(roomNum) .. ")! Waiting...")
     local char = localPlayer2 and localPlayer2.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then hum:Move(Vector3.zero, false) end
-    while HasRushAmbushBlitz() and KnobFarm.Active and not _Unloading do
+    while hasThreat() and KnobFarm.Active and not _Unloading do
       if hum then hum:Move(Vector3.zero, false) end
-      task.wait(0.2)
+      task.wait(0.3)
     end
     task.wait(0.5)
-    KnobFarm.SetStatus("Threat gone. Resuming run...")
+    KnobFarm.SetStatus("Threat gone. Resuming...")
   end
 end
 
@@ -12290,101 +12283,224 @@ local function PhaseFlyTo(targetPos, speed, stopDistance, timeout)
   return arrived
 end
 
--- 2. Если попадается комната с решеткой workspace.CurrentRooms["43"].Assets.Gate.ThingToOpen или с особой дверью workspace.CurrentRooms["82"].DoorLattice, то бот использует Auto Door Skip.
-local function IsGateOrSpecialDoorRoom(room)
+local function IsPhotoRoom(room)
   if not room then return false end
-  -- 1. Gate with ThingToOpen (workspace.CurrentRooms["43"].Assets.Gate.ThingToOpen)
-  local assets = room:FindFirstChild("Assets")
-  if assets then
-    local gate = assets:FindFirstChild("Gate")
-    if gate and (gate:FindFirstChild("ThingToOpen") or gate:FindFirstChild("ThingToOpen", true)) then
-      return true
-    end
-  end
-  local gate = room:FindFirstChild("Gate")
-  if gate and (gate:FindFirstChild("ThingToOpen") or gate:FindFirstChild("ThingToOpen", true)) then
-    return true
-  end
-  if room:FindFirstChild("ThingToOpen", true) then
-    return true
-  end
-  -- 2. Special Door (workspace.CurrentRooms["82"].DoorLattice)
-  if room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true) then
-    return true
-  end
-  return false
+  return (room:FindFirstChild("DoorLattice") ~= nil) or (room:FindFirstChild("DoorLattice", true) ~= nil)
 end
 
--- 6. Если бот застрял на одном месте, то камера поворачивается в сторону пути и включается phase до тех пор пока преграда не будет пройдена.
-local function HandleStuck(aimPos)
-  if not KnobFarm.Active or _Unloading then return end
+local function ExecutePhaseRush(room, roomNum, reason)
+  if not room then return false end
+  local exitDoor = room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
+  if not exitDoor then return false end
+
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not root or not hum or hum.Health <= 0 then return end
+  if not char or not root or not hum or hum.Health <= 0 then return false end
 
-  KnobFarm.SetStatus("Stuck! Turning camera & Phasing through obstacle...")
+  KnobFarm.SetStatus("Phase Rush: " .. tostring(reason) .. " (Room " .. tostring(roomNum) .. ")")
 
-  -- 1. Rotate camera towards the path / aim point
-  local cam = workspace.CurrentCamera
-  if cam and aimPos then
-    pcall(function()
-      local camPos = cam.CFrame.Position
-      local lookTarget = Vector3.new(aimPos.X, camPos.Y, aimPos.Z)
-      if (lookTarget - camPos).Magnitude > 0.1 then
-        cam.CFrame = CFrame.lookAt(camPos, lookTarget)
+  -- Disable collision on door & gate/lattice and room obstacles IMMEDIATELY
+  pcall(function()
+    for _, dp in ipairs(exitDoor:GetDescendants()) do
+      if dp:IsA("BasePart") then dp.CanCollide = false end
+    end
+    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
+    if lattice then
+      for _, lp in ipairs(lattice:GetDescendants()) do
+        if lp:IsA("BasePart") then lp.CanCollide = false end
       end
-    end)
-  end
+    end
+  end)
+  DisableObstacleCollision(room)
 
-  -- Determine direction to move through obstacle
-  local moveDir = nil
-  if aimPos then
-    local diff = Vector3.new(aimPos.X - root.Position.X, 0, aimPos.Z - root.Position.Z)
-    if diff.Magnitude > 0.2 then
-      moveDir = diff.Unit
+  -- 1. If door is locked or this is Room 0, ensure we have the key
+  local locked, unPr = IsDoorLocked(exitDoor)
+  if (locked or roomNum == 0) and not PlayerHasKey() then
+    KnobFarm.SetStatus("Phase -> Searching Key (Room " .. tostring(roomNum) .. ")")
+    local keyItem = FindRoomKey(room)
+    local findStart = tick()
+    while not keyItem and tick() - findStart < 3.0 and KnobFarm.Active and not _Unloading do
+      task.wait(0.2)
+      keyItem = FindRoomKey(room)
+    end
+
+    if keyItem and keyItem.Parent then
+      local keyPos = GetInstancePosition(keyItem)
+      if keyPos then
+        KnobFarm.SetStatus("Phase -> Flying to Key...")
+        PhaseFlyTo(keyPos + Vector3.new(0, 1.2, 0), nil, 2.5, 6.0)
+
+        -- Trigger prompts on parent/desk/container
+        local desk = keyItem:FindFirstAncestorWhichIsA("Model")
+        if desk and desk ~= room then
+          for _, pr in ipairs(desk:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") and pr.Enabled then
+              TriggerPrompt(pr)
+            end
+          end
+        end
+
+        -- Repeatedly trigger all prompts on keyItem until key is in inventory
+        local grabStart = tick()
+        while tick() - grabStart < 3.0 and not PlayerHasKey() and KnobFarm.Active and not _Unloading do
+          for _, pr in ipairs(keyItem:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") then
+              TriggerPrompt(pr)
+            end
+          end
+          local directPr = keyItem:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if directPr then
+            TriggerPrompt(directPr)
+          end
+          task.wait(0.12)
+        end
+
+        if PlayerHasKey() then
+          KnobFarm.LootedObjects[keyItem] = true
+          KnobFarm.SetStatus("Key Acquired!")
+        else
+          KnobFarm.SetStatus("Key pickup failed, will retry...")
+        end
+      end
     end
   end
-  if not moveDir then
+
+  -- 2. Phase fly directly to Exit Door approach (using original script Phase speed)
+  local doorCenter = GetDoorCenter(exitDoor)
+  local rootPos = root.Position
+  local doorApproach = GetDoorApproachPosition(doorCenter, rootPos, exitDoor)
+
+  KnobFarm.SetStatus("Phase -> Door " .. tostring(roomNum + 1))
+  PhaseFlyTo(doorApproach, nil, 2.5, 6.0)
+
+  -- 3. Unlock door if locked
+  if IsDoorLocked(exitDoor) then
+    KnobFarm.SetStatus("Unlocking Door " .. tostring(roomNum + 1) .. "...")
+    EquipKey()
+    task.wait(0.1)
+
+    local unlockStart = tick()
+    while IsDoorLocked(exitDoor) and tick() - unlockStart < 3.5 and KnobFarm.Active and not _Unloading do
+      EquipKey()
+      local _, curUnPr = IsDoorLocked(exitDoor)
+      if curUnPr then
+        TriggerPrompt(curUnPr)
+      else
+        local lock = exitDoor:FindFirstChild("Lock")
+        if lock then
+          for _, pr in ipairs(lock:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") then
+              TriggerPrompt(pr)
+            end
+          end
+        end
+      end
+      task.wait(0.2)
+    end
+  end
+
+  -- 4. Open door
+  KnobFarm.SetStatus("Opening Door " .. tostring(roomNum + 1) .. "...")
+  if exitDoor:FindFirstChild("ClientOpen") then
+    pcall(function() exitDoor.ClientOpen:FireServer() end)
+  end
+  local dPr = exitDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
+  if dPr and dPr.Enabled then
+    TriggerPrompt(dPr)
+  end
+  KnobFarm.OpenedDoors[exitDoor] = true
+
+  -- 5. Disable collision on door & gate/lattice again before flying through
+  pcall(function()
+    for _, dp in ipairs(exitDoor:GetDescendants()) do
+      if dp:IsA("BasePart") then dp.CanCollide = false end
+    end
+    local lattice = room:FindFirstChild("DoorLattice") or room:FindFirstChild("DoorLattice", true)
+    if lattice then
+      for _, lp in ipairs(lattice:GetDescendants()) do
+        if lp:IsA("BasePart") then lp.CanCollide = false end
+      end
+    end
+  end)
+
+  -- 6. Fly forward into next room with Phase ON at original Phase speed (2.25)
+  local passDir = nil
+  local toDoor = Vector3.new(doorCenter.X - root.Position.X, 0, doorCenter.Z - root.Position.Z)
+  if toDoor.Magnitude > 1.0 then
+    passDir = toDoor.Unit
+  else
+    local staticPart = exitDoor:FindFirstChild("Hidden")
+      or exitDoor:FindFirstChild("DoorFrame")
+      or exitDoor:FindFirstChild("Frame")
+      or exitDoor:FindFirstChild("Sign")
+      or exitDoor.PrimaryPart
+    local cf = staticPart and staticPart:IsA("BasePart") and staticPart.CFrame
+    if cf then
+      local flatLv = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+      if flatLv.Magnitude > 0.2 then
+        local normal = flatLv.Unit
+        local toPlayer = Vector3.new(root.Position.X - doorCenter.X, 0, root.Position.Z - doorCenter.Z)
+        local side = toPlayer:Dot(normal) >= 0 and 1 or -1
+        passDir = normal * (-side)
+      end
+    end
+  end
+  if not passDir then
     local fwd = root.CFrame.LookVector
-    moveDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
+    passDir = Vector3.new(fwd.X, 0, fwd.Z).Unit
   end
 
-  -- 2. Turn ON Phase
-  pcall(function()
-    if toggles and toggles.Phase and not toggles.Phase.Value then
-      toggles.Phase:SetValue(true)
-    end
-  end)
+  KnobFarm.SetStatus("Flying into Room " .. tostring(roomNum + 1) .. "...")
+  local floorPos = GetFloorPosition(doorCenter + passDir * 10.0)
+  local flyTarget = floorPos and (floorPos + Vector3.new(0, 2.0, 0)) or (doorCenter + passDir * 10.0)
+  PhaseFlyTo(flyTarget, nil, 2.0, 6.0)
+  task.wait(0.2)
 
-  -- 3. Move forward until obstacle is passed (moved >= 4.5 studs or timeout 2.0s)
-  local startPos = root.Position
-  local passStart = tick()
-  while KnobFarm.Active and not _Unloading do
-    local curPos = root.Position
-    local movedDist = (curPos - startPos).Magnitude
-    if movedDist >= 4.5 then
-      break
+  -- 7. Verify we entered next room
+  local curRoom, curNum = GetPlayerCurrentRoom()
+  local passedSuccessfully = false
+  if curNum and curNum > roomNum then
+    passedSuccessfully = true
+  else
+    local distPast = (root.Position - doorCenter):Dot(passDir)
+    if distPast > 4.0 then
+      passedSuccessfully = true
     end
-    if tick() - passStart > 2.0 then
-      break
-    end
-    hum:Move(moveDir, false)
-    task.wait(0.04)
   end
 
-  -- 4. Turn OFF Phase
-  pcall(function()
-    if toggles and toggles.Phase and toggles.Phase.Value then
-      toggles.Phase:SetValue(false)
-    end
-    Phase.TargetPosition = nil
-    Phase.Speed = nil
-  end)
+  -- 8. Turn off Phase AFTER passing through
+  if toggles.Phase and toggles.Phase.Value then
+    toggles.Phase:SetValue(false)
+  end
+  Phase.TargetPosition = nil
+  Phase.Speed = nil
 
-  KnobFarm.LastPosition = root.Position
-  KnobFarm.LastMoveTime = tick()
-  KnobFarm.SetStatus("Obstacle cleared. Resuming run...")
+  if passedSuccessfully then
+    if reason == "Door 1" or roomNum == 0 then
+      KnobFarm.PassedFirstDoor = true
+      SetCrouched(true)
+      pcall(function()
+        if options and options.Walkspeed then
+          local desiredSpeed = (options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
+          options.Walkspeed:SetValue(desiredSpeed)
+        end
+        if toggles and toggles.Godmode and not toggles.Godmode.Value then
+          toggles.Godmode:SetValue(true)
+        end
+        if options and options.GodmodeMethod then
+          options.GodmodeMethod:SetValue("On entity spawn")
+        end
+      end)
+    else
+      KnobFarm.PassedPhaseRooms[room] = true
+    end
+    KnobFarm.SetStatus(tostring(reason) .. " passed! Phase OFF.")
+  else
+    KnobFarm.SetStatus(tostring(reason) .. " not completed, retrying...")
+  end
+  task.wait(0.2)
+  return passedSuccessfully
 end
 
 local function FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
@@ -12414,11 +12530,6 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not char or not root or not hum or hum.Health <= 0 then
       completed = true
-      return
-    end
-
-    if roomNum and ((roomNum >= 30 and roomNum <= 40) or (roomNum >= 80 and roomNum <= 90)) and HasRushAmbushBlitz() then
-      hum:Move(Vector3.zero, false)
       return
     end
 
@@ -12505,7 +12616,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     end
   end)
 
-  -- Wait loop with threat pause, stuck detection, and early interaction
+  -- Wait loop with stuck detection and early interaction
   while not completed and KnobFarm.Active and not _Unloading do
     task.wait(0.04)
 
@@ -12519,15 +12630,7 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then break end
 
-    -- 3. Threat check: pause on the spot in rooms 30-40 and 80-90
-    if roomNum and ((roomNum >= 30 and roomNum <= 40) or (roomNum >= 80 and roomNum <= 90)) then
-      if HasRushAmbushBlitz() then
-        hum:Move(Vector3.zero, false)
-        WaitForThreats(roomNum)
-      end
-    end
-
-    -- 6. Stuck detection: camera turns towards path, Phase turns on until obstacle passed
+    -- Stuck detection: if barely moved in 1.8 seconds, rotate camera to path & activate Phase until cleared
     if not lastRootPos then
       lastRootPos = root.Position
       lastProgressTime = tick()
@@ -12536,18 +12639,52 @@ local function FollowPath(waypoints, target, targetPos, targetType, room, roomNu
       if moved > 1.2 then
         lastRootPos = root.Position
         lastProgressTime = tick()
-      elseif tick() - lastProgressTime > 1.2 then
-        local curWp = waypoints[wpIndex]
-        local aimPoint = (curWp and curWp.Position) or targetPos
-        HandleStuck(aimPoint)
+      elseif tick() - lastProgressTime > 1.8 then
+        local targetPoint = (curWp and curWp.Position) or targetPos
+        local cam = workspace.CurrentCamera
+        if cam and targetPoint then
+          pcall(function()
+            cam.CFrame = CFrame.new(cam.CFrame.Position, Vector3.new(targetPoint.X, cam.CFrame.Position.Y, targetPoint.Z))
+          end)
+        end
+
+        pcall(function()
+          if toggles.Phase and not toggles.Phase.Value then
+            toggles.Phase:SetValue(true)
+          end
+        end)
+
+        local stuckStartPos = root.Position
+        local phaseStart = tick()
+        while tick() - phaseStart < 2.5 and KnobFarm.Active and not _Unloading do
+          local distToTarget = (targetPoint - root.Position).Magnitude
+          local distFromStuck = (root.Position - stuckStartPos).Magnitude
+          if distFromStuck > 3.5 or distToTarget < 2.5 then
+            break -- Obstacle passed!
+          end
+          local dir = (targetPoint - root.Position)
+          local flatDir = Vector3.new(dir.X, 0, dir.Z)
+          if flatDir.Magnitude > 0.1 then
+            hum:Move(flatDir.Unit, false)
+          end
+          task.wait(0.05)
+        end
+
+        pcall(function()
+          if toggles.Phase and toggles.Phase.Value then
+            toggles.Phase:SetValue(false)
+          end
+          Phase.TargetPosition = nil
+          Phase.Speed = nil
+        end)
+
+        if targetType == "Drawer" and tick() - lastProgressTime > 3.0 then
+          break -- drawer stuck, don't waste time
+        elseif tick() - lastProgressTime > 4.5 then
+          break -- recompute path
+        end
         lastRootPos = root.Position
         lastProgressTime = tick()
-        if curWp and (root.Position - curWp.Position).Magnitude < 3.0 and wpIndex < #waypoints then
-          wpIndex = wpIndex + 1
-        end
-        if targetType == "Drawer" and tick() - lastProgressTime > 2.0 then
-          break -- drawer stuck, don't waste time
-        end
       end
     end
 
@@ -12856,18 +12993,36 @@ local function handleRoom100(room)
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not root or not hum then return end
+  if not root then return end
 
-  -- 1. Предварительно проверить, что нету сущностей по типу раша
-  if HasRushAmbushBlitz() then
-    KnobFarm.SetStatus("Room 100: Waiting for threats...")
-    while HasRushAmbushBlitz() and KnobFarm.Active and not _Unloading do
-      task.wait(0.2)
+  -- 0. Check threats before disabling Godmode
+  local threatNames = {
+    RushMoving = true, Rush = true,
+    AmbushMoving = true, Ambush = true,
+    BlitzMoving = true, Blitz = true,
+    ["RNIUSHCG=="] = true, AR0xMBUSH = true,
+    GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
+  }
+  local function hasThreat()
+    if val83 and val83.ActiveThreats then
+      for threat, active in pairs(val83.ActiveThreats) do
+        if active and threat and threat.Parent and threatNames[threat.Name] then return true end
+      end
+    end
+    for name in pairs(threatNames) do
+      if workspace:FindFirstChild(name) then return true end
+    end
+    return false
+  end
+
+  if hasThreat() then
+    KnobFarm.SetStatus("Room 100: Threat detected! Waiting before disabling Godmode...")
+    while hasThreat() and KnobFarm.Active and not _Unloading do
+      task.wait(0.3)
     end
     task.wait(0.5)
   end
 
-  -- 2. Годмод выключен
   KnobFarm.DisableGodmodeForBoss = true
   pcall(function()
     if toggles and toggles.Godmode and toggles.Godmode.Value then
@@ -12875,17 +13030,16 @@ local function handleRoom100(room)
     end
   end)
 
-  -- 3. Телепорт к Breaker Switch (чтобы бот собрал всех)
-  KnobFarm.SetStatus("Room 100: Teleporting to Breaker Switches / Fuses...")
+  -- 1. Teleport to all Breaker Switches & Fuses (collect all)
+  KnobFarm.SetStatus("Room 100: Teleporting to Breaker Switches & Fuses...")
   for _, desc in ipairs(room:GetDescendants()) do
     if not KnobFarm.Active or _Unloading then break end
     local isFuse = desc.Name == "FusePickup" or desc.Name == "FuseObtain" or desc.Name == "Fuse"
-      or desc.Name == "LiveBreakerPolePickup" or desc.Name == "BreakerSwitch" or desc.Name == "BreakerSwitchObtain"
+      or desc.Name == "LiveBreakerPolePickup" or desc.Name == "Breaker Switch" or desc.Name == "BreakerSwitch"
     if not isFuse and desc:IsA("ProximityPrompt") then
-      local objText = desc.ObjectText:lower()
-      local actText = desc.ActionText:lower()
-      if objText:find("fuse") or objText:find("breaker") or objText:find("switch")
-          or actText:find("fuse") or actText:find("breaker") or actText:find("switch") then
+      local ot = desc.ObjectText:lower()
+      local at = desc.ActionText:lower()
+      if ot:find("fuse") or at:find("fuse") or ot:find("breaker") or ot:find("switch") then
         isFuse = true
       end
     end
@@ -12901,112 +13055,73 @@ local function handleRoom100(room)
     end
   end
 
-  -- 4. Далее бот телепортируется к Electrical Room Key
-  KnobFarm.SetStatus("Room 100: Teleporting to Electrical Room Key...")
-  local elecKey = room:FindFirstChild("ElectricalKeyObtain", true)
-    or room:FindFirstChild("KeyElectrical", true)
-    or room:FindFirstChild("ElectricalKey", true)
-  if not elecKey then
-    for _, desc in ipairs(room:GetDescendants()) do
-      if desc.Name:lower():find("electrical") and desc.Name:lower():find("key") then
-        elecKey = desc
-        break
-      end
-      if desc:IsA("ProximityPrompt") and desc.ObjectText:lower():find("electrical") and desc.ObjectText:lower():find("key") then
-        elecKey = desc.Parent
-        break
-      end
-    end
-  end
-
+  -- 2. Teleport to Electrical Room Key
+  local elecKey = room:FindFirstChild("ElectricalKeyObtain", true) or room:FindFirstChild("KeyElectrical", true)
+    or room:FindFirstChild("Electrical Key", true) or room:FindFirstChild("ElectricalRoomKey", true)
   if elecKey and root then
+    KnobFarm.SetStatus("Room 100: Teleporting to Electrical Room Key...")
     local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
     if kPos then
       root.CFrame = CFrame.new(kPos + Vector3.new(0, 1.2, 0))
-      local kPr = elecKey:FindFirstChildWhichIsA("ProximityPrompt", true) or (elecKey:IsA("ProximityPrompt") and elecKey)
+      local kPr = elecKey:FindFirstChildWhichIsA("ProximityPrompt", true)
       if kPr then TriggerPrompt(kPr) end
       task.wait(0.25)
     end
   end
 
-  -- 5. И идет к двери, открывает ее
-  KnobFarm.SetStatus("Room 100: Walking to Electrical Door...")
-  local elecDoor = room:FindFirstChild("ElectricalDoor", true)
-    or room:FindFirstChild("ElectricalGate", true)
-    or room:FindFirstChild("KeyElectrical", true)
-    or room:FindFirstChild("ElectricalLock", true)
-
-  local elecDoorPos = nil
-  if elecDoor then
-    elecDoorPos = (elecDoor:IsA("BasePart") and elecDoor.Position) or (elecDoor:IsA("Model") and elecDoor:GetPivot().Position)
-  end
-
-  if elecDoorPos and root and hum then
-    hum:MoveTo(elecDoorPos)
-    local t = tick()
-    while (root.Position - elecDoorPos).Magnitude > 4.0 and (tick() - t < 5.0) and KnobFarm.Active and not _Unloading do
-      hum:MoveTo(elecDoorPos)
-      task.wait(0.1)
-    end
-
+  -- 3. Walk to Electrical Room door and unlock
+  local elecLock = room:FindFirstChild("KeyElectrical", true) or room:FindFirstChild("ElectricalLock", true)
+  local elecDoor = room:FindFirstChild("ElectricalDoor", true) or (elecLock and elecLock:FindFirstAncestorWhichIsA("Model"))
+  if elecLock or elecDoor then
+    KnobFarm.SetStatus("Room 100: Walking to Electrical Door...")
     local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-    local keyTool = (char and (char:FindFirstChild("KeyElectrical") or char:FindFirstChild("ElectricalKey")))
-      or (bp and (bp:FindFirstChild("KeyElectrical") or bp:FindFirstChild("ElectricalKey")))
-    if keyTool and keyTool.Parent ~= char then
+    local keyTool = (char and char:FindFirstChild("KeyElectrical")) or (bp and bp:FindFirstChild("KeyElectrical"))
+      or (char and char:FindFirstChild("ElectricalKeyObtain")) or (bp and bp:FindFirstChild("ElectricalKeyObtain"))
+    if keyTool and hum and keyTool.Parent ~= char then
       pcall(function() hum:EquipTool(keyTool) end)
       task.wait(0.15)
     end
 
-    for _, pr in ipairs(elecDoor:GetDescendants()) do
-      if pr:IsA("ProximityPrompt") and pr.Enabled then
-        TriggerPrompt(pr)
-      end
-    end
-    if elecDoor:IsA("ProximityPrompt") and elecDoor.Enabled then
-      TriggerPrompt(elecDoor)
-    end
-    task.wait(0.3)
-  end
-
-  -- 6. Затем дергает рычаг
-  KnobFarm.SetStatus("Room 100: Pulling Gate Lever...")
-  local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
-  if lever and root and hum then
-    local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
-    if lPos then
-      hum:MoveTo(lPos)
-      local t = tick()
-      while (root.Position - lPos).Magnitude > 4.0 and (tick() - t < 4.0) and KnobFarm.Active and not _Unloading do
-        hum:MoveTo(lPos)
-        task.wait(0.1)
-      end
-      local lPr = lever:FindFirstChildWhichIsA("ProximityPrompt", true) or (lever:IsA("ProximityPrompt") and lever)
+    local lockPart = (elecLock and elecLock:IsA("BasePart") and elecLock)
+      or (elecLock and elecLock:FindFirstChildWhichIsA("BasePart", true))
+      or (elecDoor and elecDoor:FindFirstChildWhichIsA("BasePart", true))
+    if lockPart and root then
+      local lockPos = lockPart.Position
+      hum:MoveTo(lockPos)
+      task.wait(0.3)
+      root.CFrame = CFrame.new(lockPos + Vector3.new(0, 1.2, 0))
+      local lPr = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
+        or (elecDoor and elecDoor:FindFirstChildWhichIsA("ProximityPrompt", true))
       if lPr then TriggerPrompt(lPr) end
       task.wait(0.25)
     end
   end
 
-  -- 7. И сразу бежит к щитку
-  KnobFarm.SetStatus("Room 100: Running to Breaker Panel...")
+  -- 4. Pull gate lever and run to Breaker Panel
+  local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
+  if lever and root then
+    KnobFarm.SetStatus("Room 100: Pulling Gate Lever...")
+    local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
+    if lPos then
+      root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
+      local lPr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if lPr then TriggerPrompt(lPr) end
+      task.wait(0.25)
+    end
+  end
+
   local breaker = room:FindFirstChild("ElevatorBreaker", true) or workspace:FindFirstChild("ElevatorBreaker")
-  if breaker and root and hum then
+  if breaker and root then
+    KnobFarm.SetStatus("Room 100: Running to Breaker Panel...")
     local bPos = (breaker:IsA("BasePart") and breaker.Position) or (breaker:IsA("Model") and breaker:GetPivot().Position)
     if bPos then
-      hum:MoveTo(bPos)
-      local t = tick()
-      while (root.Position - bPos).Magnitude > 4.0 and (tick() - t < 5.0) and KnobFarm.Active and not _Unloading do
-        hum:MoveTo(bPos)
-        task.wait(0.1)
-      end
+      root.CFrame = CFrame.new(bPos + Vector3.new(0, 1.2, 2.5))
       for _, bPr in ipairs(breaker:GetDescendants()) do
-        if bPr:IsA("ProximityPrompt") then
-          TriggerPrompt(bPr)
-        end
+        if bPr:IsA("ProximityPrompt") then TriggerPrompt(bPr) end
       end
       task.wait(0.5)
 
-      -- 8. Выполнение щитка
-      KnobFarm.SetStatus("Room 100: Solving Breaker Box...")
+      -- Solve breaker minigame
       if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
         pcall(function() remotesFolder2.EBF:FireServer() end)
       end
@@ -13014,21 +13129,20 @@ local function handleRoom100(room)
     end
   end
 
-  -- 9. После выполнения щитка телепорт в лифт
-  KnobFarm.SetStatus("Room 100: Teleporting to Elevator...")
+  -- 5. Teleport into Elevator
   local elevator = room:FindFirstChild("ElevatorCar", true)
     or room:FindFirstChild("Elevator", true)
     or workspace:FindFirstChild("ElevatorCar")
 
   if elevator and root then
+    KnobFarm.SetStatus("Room 100: Teleporting into Elevator...")
     local ePos = elevator:GetPivot().Position
     root.CFrame = CFrame.new(ePos + Vector3.new(0, 2.0, 0))
-    task.wait(0.2)
     local ePr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
     if ePr then TriggerPrompt(ePr) end
   end
 
-  -- 10. При прохождении игры бот ждёт 10 секунд и нажимает play again (Requirement 7)
+  -- 6. Game complete: wait 10 seconds and Play Again
   KnobFarm.SetStatus("Game Completed! Waiting 10s for Play Again...")
   task.wait(10.0)
   pcall(function()
@@ -13115,21 +13229,22 @@ local function ExecuteAutoDoorSkip(room, roomNum)
   -- 3. Gate handling (if present)
   local hasGate, gate, lever = HasRoomGate(room)
   if hasGate and gate and not KnobFarm.PassedGates[gate] then
-    pcall(function()
-      for _, gp in ipairs(gate:GetDescendants()) do
-        if gp:IsA("BasePart") then gp.CanCollide = false end
+    if lever then
+      local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
+      if leverPart then
+        root.CFrame = leverPart.CFrame * CFrame.new(0, 0, 2.5)
+        local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr then TriggerPrompt(pr) end
+        task.wait(0.2)
       end
-    end)
-    KnobFarm.PassedGates[gate] = true
-  end
-  if lever and lever.Parent then
-    local lPos = GetInstancePosition(lever) or (lever:IsA("Model") and lever:GetPivot().Position)
-    if lPos and root then
-      root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
-      local pr = lever:FindFirstChildWhichIsA("ProximityPrompt", true) or (lever:IsA("ProximityPrompt") and lever)
-      if pr then TriggerPrompt(pr) end
-      task.wait(0.2)
     end
+    local gatePos = GetInstancePosition(gate) or (gate:IsA("Model") and gate:GetPivot().Position)
+    if gatePos then
+      root.CFrame = CFrame.new(gatePos + Vector3.new(0, 1.2, 0))
+    end
+    PhaseTemporary(3.0)
+    KnobFarm.PassedGates[gate] = true
+    task.wait(0.15)
   end
 
   -- 4. Key handling and Unlock (ensured for locked doors and Room 0)
@@ -13291,12 +13406,11 @@ function KnobFarm.RunLoop()
         continue
       end
 
-      -- ── 7. Death handler: wait 10s and Play Again ─────────
+      -- ── 9. Death handler: wait 10s and Play Again ─────────
       if hum.Health <= 0 then
         KnobFarm.SetStatus("Dead. Waiting 10s for Play Again...")
         ClearPathNodes()
         KnobFarm.PassedFirstDoor = false
-        KnobFarm.PassedSpecialRooms = setmetatable({}, { __mode = "k" })
         KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
         KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
         KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
@@ -13324,7 +13438,6 @@ function KnobFarm.RunLoop()
         KnobFarm.SetStatus("Waiting for rooms...")
         ClearPathNodes()
         KnobFarm.PassedFirstDoor = false
-        KnobFarm.PassedSpecialRooms = setmetatable({}, { __mode = "k" })
         KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
         KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
         KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
@@ -13347,63 +13460,62 @@ function KnobFarm.RunLoop()
       end
       KnobFarm.CurrentRoomNum = roomNum
 
-      -- ── 6. Stuck detection: camera rotates to path & Phase until obstacle cleared ─
+      -- ── 8. Stuck detection: Turn camera towards path & Phase ────────────
       if IsStuck() then
+        KnobFarm.SetStatus("Stuck detected! Turning camera & Phase...")
+        local cam = workspace.CurrentCamera
         local target, targetPos = GetRoomTarget(room)
-        HandleStuck(targetPos)
-        continue
-      end
-
-      -- ── 1. Room 0 / Door 1: Auto Door Skip -> Key -> Door -> Pass -> Crouch Run + Godmode
-      if not KnobFarm.PassedFirstDoor then
-        local success = ExecuteAutoDoorSkip(room, roomNum)
-        if success then
-          KnobFarm.PassedFirstDoor = true
-          SetCrouched(true)
+        if cam and targetPos then
           pcall(function()
-            if options and options.Walkspeed then
-              local desiredSpeed = (options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 22
-              options.Walkspeed:SetValue(desiredSpeed)
-            end
-            if toggles and toggles.Godmode and not toggles.Godmode.Value then
-              toggles.Godmode:SetValue(true)
-            end
-            if options and options.GodmodeMethod then
-              options.GodmodeMethod:SetValue("On entity spawn")
-            end
+            cam.CFrame = CFrame.new(cam.CFrame.Position, Vector3.new(targetPos.X, cam.CFrame.Position.Y, targetPos.Z))
           end)
         end
+        PhaseTemporary(2.5)
+        KnobFarm.LastPosition = root.Position
+        KnobFarm.LastMoveTime = tick()
         continue
       end
 
-      -- ── 4. Room 50 (Figure): Godmode OFF, Teleport Books & Paper, then Door ──
+      -- ── 1. Room 0 / Door 1: Phase Rush to Door 1 -> Crouch Run + Godmode
+      if not KnobFarm.PassedFirstDoor or roomNum == 0 then
+        ExecutePhaseRush(room, roomNum, "Door 1")
+        continue
+      end
+
+      -- ── 2. Threat wait: ONLY in Seek zones (30-40, 80-90) ──
+      WaitForThreats(roomNum)
+
+      -- ── 3. Room 50 (Figure): Godmode OFF, Teleport to Books & Paper, then Door ──
       if roomNum == 50 then
         handleRoom50(room, room:FindFirstChild("Door"))
         continue
       end
 
-      -- ── 5. Room 100 (Figure): Check threats, Godmode OFF, Breaker Switches, Key, Door, Lever, Breaker, Elevator ─
+      -- ── 4. Room 100 (Figure): Check threats, Godmode OFF, Teleport Fuses, Lever & Breaker ──
       if roomNum >= 100 then
         handleRoom100(room)
         continue
       end
 
-      -- ── 2. Gate (ThingToOpen) or Special Door (DoorLattice): Auto Door Skip ─
-      if IsGateOrSpecialDoorRoom(room) and not KnobFarm.PassedSpecialRooms[room] then
+      -- ── 5. Seek zones (30-40, 80-90): ONLY Teleport (Auto Door Skip), NO running! ──
+      if isSeekThreatZone(room, roomNum) and roomNum ~= 50 and roomNum < 100 then
+        ExecuteAutoDoorSkip(room, roomNum)
+        continue
+      end
+
+      -- ── 6. Special Obstacle Rooms (Gate / ThingToOpen / DoorLattice in ANY room): Auto Door Skip ──
+      if IsSpecialObstacleRoom(room) and not KnobFarm.PassedPhaseRooms[room] then
         local success = ExecuteAutoDoorSkip(room, roomNum)
         if success then
-          KnobFarm.PassedSpecialRooms[room] = true
+          KnobFarm.PassedPhaseRooms[room] = true
         end
         continue
       end
 
-      -- ── 3. Threat wait (Rush/Ambush/Blitz): ONLY in rooms 30-40 and 80-90 ──
-      WaitForThreats(roomNum)
-
-      -- ── 1. Fast Loot Room (Client-visible Gold & Stardust teleport) ─
+      -- ── 2. Fast Loot Room (Visible Gold & Stardust teleport) ─
       TeleportLootRoom(room)
 
-      -- ── 1. Unlocked drawers / chests in room: run to them along the way ───
+      -- ── 2. Unlocked drawers / chests in room: run to them ───
       local drawers = LootDrawersInRoom(room)
       if drawers and #drawers > 0 then
         for _, drawer in ipairs(drawers) do
@@ -13436,7 +13548,7 @@ function KnobFarm.RunLoop()
         end
       end
 
-      -- ── 1. Primary Goal: Key (if locked) then Exit Door (ground crouch run at speed 22) ──
+      -- ── Primary Goal: Key or Exit Door ──────────────────────
       local target, targetPos, targetType = GetRoomTarget(room)
       if not target or not targetPos then
         KnobFarm.SetStatus("Searching path (Room " .. tostring(roomNum) .. ")...")
@@ -13475,6 +13587,7 @@ function KnobFarm.RunLoop()
       end
 
       if not path or path.Status ~= Enum.PathStatus.Success then
+        -- Micro-agent for narrow sub-room doorways
         path = pathfindingService:CreatePath({
           AgentCanJump = true,
           AgentCanClimb = false,
@@ -13492,8 +13605,7 @@ function KnobFarm.RunLoop()
         local waypoints = path:GetWaypoints()
         FollowPath(waypoints, target, targetPos, targetType, room, roomNum)
       else
-        KnobFarm.SetStatus("Path obstructed (Room " .. tostring(roomNum) .. "), clearing...")
-        HandleStuck(targetPos)
+        KnobFarm.SetStatus("Path obstructed (Room " .. tostring(roomNum) .. "), calculating...")
         task.wait(0.2)
       end
     end
@@ -13514,7 +13626,6 @@ function KnobFarm.Start()
   if KnobFarm.Active then return end
   KnobFarm.Active = true
   KnobFarm.PassedFirstDoor = false
-  KnobFarm.PassedSpecialRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
   KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
@@ -13561,7 +13672,6 @@ function KnobFarm.Stop()
   KnobFarm.Active = false
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.PassedFirstDoor = false
-  KnobFarm.PassedSpecialRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.PassedPhaseRooms = setmetatable({}, { __mode = "k" })
   KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
   KnobFarm.PassedGates = setmetatable({}, { __mode = "k" })
