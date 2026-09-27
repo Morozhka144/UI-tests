@@ -12285,6 +12285,194 @@ end
 
 KnobFarm.RecoverFromVoid = RecoverFromVoid
 
+local function HasCeilingAbove(pos, maxDist)
+  if not pos then return false, nil, nil end
+  local rayParams = RaycastParams.new()
+  rayParams.FilterType = Enum.RaycastFilterType.Exclude
+  local char = localPlayer2 and localPlayer2.Character
+  local filter = {}
+  if char then table.insert(filter, char) end
+  if val85 and val85.HotelNodesFolder then table.insert(filter, val85.HotelNodesFolder) end
+  rayParams.FilterDescendantsInstances = filter
+
+  local rayOrigin = pos + Vector3.new(0, 1.5, 0)
+  local rayDir = Vector3.new(0, maxDist or 35, 0)
+  local hit = workspace:Raycast(rayOrigin, rayDir, rayParams)
+  if hit and hit.Instance then
+    return true, hit.Position, hit.Instance
+  end
+  return false, nil, nil
+end
+
+local function IsOnRoof(room)
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then return false end
+
+  -- Если прямо над головой есть потолок/люстра/балка, бот внутри комнаты
+  local hasCeil = HasCeilingAbove(root.Position, 35)
+  if hasCeil then
+    return false
+  end
+
+  -- Потолка нет — определяем текущую комнату
+  local curR = room
+  if not curR then
+    local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+    if KnobFarm and KnobFarm.CurrentRoomNum and roomsFolder then
+      curR = roomsFolder:FindFirstChild(tostring(KnobFarm.CurrentRoomNum))
+    end
+    if not curR and roomsFolder then
+      local maxNum = -1
+      for _, r in ipairs(roomsFolder:GetChildren()) do
+        local n = tonumber(r.Name)
+        if n and n > maxNum then
+          maxNum = n
+          curR = r
+        end
+      end
+    end
+  end
+
+  local entrance = curR and (curR:FindFirstChild("RoomEntrance") or curR:FindFirstChild("RoomExit"))
+  local baseY = entrance and entrance.Position.Y
+  if not baseY and curR then
+    local floor = curR:FindFirstChild("Floor", true) or curR:FindFirstChild("Parts", true)
+    if floor and floor:IsA("BasePart") then baseY = floor.Position.Y end
+  end
+
+  -- Исключение: Courtyard (двор / сад с фонтаном на открытом воздухе на уровне земли)
+  local isCourtyard = curR and (curR:FindFirstChild("Fountain", true) or (curR:FindFirstChild("Assets") and curR.Assets:FindFirstChild("Fountain")))
+  if isCourtyard and baseY and math.abs(root.Position.Y - baseY) < 5 then
+    return false
+  end
+
+  -- 1. Проверяем пол под ногами: содержит ли имя детали/родителя "roof", "ceiling", "top"
+  local hasF, floorPos, floorInst = HasFloorUnder(root.Position, 25)
+  if hasF and floorInst then
+    local fn = floorInst.Name:lower()
+    local fp = (floorInst.Parent and floorInst.Parent.Name:lower()) or ""
+    if fn:find("roof") or fn:find("ceiling") or fp:find("roof") or fp:find("ceiling") then
+      return true
+    end
+  end
+
+  -- 2. Проверяем высоту относительно пола: если бот выше пола комнаты на 13+ стадов и потолка нет
+  if baseY and (root.Position.Y - baseY) > 13 then
+    return true
+  end
+
+  -- 3. Если это обычная комната отеля (не двор) и над головой нет потолка — это крыша
+  if not isCourtyard then
+    return true
+  end
+
+  return false
+end
+
+local isRecoveringFromRoof = false
+local function RecoverFromRoof(room)
+  if isRecoveringFromRoof then return end
+  isRecoveringFromRoof = true
+
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then
+    isRecoveringFromRoof = false
+    return
+  end
+
+  if KnobFarm and KnobFarm.SetStatus then
+    KnobFarm.SetStatus("Landed on roof! Returning inside room...")
+  end
+
+  -- 1. Выключаем ноуклип
+  local wasPhantom = false
+  local wasNoclip = false
+  pcall(function()
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      wasPhantom = true
+      toggles.PhantomNoclip:SetValue(false)
+    end
+    if toggles and toggles.Noclip and toggles.Noclip.Value then
+      wasNoclip = true
+      toggles.Noclip:SetValue(false)
+    end
+  end)
+
+  -- 2. Включаем коллизию персонажа (чтобы не провалиться сквозь пол)
+  pcall(function()
+    if char then
+      for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+          p.CanCollide = true
+        end
+      end
+    end
+  end)
+
+  -- 3. Находим безопасную точку входа текущей комнаты
+  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+  local curR = room
+  if not curR and roomsFolder then
+    if KnobFarm and KnobFarm.CurrentRoomNum then
+      curR = roomsFolder:FindFirstChild(tostring(KnobFarm.CurrentRoomNum))
+    end
+    if not curR and roomsFolder then
+      local maxNum = -1
+      for _, r in ipairs(roomsFolder:GetChildren()) do
+        local n = tonumber(r.Name)
+        if n and n > maxNum then
+          maxNum = n
+          curR = r
+        end
+      end
+    end
+  end
+
+  local safePart = curR and (curR:FindFirstChild("RoomEntrance") or curR:FindFirstChild("RoomExit"))
+  local safePos = nil
+  if safePart and safePart:IsA("BasePart") then
+    safePos = safePart.Position + Vector3.new(0, 3, 0)
+  elseif curR then
+    local floor = curR:FindFirstChild("Floor", true) or curR:FindFirstChild("Parts", true)
+    if floor and floor:IsA("BasePart") then
+      safePos = floor.Position + Vector3.new(0, 4, 0)
+    end
+  end
+
+  if safePos and root then
+    root.CFrame = CFrame.new(safePos)
+    root.AssemblyLinearVelocity = Vector3.zero
+  end
+
+  task.wait(0.4)
+
+  -- 4. Возвращаем ноуклип если был активен
+  pcall(function()
+    if wasPhantom and toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+      toggles.PhantomNoclip:SetValue(true)
+    end
+    if wasNoclip and toggles and toggles.Noclip and not toggles.Noclip.Value then
+      toggles.Noclip:SetValue(true)
+    end
+  end)
+
+  if safePos and root then
+    root.AssemblyLinearVelocity = Vector3.zero
+  end
+
+  if KnobFarm and KnobFarm.SetStatus then
+    KnobFarm.SetStatus("Returned inside from roof! Resuming...")
+  end
+
+  isRecoveringFromRoof = false
+end
+
+KnobFarm.HasCeilingAbove = HasCeilingAbove
+KnobFarm.IsOnRoof = IsOnRoof
+KnobFarm.RecoverFromRoof = RecoverFromRoof
+
 local function HasLockpick()
   if Functions and Functions.HasItem then
     local lp = Functions.HasItem("Lockpick") or Functions.HasItem("Lockpicks")
@@ -13804,14 +13992,6 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       return
     end
 
-    local curDesiredSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
-      or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or desiredSpeed
-    if options and options.Walkspeed and options.Walkspeed.Value ~= curDesiredSpeed then
-      options.Walkspeed:SetValue(curDesiredSpeed)
-    elseif h and h.WalkSpeed ~= curDesiredSpeed then
-      h.WalkSpeed = curDesiredSpeed
-    end
-
     local rootPos = root.Position
 
     -- Advance waypoint index forward: строго по перпендикулярным прямым без срезания углов
@@ -13865,6 +14045,40 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     local targetPoint = (curWp and ((typeof(curWp) == "Vector3" and curWp) or curWp.Position)) or targetPos
     currentTargetPoint = targetPoint
 
+    -- Проверка спуска по лестнице / крутому уклону вниз
+    local isDescending = false
+    local dy = targetPoint.Y - rootPos.Y
+    if dy < -0.6 then
+      isDescending = true
+    else
+      local hasF, _, floorPart = HasFloorUnder(rootPos, 4)
+      if floorPart then
+        local pName = floorPart.Name:lower()
+        local parName = (floorPart.Parent and floorPart.Parent.Name:lower()) or ""
+        if (pName:find("stair") or pName:find("step") or parName:find("stair") or parName:find("step")) and dy < 0.2 then
+          isDescending = true
+        end
+      end
+    end
+
+    local curDesiredSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
+      or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or desiredSpeed
+
+    -- Защита от катапультирования на лестнице: на спуске ограничиваем скорость до 16-17 стадов/сек
+    if isDescending then
+      curDesiredSpeed = math.min(curDesiredSpeed, 17)
+      -- Обнуляем вертикальный подброс вверх от ступенек (чтобы бот не взлетал в потолок)
+      if root.AssemblyLinearVelocity.Y > 0.3 then
+        root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+      end
+    end
+
+    if options and options.Walkspeed and options.Walkspeed.Value ~= curDesiredSpeed then
+      options.Walkspeed:SetValue(curDesiredSpeed)
+    elseif h and h.WalkSpeed ~= curDesiredSpeed then
+      h.WalkSpeed = curDesiredSpeed
+    end
+
     local steerX = targetPoint.X - rootPos.X
     local steerZ = targetPoint.Z - rootPos.Z
     local steerDist = math.sqrt(steerX * steerX + steerZ * steerZ)
@@ -13893,8 +14107,8 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       h:Move(Vector3.zero, false)
     end
 
-    -- Jump action
-    if curWp and curWp.Action == Enum.PathWaypointAction.Jump then
+    -- Jump action (строго запрещен на спуске с лестниц!)
+    if curWp and curWp.Action == Enum.PathWaypointAction.Jump and not isDescending then
       h.Jump = true
     end
 
@@ -13927,6 +14141,13 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       break
     end
 
+    -- Защита от попадания на крышу: если бот вылетел на крышу над комнатой
+    if IsOnRoof(room) then
+      RecoverFromRoof(room)
+      completed = true
+      break
+    end
+
     -- Stuck detection: if barely moved in 1.8 seconds, rotate camera to path & activate Phase until cleared
     if not lastRootPos then
       lastRootPos = root.Position
@@ -13945,7 +14166,22 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
           end)
         end
 
-        h.Jump = true
+        local isDesc = false
+        if targetPoint and (targetPoint.Y - root.Position.Y) < -0.5 then
+          isDesc = true
+        else
+          local hasF, _, floorPart = HasFloorUnder(root.Position, 4)
+          if floorPart then
+            local pName = floorPart.Name:lower()
+            if pName:find("stair") or pName:find("step") then
+              isDesc = true
+            end
+          end
+        end
+
+        if not isDesc then
+          h.Jump = true
+        end
 
         if targetType == "Drawer" and tick() - lastProgressTime > 3.0 then
           break
@@ -14843,8 +15079,12 @@ function KnobFarm.RunLoop()
 
       -- 4. Stuck detection
       if IsStuck() then
-        KnobFarm.SetStatus("Stuck detected! Jumping & recovering...")
-        hum.Jump = true
+        KnobFarm.SetStatus("Stuck detected! Recovering...")
+        local hasF, _, floorPart = HasFloorUnder(root.Position, 4)
+        local isStair = floorPart and (floorPart.Name:lower():find("stair") or floorPart.Name:lower():find("step"))
+        if not isStair then
+          hum.Jump = true
+        end
         KnobFarm.LastPosition = root.Position
         KnobFarm.LastMoveTime = tick()
         continue
@@ -14853,6 +15093,12 @@ function KnobFarm.RunLoop()
       -- 4.1. Void / Fall detection: падение в пустоту (выкл ноуклип на 3 сек и ре-энейбл)
       if not HasFloorUnder(root.Position, 25) then
         RecoverFromVoid(room)
+        continue
+      end
+
+      -- 4.2. Roof detection: бот улетел на крышу над комнатой
+      if IsOnRoof(room) then
+        RecoverFromRoof(room)
         continue
       end
 
