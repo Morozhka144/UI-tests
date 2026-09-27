@@ -2202,6 +2202,13 @@ Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmShowPath", {
   Tooltip = "Renders green neon pathfinding nodes along the walking path (like in the video)",
 })
 
+Groupboxes.AutoFarm_Settings:AddDropdown("AutoFarmMovementMode", {
+  Text = "Movement Mode",
+  Values = { "Straight", "Orthogonal" },
+  Default = "Straight",
+  Tooltip = "Straight: прямое плавное движение к цели. Orthogonal: движение строго под 90° вдоль осей X и Z.",
+})
+
 Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmSpeed", {
   Text = "Farm Speed",
   Min = 16,
@@ -2377,6 +2384,53 @@ do
     if isSeekUpcoming(currentRoom, currentRoomNum) then
       return true
     end
+    return false
+  end
+
+  local autoSkipSeekStartRoom = nil
+  local function isSeekChase(currentRoom, currentRoomNum)
+    local rep = game:GetService("ReplicatedStorage")
+    local gameData = rep:FindFirstChild("GameData")
+    local latestRoomVal = gameData and gameData:FindFirstChild("LatestRoom")
+    local curNum = tonumber(currentRoomNum) or (latestRoomVal and tonumber(latestRoomVal.Value)) or 0
+
+    -- Если погоня уже идет: 1-я погоня длится 5 комнат, 2-я — 10 комнат
+    if autoSkipSeekStartRoom then
+      local chaseLength = (autoSkipSeekStartRoom < 60) and 5 or 10
+      if curNum >= (autoSkipSeekStartRoom + chaseLength) then
+        autoSkipSeekStartRoom = nil
+        return false
+      end
+      local inChase = gameData and gameData:FindFirstChild("ChaseInSession")
+      if inChase and inChase.Value == false then
+        autoSkipSeekStartRoom = nil
+        return false
+      end
+      return true
+    end
+
+    local isStarting = false
+    if gameData then
+      local inChase = gameData:FindFirstChild("ChaseInSession")
+      if inChase and inChase.Value == true then
+        isStarting = true
+      end
+    end
+    if not isStarting and currentRoom then
+      local moving = currentRoom:FindFirstChild("SeekMoving")
+        or currentRoom:FindFirstChild("SeekMovingNewClone")
+        or currentRoom:FindFirstChild("SeekRig")
+      if moving then isStarting = true end
+      if currentRoom:FindFirstChild("TriggerEventCollision") or currentRoom:FindFirstChild("ChaseStartTrigger") then
+        isStarting = true
+      end
+    end
+
+    if isStarting and curNum > 0 then
+      autoSkipSeekStartRoom = curNum
+      return true
+    end
+
     return false
   end
 
@@ -2744,6 +2798,7 @@ do
   end
 
   local lastProcessedRoom = nil
+  local AutoDoorSkipInSeek = false
 
   task.spawn(function()
     while task.wait(0.1) do
@@ -2782,7 +2837,48 @@ do
             return
           end
 
-          -- Check threat wait: ONLY in rooms 30-40 and 80-90 (Seek chase zones)
+          -- Check Seek chase: turn off noclip & ONLY skip door (everything else disabled!)
+          if isSeekChase(currentRoom, currentRoomNum) then
+            AutoDoorSkipInSeek = true
+            pcall(function()
+              if toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+                toggles.PhantomNoclip:SetValue(false)
+              end
+              if toggles.Noclip and toggles.Noclip.Value then
+                toggles.Noclip:SetValue(false)
+              end
+              local char = localPlayer2.Character
+              if char then
+                for _, p in ipairs(char:GetDescendants()) do
+                  if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                    p.CanCollide = true
+                  end
+                end
+              end
+            end)
+
+            if door then
+              openRoomDoor(door)
+            end
+            return
+          elseif AutoDoorSkipInSeek then
+            -- Погоня Сика завершилась: выключаем скип и включаем фарм!
+            AutoDoorSkipInSeek = false
+            pcall(function()
+              if toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
+                toggles.AutoDoorSkip:SetValue(false)
+              end
+              if toggles.AutoFarmEnabled and not toggles.AutoFarmEnabled.Value then
+                toggles.AutoFarmEnabled:SetValue(true)
+              end
+              if toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+                toggles.PhantomNoclip:SetValue(true)
+              end
+            end)
+            return
+          end
+
+          -- Threat wait: ONLY in rooms 30-40 and 80-90 (before Seek chase begins)
           if isSeekThreatZone(currentRoom, currentRoomNum) and toggles.AutoSkipWaitThreats and toggles.AutoSkipWaitThreats.Value then
             if HasRushAmbushBlitz() then
               while HasRushAmbushBlitz() do
@@ -11764,6 +11860,7 @@ local function ResetFarmState()
   KnobFarm.LockpickBoughtThisRun = false
   KnobFarm.StatsRecordedThisRun = false
   KnobFarm.RunGold = 0
+  KnobFarm.SeekChaseStartRoom = nil
   pcall(function()
     if toggles.Phase and toggles.Phase.Value then
       toggles.Phase:SetValue(false)
@@ -11888,20 +11985,125 @@ local function GetInstancePosition(inst)
   return nil
 end
 
-local function GetFloorPosition(pos)
-  if not pos then return nil end
+local function HasFloorUnder(pos, maxDist)
+  if not pos then return false, nil end
   local rayParams = RaycastParams.new()
   rayParams.FilterType = Enum.RaycastFilterType.Exclude
   local char = localPlayer2 and localPlayer2.Character
-  if char then
-    rayParams.FilterDescendantsInstances = { char, val85.HotelNodesFolder }
+  local filter = {}
+  if char then table.insert(filter, char) end
+  if val85 and val85.HotelNodesFolder then table.insert(filter, val85.HotelNodesFolder) end
+  rayParams.FilterDescendantsInstances = filter
+
+  local hit = workspace:Raycast(pos + Vector3.new(0, 2.5, 0), Vector3.new(0, -(maxDist or 30), 0), rayParams)
+  if hit and hit.Instance then
+    return true, hit.Position, hit.Instance
   end
-  local hit = workspace:Raycast(pos + Vector3.new(0, 2, 0), Vector3.new(0, -30, 0), rayParams)
-  if hit and hit.Position then
-    return hit.Position
-  end
-  return pos
+  return false, nil, nil
 end
+
+local function GetFloorPosition(pos)
+  if not pos then return nil end
+  local hasFloor, floorPos = HasFloorUnder(pos, 30)
+  if hasFloor and floorPos then
+    return floorPos
+  end
+  return nil
+end
+
+local isRecoveringFromVoid = false
+local function RecoverFromVoid(room)
+  if isRecoveringFromVoid then return end
+  isRecoveringFromVoid = true
+
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then
+    isRecoveringFromVoid = false
+    return
+  end
+
+  if KnobFarm and KnobFarm.SetStatus then
+    KnobFarm.SetStatus("Fell into void! Disabling noclip for 3s...")
+  end
+
+  -- 1. Выключаем ноуклип
+  pcall(function()
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      toggles.PhantomNoclip:SetValue(false)
+    end
+    if toggles and toggles.Noclip and toggles.Noclip.Value then
+      toggles.Noclip:SetValue(false)
+    end
+  end)
+
+  -- 2. Включаем коллизию персонажа (чтобы встать на пол)
+  pcall(function()
+    if char then
+      for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+          p.CanCollide = true
+        end
+      end
+    end
+  end)
+
+  -- 3. Находим безопасную точку входа текущей комнаты
+  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+  local curR = room
+  if not curR and roomsFolder then
+    if KnobFarm and KnobFarm.CurrentRoomNum then
+      curR = roomsFolder:FindFirstChild(tostring(KnobFarm.CurrentRoomNum))
+    end
+    if not curR then
+      local maxNum = -1
+      for _, r in ipairs(roomsFolder:GetChildren()) do
+        local n = tonumber(r.Name)
+        if n and n > maxNum then
+          maxNum = n
+          curR = r
+        end
+      end
+    end
+  end
+
+  local safePart = curR and (curR:FindFirstChild("RoomEntrance") or curR:FindFirstChild("RoomExit"))
+  local safePos = nil
+  if safePart and safePart:IsA("BasePart") then
+    safePos = safePart.Position + Vector3.new(0, 3, 0)
+  elseif curR then
+    local floor = curR:FindFirstChild("Floor", true) or curR:FindFirstChild("Parts", true)
+    if floor and floor:IsA("BasePart") then
+      safePos = floor.Position + Vector3.new(0, 4, 0)
+    end
+  end
+
+  if safePos and root then
+    root.CFrame = CFrame.new(safePos)
+    root.AssemblyLinearVelocity = Vector3.zero
+  end
+
+  -- 4. Ждем ровно 3 секунды с выключенным ноуклипом
+  task.wait(3.0)
+
+  -- 5. Включаем ноуклип обратно
+  pcall(function()
+    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+      toggles.PhantomNoclip:SetValue(true)
+    end
+  end)
+
+  if safePos and root then
+    root.AssemblyLinearVelocity = Vector3.zero
+  end
+
+  if KnobFarm and KnobFarm.SetStatus then
+    KnobFarm.SetStatus("Noclip re-enabled. Resuming...")
+  end
+  isRecoveringFromVoid = false
+end
+
+KnobFarm.RecoverFromVoid = RecoverFromVoid
 
 local function HasLockpick()
   if Functions and Functions.HasItem then
@@ -12072,6 +12274,22 @@ local function GetDoorCenter(door)
   if not door then return nil end
 
   local sign = door:FindFirstChild("Sign")
+  local hidden = door:FindFirstChild("Hidden")
+  if hidden and hidden:IsA("BasePart") then
+    return hidden.Position
+  end
+
+  local room = door.Parent
+  local roomExit = room and room:FindFirstChild("RoomExit")
+  if roomExit and roomExit:IsA("BasePart") then
+    return roomExit.Position
+  end
+
+  local col = door:FindFirstChild("Collision")
+  if col and col:IsA("BasePart") then
+    return col.Position
+  end
+
   local signPos = nil
   if sign then
     if sign:IsA("BasePart") then
@@ -12378,63 +12596,151 @@ local function LootAllInRoom(room)
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return end
 
-  local speed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
-    or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 35
+  -- 1. Сбор всех доступных промптов в радиусе вокруг персонажа (все ящики текущей тумбочки + золото)
+  local function lootAroundPlayer(radius)
+    local curChar = localPlayer2 and localPlayer2.Character
+    local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+    if not curRoot then return 0 end
+    local rad = radius or 8.0
 
-  local function getLootTargets()
-    local targets = {}
+    local count = 0
     for _, desc in ipairs(room:GetDescendants()) do
-      if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc] and not KnobFarm.LootedObjects[desc.Parent] then
+      if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc] then
         if IsLootablePrompt(desc) then
           local pos = GetInstancePosition(desc.Parent) or GetInstancePosition(desc)
-          if pos then
-            table.insert(targets, { prompt = desc, pos = pos, parent = desc.Parent })
+          if pos and (pos - curRoot.Position).Magnitude <= rad then
+            if HasFloorUnder(pos) then
+              pcall(function() Functions.ForceFirePrompt(desc) end)
+              if fireproximityprompt then
+                pcall(fireproximityprompt, desc, 0, true)
+                pcall(fireproximityprompt, desc)
+              end
+              KnobFarm.LootedObjects[desc] = true
+
+              local p = desc.Parent
+              if p then
+                if p.Name:lower():find("locked", 1, true) then
+                  EquipUnlockTool()
+                end
+                if p.Name == "GoldPile" or p.Name == "TinyGold" or p.Name == "Gold" or p:GetAttribute("GoldValue") then
+                  KnobFarm.LootedObjects[p] = true
+                  local gVal = p:GetAttribute("GoldValue") or 10
+                  KnobFarm.RunGold = (KnobFarm.RunGold or 0) + gVal
+                end
+              end
+              count = count + 1
+            end
           end
         end
       end
     end
-    table.sort(targets, function(a, b)
-      return (a.pos - root.Position).Magnitude < (b.pos - root.Position).Magnitude
-    end)
-    return targets
+    return count
   end
 
-  local targets = getLootTargets()
+  -- 2. Жадный выбор СТРОГО БЛИЖАЙШЕЙ тумбочки / предмета от ТЕКУЩЕЙ позиции персонажа
+  local function getNextNearestTarget()
+    local curChar = localPlayer2 and localPlayer2.Character
+    local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+    if not curRoot then return nil end
 
-  while #targets > 0 and KnobFarm.Active and not _Unloading do
-    local item = table.remove(targets, 1)
-    if item and item.prompt and item.prompt.Enabled and not KnobFarm.LootedObjects[item.prompt] then
-      KnobFarm.SetStatus("Looting: " .. (item.parent and item.parent.Name or "Item"))
-      NavigateTo(item.pos, item.parent, item.parent and item.parent.Name or "Item", 5.0, "Loot")
-      if item.prompt and item.prompt.Enabled then
-        pcall(function() Functions.ForceFirePrompt(item.prompt) end)
-      end
+    local bestTarget = nil
+    local bestDist = math.huge
 
-      KnobFarm.LootedObjects[item.prompt] = true
-      if item.parent then
-        KnobFarm.LootedObjects[item.parent] = true
-        if item.parent.Name:lower():find("locked", 1, true) then
-          EquipUnlockTool()
+    for _, desc in ipairs(room:GetDescendants()) do
+      if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc] then
+        if IsLootablePrompt(desc) then
+          local pos = GetInstancePosition(desc.Parent) or GetInstancePosition(desc)
+          -- Проверка: под целью ОБЯЗАТЕЛЬНО должен быть пол (не пустота за картой!)
+          if pos and HasFloorUnder(pos) then
+            local dist = (pos - curRoot.Position).Magnitude
+            if dist < bestDist then
+              bestDist = dist
+              bestTarget = { prompt = desc, pos = pos, parent = desc.Parent, dist = dist }
+            end
+          end
         end
-        if item.parent.Name == "GoldPile" or item.parent.Name == "TinyGold" or item.parent.Name == "Gold" or item.parent:GetAttribute("GoldValue") then
-          local gVal = item.parent:GetAttribute("GoldValue") or 10
-          KnobFarm.RunGold = (KnobFarm.RunGold or 0) + gVal
-        end
       end
+    end
+    return bestTarget
+  end
 
-      task.wait(0.06)
+  -- Сначала забираем всё прямо возле входа в комнату, если есть
+  local initialLoot = lootAroundPlayer(8.0)
+  if initialLoot > 0 then
+    task.wait(0.2)
+    lootAroundPlayer(8.0)
+  end
+
+  local maxLootAttempts = 35
+  local attempts = 0
+
+  while attempts < maxLootAttempts and KnobFarm.Active and not _Unloading do
+    attempts = attempts + 1
+
+    local curChar = localPlayer2 and localPlayer2.Character
+    local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+    if curRoot and not HasFloorUnder(curRoot.Position, 25) then
+      RecoverFromVoid(room)
+      break
     end
 
-    if #targets > 0 then
-      table.sort(targets, function(a, b)
-        return (a.pos - root.Position).Magnitude < (b.pos - root.Position).Magnitude
-      end)
+    -- Ищем строго ближайшую тумбочку от текущей точки
+    local target = getNextNearestTarget()
+    if not target then
+      break -- Все доступные тумбочки в комнате собраны!
+    end
+
+    -- Если цель уже рядом (до 7 стадов) — открываем сразу
+    if target.dist <= 7.0 then
+      if target.prompt and target.prompt.Enabled and not KnobFarm.LootedObjects[target.prompt] then
+        pcall(function() Functions.ForceFirePrompt(target.prompt) end)
+        if fireproximityprompt then
+          pcall(fireproximityprompt, target.prompt, 0, true)
+          pcall(fireproximityprompt, target.prompt)
+        end
+        KnobFarm.LootedObjects[target.prompt] = true
+      end
+      -- Сразу лутаем все ящики этой же тумбочки
+      lootAroundPlayer(8.0)
+      task.wait(0.2)
+      -- Собираем золото/предметы, выпавшие в ящиках
+      lootAroundPlayer(8.0)
     else
-      local fresh = getLootTargets()
-      if #fresh > 0 then
-        targets = fresh
+      -- Идем к ближайшей тумбочке
+      KnobFarm.SetStatus("Looting nearest: " .. (target.parent and target.parent.Name or "Item"))
+      local okNav = false
+      if NavigateTo then
+        okNav = NavigateTo(target.pos, target.parent, target.parent and target.parent.Name or "Item", 4.0, "Loot")
+      end
+
+      local curChar = localPlayer2 and localPlayer2.Character
+      local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+      local curDist = curRoot and (curRoot.Position - target.pos).Magnitude or 999
+
+      if okNav or curDist <= 7.5 then
+        -- Открываем целевой ящик
+        if target.prompt and target.prompt.Enabled and not KnobFarm.LootedObjects[target.prompt] then
+          pcall(function() Functions.ForceFirePrompt(target.prompt) end)
+          if fireproximityprompt then
+            pcall(fireproximityprompt, target.prompt, 0, true)
+            pcall(fireproximityprompt, target.prompt)
+          end
+          KnobFarm.LootedObjects[target.prompt] = true
+        end
+
+        -- Сразу лутаем ВСЕ ящики этой же тумбочки, чтобы не летать туда-сюда!
+        lootAroundPlayer(8.0)
+        -- Короткая пауза для анимации открытия и спавна золота/лута внутри ящиков
+        task.wait(0.22)
+        -- Собираем появившийся лут прямо на месте
+        lootAroundPlayer(8.0)
+      else
+        -- Если не смогли дойти (заблокировано мебелью) — помечаем, чтобы не зацикливаться
+        KnobFarm.LootedObjects[target.prompt] = true
       end
     end
+
+    task.wait(0.04)
   end
 end
 
@@ -12446,79 +12752,58 @@ local THREAT_NAMES = {
   GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
 }
 
-local function isSeekChaseActive(room, roomNum)
-  -- 1. Official GameData state
+local function isAtSeek(room, roomNum)
   local rep = game:GetService("ReplicatedStorage")
   local gameData = rep:FindFirstChild("GameData")
-  if gameData then
-    local inChase = gameData:FindFirstChild("ChaseInSession")
-    if inChase and inChase.Value == true then
-      return true
-    end
-    if roomNum then
-      local chaseEnd = gameData:FindFirstChild("ChaseEnd")
-      if chaseEnd and chaseEnd.Value > 0 and roomNum <= chaseEnd.Value then
-        local chaseStart = chaseEnd.Value - 12
-        if roomNum >= chaseStart then
-          return true
-        end
-      end
-    end
-  end
+  local latestRoomVal = gameData and gameData:FindFirstChild("LatestRoom")
+  local curNum = tonumber(roomNum) or (latestRoomVal and tonumber(latestRoomVal.Value)) or 0
 
-  -- 2. Seek entity in workspace or CurrentRooms (deep search)
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if curRooms then
-    if curRooms:FindFirstChild("SeekMoving", true)
-      or curRooms:FindFirstChild("SeekMovingNewClone", true)
-      or curRooms:FindFirstChild("SeekRig", true) then
-      return true
+  -- 1. Первая погоня длится 5 комнат, а вторая 10
+  if KnobFarm and KnobFarm.SeekChaseStartRoom then
+    local chaseLength = (KnobFarm.SeekChaseStartRoom < 60) and 5 or 10
+    if curNum >= (KnobFarm.SeekChaseStartRoom + chaseLength) then
+      KnobFarm.SeekChaseStartRoom = nil
+      return false
     end
-  end
-
-  if workspace:FindFirstChild("SeekMoving", true)
-    or workspace:FindFirstChild("SeekMovingNewClone", true)
-    or workspace:FindFirstChild("SeekRig", true) then
+    local inChase = gameData and gameData:FindFirstChild("ChaseInSession")
+    if inChase and inChase.Value == false then
+      KnobFarm.SeekChaseStartRoom = nil
+      return false
+    end
     return true
   end
 
-  -- 3. Room-specific Seek chase physical objects
-  local seekObjects = {
-    "ChandelierObstruction", "Seek_Arm", "SeekFloodline", "SeekDuckBoard",
-    "SeekDuckBoards", "SeekBridges", "RunnerNodes", "TriggerEventCollision",
-    "SeekTrigger", "ChaseStartTrigger", "Seeking"
-  }
-
-  if room then
-    for _, name in ipairs(seekObjects) do
-      if room:FindFirstChild(name, true) then
-        return true
-      end
+  -- 2. Проверяем начало погони (появление Сика или флаг игры)
+  local isStarting = false
+  if gameData then
+    local inChase = gameData:FindFirstChild("ChaseInSession")
+    if inChase and inChase.Value == true then
+      isStarting = true
     end
   end
 
-  if curRooms and roomNum then
-    local nextR = curRooms:FindFirstChild(tostring(roomNum + 1))
-    if nextR then
-      for _, name in ipairs(seekObjects) do
-        if nextR:FindFirstChild(name, true) then
-          return true
-        end
-      end
+  if not isStarting and room then
+    if room:FindFirstChild("SeekMoving")
+      or room:FindFirstChild("SeekMovingNewClone")
+      or room:FindFirstChild("SeekRig")
+      or room:FindFirstChild("TriggerEventCollision")
+      or room:FindFirstChild("ChaseStartTrigger") then
+      isStarting = true
     end
   end
 
-  -- 4. Cached Seek objects in val114
-  if val114 then
-    if (val114.SeekObstructions and #val114.SeekObstructions > 0)
-      or (val114.SeekNodes and #val114.SeekNodes > 0)
-      or (val114.SeekDuckBoards and #val114.SeekDuckBoards > 0)
-      or (val114.SeekBridges and #val114.SeekBridges > 0) then
-      return true
+  if isStarting and curNum > 0 then
+    if KnobFarm then
+      KnobFarm.SeekChaseStartRoom = curNum
     end
+    return true
   end
 
   return false
+end
+
+local function isSeekChaseActive(room, roomNum)
+  return isAtSeek(room, roomNum)
 end
 
 local function isSeekUpcoming(currentRoom, currentRoomNum)
@@ -12563,10 +12848,47 @@ local function isSeekThreatZone(currentRoom, currentRoomNum)
   return false
 end
 
+local function FindRealSeekDoor(room, roomNum)
+  if not room then return nil end
+  local targetNum = (roomNum or 0) + 1
+  local candidateDoors = {}
+  for _, desc in ipairs(room:GetChildren()) do
+    if desc.Name == "Door" and desc:IsA("Model") then
+      table.insert(candidateDoors, desc)
+    end
+  end
+  if #candidateDoors == 0 then
+    for _, desc in ipairs(room:GetDescendants()) do
+      if desc.Name == "Door" and desc:IsA("Model") and not desc.Name:lower():find("fake") then
+        table.insert(candidateDoors, desc)
+      end
+    end
+  end
+  if #candidateDoors == 1 then
+    return candidateDoors[1]
+  end
+  -- При разветвлениях (3 двери Сика) выбираем настоящую по табличке с номером комнаты
+  for _, d in ipairs(candidateDoors) do
+    local sign = d:FindFirstChild("Sign")
+    local txt = sign and sign:FindFirstChildWhichIsA("TextLabel", true)
+    if txt and txt.Text == tostring(targetNum) then
+      return d
+    end
+  end
+  for _, d in ipairs(candidateDoors) do
+    if not d:FindFirstChild("Board") and not d:FindFirstChild("Plank") and not d:FindFirstChild("Barricade") then
+      return d
+    end
+  end
+  return candidateDoors[1] or room:FindFirstChild("Door") or room:FindFirstChild("Door", true)
+end
+
 local function WaitForThreats(roomNum, room)
-  -- Never wait during active Seek chase: player must run forward!
-  if isSeekChaseActive(room, roomNum) then return end
-  if not isSeekThreatZone(room, roomNum) then return end
+  -- Во время Сика никогда не стоим на месте
+  if isAtSeek(room, roomNum) or isSeekChaseActive(room, roomNum) then return end
+  local isThreatZone = isSeekThreatZone(room, roomNum)
+    or (roomNum and (roomNum == 49 or roomNum == 50 or roomNum == 99 or roomNum >= 100))
+  if not isThreatZone then return end
   local function hasThreat()
     if val83 and val83.ActiveThreats then
       for threat, active in pairs(val83.ActiveThreats) do
@@ -12586,7 +12908,7 @@ local function WaitForThreats(roomNum, room)
   end
 
   if hasThreat() then
-    KnobFarm.SetStatus("Threat detected (Seek zone " .. tostring(roomNum) .. ")! Waiting...")
+    KnobFarm.SetStatus("Threat detected (Room " .. tostring(roomNum) .. ")! Waiting...")
     local char = localPlayer2 and localPlayer2.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then hum:Move(Vector3.zero, false) end
@@ -12634,46 +12956,48 @@ local function GetDoorVectors(door, fromPos)
   local doorCenter = GetDoorCenter(door)
   if not doorCenter then return nil, nil, nil, nil end
 
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local pPos = fromPos or (root and root.Position) or doorCenter
-
-  local toDoor = doorCenter - pPos
   local passDir = nil
+  local hidden = door:FindFirstChild("Hidden")
+  local room = door.Parent
+  local roomExit = room and room:FindFirstChild("RoomExit")
 
-  -- 1. Определяем осевое направление дверного проема (X или Z) по габаритам модели
-  local bboxCf, bboxSize = nil, nil
-  if door:IsA("Model") then
-    pcall(function() bboxCf, bboxSize = door:GetBoundingBox() end)
+  -- 1. Используем статический LookVector двери DOORS (Hidden или RoomExit)
+  if hidden and hidden:IsA("BasePart") then
+    local lv = hidden.CFrame.LookVector
+    local flat = Vector3.new(lv.X, 0, lv.Z)
+    if flat.Magnitude > 0.01 then
+      passDir = flat.Unit
+    end
+  elseif roomExit and roomExit:IsA("BasePart") then
+    local lv = roomExit.CFrame.LookVector
+    local flat = Vector3.new(lv.X, 0, lv.Z)
+    if flat.Magnitude > 0.01 then
+      passDir = flat.Unit
+    end
   end
 
-  if bboxSize and bboxSize.X > 0.1 and bboxSize.Z > 0.1 then
-    if bboxSize.X < bboxSize.Z then
-      -- Толщина по X -> проход строго вдоль оси X
-      passDir = Vector3.new(toDoor.X >= 0 and 1 or -1, 0, 0)
-    else
-      -- Толщина по Z -> проход строго вдоль оси Z
-      passDir = Vector3.new(0, 0, toDoor.Z >= 0 and 1 or -1)
+  -- 2. Фолбэк: часть Collision
+  if not passDir then
+    local col = door:FindFirstChild("Collision")
+    if col and col:IsA("BasePart") then
+      local lv = col.CFrame.LookVector
+      local flat = Vector3.new(lv.X, 0, lv.Z)
+      if flat.Magnitude > 0.01 then
+        passDir = flat.Unit
+      end
     end
-  else
-    -- Фолбэк: берем преобладающую ось движения к двери
+  end
+
+  -- 3. Фолбэк: вектор движения к двери
+  if not passDir then
+    local char = localPlayer2 and localPlayer2.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local pPos = fromPos or (root and root.Position) or doorCenter
+    local toDoor = doorCenter - pPos
     if math.abs(toDoor.X) > math.abs(toDoor.Z) then
       passDir = Vector3.new(toDoor.X >= 0 and 1 or -1, 0, 0)
     else
       passDir = Vector3.new(0, 0, toDoor.Z >= 0 and 1 or -1)
-    end
-  end
-
-  -- Сверяем с положением следующей комнаты (если она уже создана в workspace)
-  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
-  local nextRoom = roomsFolder and roomsFolder:FindFirstChild(tostring((KnobFarm.CurrentRoomNum or 0) + 1))
-  if nextRoom then
-    local nextPos = GetInstancePosition(nextRoom)
-    if nextPos then
-      local toNext = nextPos - doorCenter
-      if toNext:Dot(passDir) < 0 then
-        passDir = -passDir
-      end
     end
   end
 
@@ -12699,6 +13023,24 @@ local function GetDoorThroughPosition(doorCenter, door, fromPos)
     return center + (passDir * 4.5)
   end
   return doorCenter
+end
+
+local function OpenDoor(door)
+  if not door then return end
+  if door:FindFirstChild("ClientOpen") then
+    pcall(function() door.ClientOpen:FireServer() end)
+  end
+  for _, desc in ipairs(door:GetDescendants()) do
+    if desc:IsA("ProximityPrompt") and desc.Enabled then
+      if fireproximityprompt then
+        pcall(fireproximityprompt, desc, 0, true)
+        pcall(fireproximityprompt, desc)
+      end
+      if Functions and Functions.ForceFirePrompt then
+        pcall(Functions.ForceFirePrompt, desc)
+      end
+    end
+  end
 end
 
 PassDoorStraight = function(door, root, hum)
@@ -12728,9 +13070,17 @@ PassDoorStraight = function(door, root, hum)
       if keyObj and keyPos then
         KnobFarm.SetStatus("No lockpicks! Picking up key...")
         NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
+        local kPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
         local pickStart = tick()
-        while not HasKeyTool() and tick() - pickStart < 1.0 and KnobFarm.Active and not _Unloading do
-          task.wait(0.04)
+        while not HasKeyTool() and tick() - pickStart < 2.0 and KnobFarm.Active and not _Unloading do
+          if kPrompt and kPrompt.Enabled then
+            pcall(function() Functions.ForceFirePrompt(kPrompt) end)
+            if fireproximityprompt then
+              pcall(fireproximityprompt, kPrompt, 0, true)
+              pcall(fireproximityprompt, kPrompt)
+            end
+          end
+          task.wait(0.05)
         end
       end
     end
@@ -12739,16 +13089,22 @@ PassDoorStraight = function(door, root, hum)
     KnobFarm.SetStatus(statusMsg)
     EquipUnlockTool()
     local unStart = tick()
-    while IsDoorLocked(door) and tick() - unStart < 1.5 and KnobFarm.Active and not _Unloading do
+    while IsDoorLocked(door) and tick() - unStart < 2.5 and KnobFarm.Active and not _Unloading do
       EquipUnlockTool()
-      task.wait(0.03)
+      local _, curPrompt = IsDoorLocked(door)
+      if curPrompt and curPrompt.Enabled then
+        pcall(function() Functions.ForceFirePrompt(curPrompt) end)
+        if fireproximityprompt then
+          pcall(fireproximityprompt, curPrompt, 0, true)
+          pcall(fireproximityprompt, curPrompt)
+        end
+      end
+      task.wait(0.05)
     end
   end
 
-  -- 2. Открытие створки
-  if door:FindFirstChild("ClientOpen") then
-    pcall(function() door.ClientOpen:FireServer() end)
-  end
+  -- 2. Открытие створки и нажатие промпта
+  OpenDoor(door)
   KnobFarm.OpenedDoors[door] = true
 
   -- 3. Быстрый сквозной импульс вперед через проем на полной скорости
@@ -12854,41 +13210,44 @@ local function OrthogonalizeWaypoints(rawPoints, char)
     -- Если точки уже строго на одной оси (погрешность < 0.6 стада)
     if absDx < 0.6 then
       local pt = Vector3.new(pPrev.X, pCurr.Y, pCurr.Z)
-      table.insert(ortho, GetFloorPosition(pt) or pt)
+      local fPt = GetFloorPosition(pt)
+      table.insert(ortho, fPt or pCurr)
       lastAxis = "Z"
     elseif absDz < 0.6 then
       local pt = Vector3.new(pCurr.X, pCurr.Y, pPrev.Z)
-      table.insert(ortho, GetFloorPosition(pt) or pt)
+      local fPt = GetFloorPosition(pt)
+      table.insert(ortho, fPt or pCurr)
       lastAxis = "X"
     else
       -- Диагональ: разбиваем на два строго перпендикулярных отрезка через угол C
       local c1Raw = Vector3.new(pPrev.X, pCurr.Y, pCurr.Z)
       local c2Raw = Vector3.new(pCurr.X, pCurr.Y, pPrev.Z)
-      local c1 = GetFloorPosition(c1Raw) or c1Raw
-      local c2 = GetFloorPosition(c2Raw) or c2Raw
+      local c1 = GetFloorPosition(c1Raw)
+      local c2 = GetFloorPosition(c2Raw)
 
-      local c1Clear = IsDirectPathClear(pPrev, c1, char) and IsDirectPathClear(c1, pCurr, char)
-      local c2Clear = IsDirectPathClear(pPrev, c2, char) and IsDirectPathClear(c2, pCurr, char)
+      local c1Valid = (c1 ~= nil) and IsDirectPathClear(pPrev, c1, char) and IsDirectPathClear(c1, pCurr, char)
+      local c2Valid = (c2 ~= nil) and IsDirectPathClear(pPrev, c2, char) and IsDirectPathClear(c2, pCurr, char)
 
-      local chosenCorner
-      if c1Clear and not c2Clear then
+      local chosenCorner = nil
+      if c1Valid and not c2Valid then
         chosenCorner = c1
-      elseif c2Clear and not c1Clear then
+      elseif c2Valid and not c1Valid then
         chosenCorner = c2
-      elseif lastAxis == "X" then
-        chosenCorner = c2
-      else
-        chosenCorner = c1
+      elseif c1Valid and c2Valid then
+        if lastAxis == "X" then
+          chosenCorner = c2
+        else
+          chosenCorner = c1
+        end
       end
 
-      if chosenCorner == c1 then
-        table.insert(ortho, c1)
-        table.insert(ortho, Vector3.new(pCurr.X, c1.Y, pCurr.Z))
-        lastAxis = "X"
+      if chosenCorner then
+        table.insert(ortho, chosenCorner)
+        table.insert(ortho, Vector3.new(pCurr.X, chosenCorner.Y, pCurr.Z))
+        lastAxis = (chosenCorner == c1) and "X" or "Z"
       else
-        table.insert(ortho, c2)
-        table.insert(ortho, Vector3.new(pCurr.X, c2.Y, pCurr.Z))
-        lastAxis = "Z"
+        local fCurr = GetFloorPosition(pCurr)
+        table.insert(ortho, fCurr or pCurr)
       end
     end
   end
@@ -12933,6 +13292,96 @@ local function OrthogonalizeWaypoints(rawPoints, char)
     end
   end
   table.insert(dense, PathWaypoint.new(merged[#merged], Enum.PathWaypointAction.Custom))
+
+  local safeDense = {}
+  for _, wp in ipairs(dense) do
+    if HasFloorUnder(wp.Position, 25) then
+      table.insert(safeDense, wp)
+    end
+  end
+  if #safeDense >= 2 then
+    return safeDense
+  end
+
+  return dense
+end
+
+-- Выбор и обработка пути в зависимости от выбранного режима (Straight / Orthogonal)
+local function ProcessWaypoints(rawPoints, char)
+  if not rawPoints or #rawPoints == 0 then return rawPoints end
+
+  local isOrthogonal = (options and options.AutoFarmMovementMode and options.AutoFarmMovementMode.Value == "Orthogonal")
+  if isOrthogonal then
+    return OrthogonalizeWaypoints(rawPoints, char)
+  end
+
+  -- Прямой способ передвижения (Straight):
+  local points = {}
+  for _, p in ipairs(rawPoints) do
+    local pos = (typeof(p) == "Vector3" and p) or (p and p.Position)
+    if pos then
+      table.insert(points, pos)
+    end
+  end
+
+  if #points < 2 then return rawPoints end
+
+  -- Сглаживание пути: соединяем дальние видимые точки по прямой (Raycast shortcut)
+  local smoothed = { points[1] }
+  local currIdx = 1
+  while currIdx < #points do
+    local nextIdx = #points
+    local found = false
+    while nextIdx > currIdx + 1 do
+      local pStart = points[currIdx]
+      local pEnd = points[nextIdx]
+      if IsDirectPathClear(pStart, pEnd, char) and HasFloorUnder(pEnd, 25) then
+        found = true
+        break
+      end
+      nextIdx = nextIdx - 1
+    end
+    if found then
+      table.insert(smoothed, points[nextIdx])
+      currIdx = nextIdx
+    else
+      table.insert(smoothed, points[currIdx + 1])
+      currIdx = currIdx + 1
+    end
+  end
+
+  -- Создаем равномерные промежуточные узлы вдоль прямой линии (шаг 4 стада)
+  local dense = {}
+  for i = 1, #smoothed - 1 do
+    local pA = smoothed[i]
+    local pB = smoothed[i + 1]
+    table.insert(dense, PathWaypoint.new(pA, Enum.PathWaypointAction.Custom))
+
+    local segDist = (pB - pA).Magnitude
+    local stepSize = 4.0
+    local steps = math.floor(segDist / stepSize)
+    if steps > 1 then
+      local stepVec = (pB - pA) / (steps + 1)
+      for s = 1, steps do
+        local midP = pA + stepVec * s
+        local fMid = GetFloorPosition(midP) or midP
+        if HasFloorUnder(fMid, 25) then
+          table.insert(dense, PathWaypoint.new(fMid, Enum.PathWaypointAction.Custom))
+        end
+      end
+    end
+  end
+  table.insert(dense, PathWaypoint.new(smoothed[#smoothed], Enum.PathWaypointAction.Custom))
+
+  local safeDense = {}
+  for _, wp in ipairs(dense) do
+    if HasFloorUnder(wp.Position, 25) then
+      table.insert(safeDense, wp)
+    end
+  end
+  if #safeDense >= 2 then
+    return safeDense
+  end
 
   return dense
 end
@@ -13041,7 +13490,11 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       local dz = curPos.Z - rootPos.Z
       local flatDist = math.sqrt(dx * dx + dz * dz)
 
-      if flatDist < 2.2 then
+      local isOrtho = (options and options.AutoFarmMovementMode and options.AutoFarmMovementMode.Value == "Orthogonal")
+      local reachDist = isOrtho and 2.2 or 3.0
+      local lookaheadDist = isOrtho and 3.5 or 5.0
+
+      if flatDist < reachDist then
         if currentNodes[wpIndex] and currentNodes[wpIndex].Parent then
           pcall(function() currentNodes[wpIndex]:Destroy() end)
           currentNodes[wpIndex] = nil
@@ -13049,7 +13502,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
         wpIndex = wpIndex + 1
       else
         local nextWp = waypoints[wpIndex + 1]
-        if nextWp and flatDist < 3.5 then
+        if nextWp and flatDist < lookaheadDist then
           local nextPos = (typeof(nextWp) == "Vector3" and nextWp) or (nextWp and nextWp.Position)
           if nextPos then
             local segX = nextPos.X - curPos.X
@@ -13085,7 +13538,15 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
 
     if steerDist > 0.1 then
       local moveDir = Vector3.new(steerX / steerDist, 0, steerZ / steerDist)
-      h:Move(moveDir, false)
+
+      -- Защита от шага в пустоту: проверяем пол в 2 стадах в направлении шага
+      local stepAhead = rootPos + (moveDir * 2.0)
+      if HasFloorUnder(stepAhead, 25) then
+        h:Move(moveDir, false)
+      else
+        h:Move(Vector3.zero, false)
+        completed = true
+      end
 
       pcall(function()
         local cam = workspace.CurrentCamera
@@ -13125,6 +13586,13 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     local root = c and c:FindFirstChild("HumanoidRootPart")
     local h = c and c:FindFirstChildOfClass("Humanoid")
     if not root or not h or h.Health <= 0 then break end
+
+    -- Защита от выпадения за карту / в пустоту: выкл ноуклип на 3 сек и ре-энейбл
+    if not HasFloorUnder(root.Position, 25) then
+      RecoverFromVoid(room)
+      completed = true
+      break
+    end
 
     -- Stuck detection: if barely moved in 1.8 seconds, rotate camera to path & activate Phase until cleared
     if not lastRootPos then
@@ -13169,9 +13637,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
         if locked then
           EquipUnlockTool()
         else
-          if target:FindFirstChild("ClientOpen") then
-            pcall(function() target.ClientOpen:FireServer() end)
-          end
+          OpenDoor(target)
         end
       end
     end
@@ -13204,7 +13670,14 @@ NavigateTo = function(targetPos, targetInstance, label, maxWaitTime, targetType)
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not root or not hum or hum.Health <= 0 then return false end
 
-  local floorPos = GetFloorPosition(targetPos) or targetPos
+  local floorPos = GetFloorPosition(targetPos)
+  if not floorPos then
+    if not HasFloorUnder(targetPos, 25) then
+      KnobFarm.SetStatus("Skipping target: no floor (void)!")
+      return false
+    end
+    floorPos = targetPos
+  end
   KnobFarm.SetStatus("Running to " .. (label or "target") .. "...")
 
   local path = pathfindingService:CreatePath({
@@ -13220,20 +13693,24 @@ NavigateTo = function(targetPos, targetInstance, label, maxWaitTime, targetType)
     path:ComputeAsync(root.Position, floorPos)
   end)
 
-  local orthoWaypoints = nil
+  local navWaypoints = nil
   if ok and path.Status == Enum.PathStatus.Success then
-    orthoWaypoints = OrthogonalizeWaypoints(path:GetWaypoints(), char)
+    navWaypoints = ProcessWaypoints(path:GetWaypoints(), char)
   else
-    orthoWaypoints = OrthogonalizeWaypoints({ root.Position, floorPos }, char)
+    navWaypoints = ProcessWaypoints({ root.Position, floorPos }, char)
   end
 
-  if orthoWaypoints and #orthoWaypoints > 1 then
-    FollowPath(orthoWaypoints, targetInstance, floorPos, targetType or label or "Target", nil, KnobFarm.CurrentRoomNum)
+  if navWaypoints and #navWaypoints > 1 then
+    FollowPath(navWaypoints, targetInstance, floorPos, targetType or label or "Target", nil, KnobFarm.CurrentRoomNum)
   else
     hum:MoveTo(floorPos)
     local t = tick()
     local timeout = maxWaitTime or 4.0
     while (root.Position - floorPos).Magnitude > 6 and tick() - t < timeout and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+      if not HasFloorUnder(root.Position, 25) then
+        RecoverFromVoid(nil)
+        break
+      end
       pcall(function()
         local cam = workspace.CurrentCamera
         if cam then
@@ -13258,6 +13735,33 @@ local function handleRoom50(room, door)
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not root or not hum or hum.Health <= 0 then return end
 
+  -- 0. Check threats before starting (ждем пока пропадут сущности перед 50)
+  local function hasThreat()
+    if val83 and val83.ActiveThreats then
+      for threat, active in pairs(val83.ActiveThreats) do
+        if active and threat and threat.Parent and THREAT_NAMES[threat.Name] then return true end
+      end
+    end
+    for name in pairs(THREAT_NAMES) do
+      if workspace:FindFirstChild(name) then return true end
+    end
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if curRooms then
+      for name in pairs(THREAT_NAMES) do
+        if curRooms:FindFirstChild(name, true) then return true end
+      end
+    end
+    return false
+  end
+
+  if hasThreat() then
+    KnobFarm.SetStatus("Room 50: Threat detected! Waiting before starting...")
+    while hasThreat() and KnobFarm.Active and not _Unloading do
+      task.wait(0.3)
+    end
+    task.wait(0.5)
+  end
+
   KnobFarm.DisableGodmodeForBoss = true
   pcall(function()
     if toggles and toggles.Godmode and toggles.Godmode.Value then
@@ -13266,23 +13770,39 @@ local function handleRoom50(room, door)
   end)
   SetCrouched(true)
 
-  -- 1. Run to all LiveHintBooks
+  -- 1. Fly to all Books (LiveHintBook)
+  KnobFarm.SetStatus("Room 50: Flying to Books...")
   for _, desc in ipairs(room:GetDescendants()) do
     if not KnobFarm.Active or _Unloading then break end
     if desc.Name == "LiveHintBook" and not KnobFarm.LootedObjects[desc] then
       local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
       local pos = (desc:IsA("BasePart") and desc.Position) or (desc:IsA("Model") and desc:GetPivot().Position)
-      if pos and pr and pr.Enabled then
-        NavigateTo(pos, desc, "Book", 5.0, "Book")
-        if (root.Position - pos).Magnitude <= 8 then
-          KnobFarm.LootedObjects[desc] = true
-          task.wait(0.1)
+      if pos and root then
+        root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+        root.AssemblyLinearVelocity = Vector3.zero
+        if pr and pr.Enabled then
+          pcall(function()
+            pr.HoldDuration = 0
+            pr.RequiresLineOfSight = false
+            pr.MaxActivationDistance = 30
+            pr.Enabled = true
+          end)
+          if fireproximityprompt then
+            pcall(fireproximityprompt, pr, 0, true)
+            pcall(fireproximityprompt, pr)
+          end
+          if Functions and Functions.ForceFirePrompt then
+            pcall(Functions.ForceFirePrompt, pr)
+          end
         end
+        KnobFarm.LootedObjects[desc] = true
+        task.wait(0.15)
       end
     end
   end
 
-  -- 2. Run to LibraryHintPaper
+  -- 2. Fly to LibraryHintPaper
+  KnobFarm.SetStatus("Room 50: Flying to Hint Paper...")
   local paper = room:FindFirstChild("LibraryHintPaper", true) or room:FindFirstChild("PickupItem", true)
   if not paper then
     for _, pr in ipairs(room:GetDescendants()) do
@@ -13292,28 +13812,44 @@ local function handleRoom50(room, door)
       end
     end
   end
-  if paper and not KnobFarm.LootedObjects[paper] then
+  if paper and not KnobFarm.LootedObjects[paper] and root then
     local pPos = (paper:IsA("BasePart") and paper.Position) or (paper:IsA("Model") and paper:GetPivot().Position)
     local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if pPos and pr and pr.Enabled then
-      NavigateTo(pPos, paper, "Hint Paper", 5.0, "Hint Paper")
-      if (root.Position - pPos).Magnitude <= 8 then
-        KnobFarm.LootedObjects[paper] = true
-        task.wait(0.1)
+    if pPos then
+      root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 0))
+      root.AssemblyLinearVelocity = Vector3.zero
+      if pr and pr.Enabled then
+        pcall(function()
+          pr.HoldDuration = 0
+          pr.RequiresLineOfSight = false
+          pr.MaxActivationDistance = 30
+          pr.Enabled = true
+        end)
+        if fireproximityprompt then
+          pcall(fireproximityprompt, pr, 0, true)
+          pcall(fireproximityprompt, pr)
+        end
+        if Functions and Functions.ForceFirePrompt then
+          pcall(Functions.ForceFirePrompt, pr)
+        end
       end
+      KnobFarm.LootedObjects[paper] = true
+      task.wait(0.2)
     end
   end
 
-  -- 3. Run to Padlock / Door
+  -- 3. Fly to Padlock
   local padlock = room:FindFirstChild("Padlock", true) or (door and door:FindFirstChild("Padlock", true))
   local padPart = (padlock and padlock:IsA("BasePart") and padlock)
     or (padlock and padlock:FindFirstChildWhichIsA("BasePart", true))
     or (door and door:FindFirstChild("Door"))
     or (door and door.PrimaryPart)
 
-  if padPart then
-    NavigateTo(padPart.Position, padPart, "Door 50", 5.0, "Door")
-    task.wait(0.2)
+  if padPart and root then
+    KnobFarm.SetStatus("Room 50: Flying to Padlock...")
+    root.CFrame = padPart.CFrame * CFrame.new(0, 0, 2.5)
+    root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.25)
   end
 
   -- 4. Solve Padlock with code / brute force
@@ -13405,8 +13941,8 @@ local function handleRoom100(room)
     end
   end)
 
-  -- 1. Teleport to all Breaker Switches & Fuses
-  KnobFarm.SetStatus("Room 100: Teleporting to Breaker Switches & Fuses...")
+  -- 1. Fly to all Breaker Switches & Fuses
+  KnobFarm.SetStatus("Room 100: Flying to Breaker Switches & Fuses...")
   for _, desc in ipairs(room:GetDescendants()) do
     if not KnobFarm.Active or _Unloading then break end
     local isFuse = desc.Name == "FusePickup" or desc.Name == "FuseObtain" or desc.Name == "Fuse"
@@ -13419,32 +13955,66 @@ local function handleRoom100(room)
       end
     end
     if isFuse then
+      local pr = desc:IsA("ProximityPrompt") and desc or desc:FindFirstChildWhichIsA("ProximityPrompt", true)
       local target = desc:IsA("ProximityPrompt") and desc.Parent or desc
       local pos = (target:IsA("BasePart") and target.Position) or (target:IsA("Model") and target:GetPivot().Position)
       if pos and root then
         root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+        root.AssemblyLinearVelocity = Vector3.zero
+        if pr and pr.Enabled then
+          pcall(function()
+            pr.HoldDuration = 0
+            pr.RequiresLineOfSight = false
+            pr.MaxActivationDistance = 30
+            pr.Enabled = true
+          end)
+          if fireproximityprompt then
+            pcall(fireproximityprompt, pr, 0, true)
+            pcall(fireproximityprompt, pr)
+          end
+          if Functions and Functions.ForceFirePrompt then
+            pcall(Functions.ForceFirePrompt, pr)
+          end
+        end
         task.wait(0.12)
       end
     end
   end
 
-  -- 2. Teleport to Electrical Room Key
+  -- 2. Fly to Electrical Room Key
   local elecKey = room:FindFirstChild("ElectricalKeyObtain", true) or room:FindFirstChild("KeyElectrical", true)
     or room:FindFirstChild("Electrical Key", true) or room:FindFirstChild("ElectricalRoomKey", true)
   if elecKey and root then
-    KnobFarm.SetStatus("Room 100: Teleporting to Electrical Room Key...")
+    KnobFarm.SetStatus("Room 100: Flying to Electrical Room Key...")
     local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
+    local kPr = elecKey:FindFirstChildWhichIsA("ProximityPrompt", true)
     if kPos then
       root.CFrame = CFrame.new(kPos + Vector3.new(0, 1.2, 0))
+      root.AssemblyLinearVelocity = Vector3.zero
+      if kPr and kPr.Enabled then
+        pcall(function()
+          kPr.HoldDuration = 0
+          kPr.RequiresLineOfSight = false
+          kPr.MaxActivationDistance = 30
+          kPr.Enabled = true
+        end)
+        if fireproximityprompt then
+          pcall(fireproximityprompt, kPr, 0, true)
+          pcall(fireproximityprompt, kPr)
+        end
+        if Functions and Functions.ForceFirePrompt then
+          pcall(Functions.ForceFirePrompt, kPr)
+        end
+      end
       task.wait(0.25)
     end
   end
 
-  -- 3. Walk to Electrical Room door and unlock
+  -- 3. Fly to Electrical Room door and unlock
   local elecLock = room:FindFirstChild("KeyElectrical", true) or room:FindFirstChild("ElectricalLock", true)
   local elecDoor = room:FindFirstChild("ElectricalDoor", true) or (elecLock and elecLock:FindFirstAncestorWhichIsA("Model"))
   if elecLock or elecDoor then
-    KnobFarm.SetStatus("Room 100: Walking to Electrical Door...")
+    KnobFarm.SetStatus("Room 100: Flying to Electrical Door...")
     local bp = localPlayer2:FindFirstChildOfClass("Backpack")
     local keyTool = (char and char:FindFirstChild("KeyElectrical")) or (bp and bp:FindFirstChild("KeyElectrical"))
       or (char and char:FindFirstChild("ElectricalKeyObtain")) or (bp and bp:FindFirstChild("ElectricalKeyObtain"))
@@ -13457,31 +14027,78 @@ local function handleRoom100(room)
       or (elecLock and elecLock:FindFirstChildWhichIsA("BasePart", true))
       or (elecDoor and elecDoor:FindFirstChildWhichIsA("BasePart", true))
     if lockPart and root then
-      local lockPos = lockPart.Position
-      hum:MoveTo(lockPos)
+      root.CFrame = lockPart.CFrame * CFrame.new(0, 0, 2.5)
+      root.AssemblyLinearVelocity = Vector3.zero
+      local lockPrompt = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
+        or (elecDoor and elecDoor:FindFirstChildWhichIsA("ProximityPrompt", true))
+      if lockPrompt then
+        pcall(function()
+          lockPrompt.HoldDuration = 0
+          lockPrompt.RequiresLineOfSight = false
+          lockPrompt.MaxActivationDistance = 30
+          lockPrompt.Enabled = true
+        end)
+        if fireproximityprompt then
+          pcall(fireproximityprompt, lockPrompt, 0, true)
+          pcall(fireproximityprompt, lockPrompt)
+        end
+        if Functions and Functions.ForceFirePrompt then
+          pcall(Functions.ForceFirePrompt, lockPrompt)
+        end
+      end
       task.wait(0.3)
-      root.CFrame = CFrame.new(lockPos + Vector3.new(0, 1.2, 0))
-      task.wait(0.25)
     end
   end
 
-  -- 4. Pull gate lever and run to Breaker Panel
+  -- 4. Fly to Gate lever and pull
   local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
   if lever and root then
-    KnobFarm.SetStatus("Room 100: Pulling Gate Lever...")
+    KnobFarm.SetStatus("Room 100: Flying to Gate Lever...")
     local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
+    local lPr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
     if lPos then
       root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
-      task.wait(0.25)
+      root.AssemblyLinearVelocity = Vector3.zero
+      if lPr then
+        pcall(function()
+          lPr.HoldDuration = 0
+          lPr.RequiresLineOfSight = false
+          lPr.MaxActivationDistance = 30
+          lPr.Enabled = true
+        end)
+        if fireproximityprompt then
+          pcall(fireproximityprompt, lPr, 0, true)
+          pcall(fireproximityprompt, lPr)
+        end
+        if Functions and Functions.ForceFirePrompt then
+          pcall(Functions.ForceFirePrompt, lPr)
+        end
+      end
+      task.wait(0.3)
     end
   end
 
   local breaker = room:FindFirstChild("ElevatorBreaker", true) or workspace:FindFirstChild("ElevatorBreaker")
   if breaker and root then
-    KnobFarm.SetStatus("Room 100: Running to Breaker Panel...")
+    KnobFarm.SetStatus("Room 100: Flying to Breaker Panel...")
     local bPos = (breaker:IsA("BasePart") and breaker.Position) or (breaker:IsA("Model") and breaker:GetPivot().Position)
     if bPos then
-      root.CFrame = CFrame.new(bPos + Vector3.new(0, 1.2, 2.5))
+      root.CFrame = CFrame.new(bPos + Vector3.new(0, 1.5, 2.5))
+      root.AssemblyLinearVelocity = Vector3.zero
+      for _, bPr in ipairs(breaker:GetDescendants()) do
+        if bPr:IsA("ProximityPrompt") then
+          pcall(function()
+            bPr.HoldDuration = 0
+            bPr.RequiresLineOfSight = false
+            bPr.MaxActivationDistance = 30
+            bPr.Enabled = true
+          end)
+          if fireproximityprompt then
+            pcall(fireproximityprompt, bPr, 0, true)
+            pcall(fireproximityprompt, bPr)
+          end
+        end
+      end
       task.wait(0.5)
 
       if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
@@ -13491,15 +14108,29 @@ local function handleRoom100(room)
     end
   end
 
-  -- 5. Teleport into Elevator
+  -- 5. Fly into Elevator
   local elevator = room:FindFirstChild("ElevatorCar", true)
     or room:FindFirstChild("Elevator", true)
     or workspace:FindFirstChild("ElevatorCar")
 
   if elevator and root then
-    KnobFarm.SetStatus("Room 100: Teleporting into Elevator...")
+    KnobFarm.SetStatus("Room 100: Flying into Elevator...")
     local ePos = elevator:GetPivot().Position
     root.CFrame = CFrame.new(ePos + Vector3.new(0, 2.0, 0))
+    root.AssemblyLinearVelocity = Vector3.zero
+    local ePr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if ePr then
+      pcall(function()
+        ePr.HoldDuration = 0
+        ePr.RequiresLineOfSight = false
+        ePr.MaxActivationDistance = 30
+        ePr.Enabled = true
+      end)
+      if fireproximityprompt then
+        pcall(fireproximityprompt, ePr, 0, true)
+        pcall(fireproximityprompt, ePr)
+      end
+    end
   end
 
   -- 6. Game complete: wait 10 seconds and Play Again
@@ -13603,12 +14234,105 @@ function KnobFarm.RunLoop()
         continue
       end
 
+      -- 3.5. Seek Check: ВСЕ ЧТО ДОЛЖНО БЫТЬ ЭТО ОРИГИНАЛЬНЫЙ АВТО СКИП, ОСТАЛЬНОЕ ОТКЛЮЧАЕТСЯ
+      local rep = game:GetService("ReplicatedStorage")
+      local gameData = rep:FindFirstChild("GameData")
+      local latestRoomVal = gameData and gameData:FindFirstChild("LatestRoom")
+      local curRoomNum = latestRoomVal and tonumber(latestRoomVal.Value) or roomNum
+      local curRooms = workspace:FindFirstChild("CurrentRooms")
+      local seekTargetRoom = curRooms and curRooms:FindFirstChild(tostring(curRoomNum)) or room
+
+      local atSeek = isAtSeek(room, roomNum) or isAtSeek(seekTargetRoom, curRoomNum)
+      if atSeek then
+        -- 1. Отключаем ноуклип сразу при Сике
+        pcall(function()
+          if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+            toggles.PhantomNoclip:SetValue(false)
+          end
+          if toggles and toggles.Noclip and toggles.Noclip.Value then
+            toggles.Noclip:SetValue(false)
+          end
+          if char then
+            for _, p in ipairs(char:GetDescendants()) do
+              if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                p.CanCollide = true
+              end
+            end
+          end
+        end)
+        KnobFarm.DisabledNoclipForSeek = true
+        root.AssemblyLinearVelocity = Vector3.zero
+        if hum then hum:Move(Vector3.zero, false) end
+
+        -- 2. ОРИГИНАЛЬНЫЙ АВТО СКИП (1 в 1 как в door skipper.lua):
+        KnobFarm.SetStatus("Seek Chase: Auto Door Skip")
+        local targetRoom = (latestRoomVal and curRooms and curRooms:FindFirstChild(tostring(latestRoomVal.Value))) or room
+        local door = targetRoom and targetRoom:FindFirstChild("Door")
+        if not door and targetRoom then
+          door = targetRoom:FindFirstChildWhichIsA("Model", true)
+          if door and not (door.Name == "Door" or door:FindFirstChild("Door") or door:FindFirstChildWhichIsA("ProximityPrompt", true)) then
+            door = nil
+          end
+        end
+
+        if door then
+          local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
+          if doorPart then
+            root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
+          end
+          local prompt = door:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if prompt then
+            pcall(function()
+              prompt.HoldDuration = 0
+              prompt.RequiresLineOfSight = false
+              prompt.MaxActivationDistance = 30
+              prompt.Enabled = true
+            end)
+            if fireproximityprompt then
+              pcall(fireproximityprompt, prompt, 0, true)
+              pcall(fireproximityprompt, prompt)
+            end
+            if Functions and Functions.ForceFirePrompt then
+              pcall(Functions.ForceFirePrompt, prompt)
+            end
+          end
+          if door:FindFirstChild("ClientOpen") then
+            pcall(function() door.ClientOpen:FireServer() end)
+          end
+        end
+
+        task.wait(0.1)
+        continue
+      elseif KnobFarm.DisabledNoclipForSeek then
+        -- Погоня Сика завершена: выключаем скип, включаем фарм и возвращаем ноуклип
+        KnobFarm.DisabledNoclipForSeek = false
+        pcall(function()
+          if toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
+            toggles.AutoDoorSkip:SetValue(false)
+          end
+          if toggles and toggles.AutoFarmEnabled and not toggles.AutoFarmEnabled.Value then
+            toggles.AutoFarmEnabled:SetValue(true)
+          end
+          if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+            toggles.PhantomNoclip:SetValue(true)
+          end
+        end)
+        KnobFarm.SetStatus("Seek passed! Knob Farm resumed.")
+        task.wait(0.2)
+      end
+
       -- 4. Stuck detection
       if IsStuck() then
         KnobFarm.SetStatus("Stuck detected! Jumping & recovering...")
         hum.Jump = true
         KnobFarm.LastPosition = root.Position
         KnobFarm.LastMoveTime = tick()
+        continue
+      end
+
+      -- 4.1. Void / Fall detection: падение в пустоту (выкл ноуклип на 3 сек и ре-энейбл)
+      if not HasFloorUnder(root.Position, 25) then
+        RecoverFromVoid(room)
         continue
       end
 
@@ -13653,7 +14377,7 @@ function KnobFarm.RunLoop()
         KnobFarm.SetStatus("Gate room detected — ignoring obstacles, heading straight to Door...")
       end
 
-      -- 6. Threat wait (Seek zones)
+      -- 6. Threat wait (только вне зоны Сика)
       WaitForThreats(roomNum, room)
 
       -- 7. Room 50 (Figure)
@@ -13697,8 +14421,16 @@ function KnobFarm.RunLoop()
           KnobFarm.SetStatus("No lockpicks! Walking to key (Room " .. tostring(roomNum) .. ")...")
           NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
 
+          local kPrompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
           local pickStart = tick()
-          while not HasKeyTool() and tick() - pickStart < 1.5 and KnobFarm.Active and not _Unloading do
+          while not HasKeyTool() and tick() - pickStart < 2.0 and KnobFarm.Active and not _Unloading do
+            if kPrompt and kPrompt.Enabled then
+              pcall(function() Functions.ForceFirePrompt(kPrompt) end)
+              if fireproximityprompt then
+                pcall(fireproximityprompt, kPrompt, 0, true)
+                pcall(fireproximityprompt, kPrompt)
+              end
+            end
             task.wait(0.05)
           end
 
@@ -13714,7 +14446,7 @@ function KnobFarm.RunLoop()
       local roomNodes = GetRoomPathfindNodes(room, root.Position, targetPos)
       local waypoints = nil
       if roomNodes and #roomNodes >= 2 then
-        waypoints = OrthogonalizeWaypoints(roomNodes, char)
+        waypoints = ProcessWaypoints(roomNodes, char)
       end
 
       -- 2. Если узлов комнаты нет (прямая комната), вычисляем путь через PathfindingService
@@ -13733,13 +14465,13 @@ function KnobFarm.RunLoop()
         end)
 
         if okPath and path.Status == Enum.PathStatus.Success then
-          waypoints = OrthogonalizeWaypoints(path:GetWaypoints(), char)
+          waypoints = ProcessWaypoints(path:GetWaypoints(), char)
         end
       end
 
-      -- 3. Надежный фолбэк: строго перпендикулярная траектория напрямую между игроком и дверью
+      -- 3. Надежный фолбэк: напрямую между игроком и дверью
       if not waypoints or #waypoints == 0 then
-        waypoints = OrthogonalizeWaypoints({ root.Position, targetPos }, char)
+        waypoints = ProcessWaypoints({ root.Position, targetPos }, char)
       end
 
       if waypoints and #waypoints > 0 then
