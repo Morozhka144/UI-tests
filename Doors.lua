@@ -3129,7 +3129,113 @@ Groupboxes.SpamBuy:AddToggle("AutoBuyLockpicks", {
   DisabledTooltip = "This feature doesn't work in this floor",
 })
 
+Groupboxes.SpamBuy:AddToggle("AutoClosePreRunShop", {
+  Text = "Auto Close Shop (Confirm)",
+  Default = true,
+  Tooltip = "Automatically clicks Confirm and closes the pre-run shop",
+  DisabledTooltip = "This feature doesn't work in this floor",
+})
+
+Groupboxes.SpamBuy:AddButton({
+  Text = "Confirm Shop",
+  Tooltip = "Clicks Confirm and closes the pre-run shop",
+  Callback = function()
+    if Functions and Functions.ConfirmPreRunShop then
+      Functions.ConfirmPreRunShop()
+    end
+  end,
+})
+
 local lastAutoLockpickBuy = 0
+
+function Functions.ConfirmPreRunShop()
+  local mainUI = localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") and localPlayer2.PlayerGui:FindFirstChild("MainUI")
+  local itemShop = mainUI and mainUI:FindFirstChild("ItemShop")
+
+  local buttonClicked = false
+
+  if itemShop then
+    -- 1. Ищем кнопку Confirm среди всех элементов ItemShop
+    local targetBtn = nil
+    for _, desc in ipairs(itemShop:GetDescendants()) do
+      if desc:IsA("GuiButton") then
+        local nameLower = desc.Name:lower()
+        if nameLower == "confirm" or nameLower:find("confirm") then
+          targetBtn = desc
+          break
+        end
+        if desc:IsA("TextButton") and desc.Text:lower():find("confirm") then
+          targetBtn = desc
+          break
+        end
+      end
+    end
+
+    if not targetBtn then
+      for _, desc in ipairs(itemShop:GetDescendants()) do
+        if desc:IsA("TextLabel") and desc.Text:lower():find("confirm") then
+          local p = desc:FindFirstAncestorWhichIsA("GuiButton")
+          if p then
+            targetBtn = p
+            break
+          end
+        end
+      end
+    end
+
+    if targetBtn then
+      -- Нажатие через firesignal (если доступно)
+      if firesignal then
+        pcall(function() firesignal(targetBtn.MouseButton1Click) end)
+        pcall(function() firesignal(targetBtn.Activated) end)
+        pcall(function() firesignal(targetBtn.MouseButton1Down) end)
+        pcall(function() firesignal(targetBtn.MouseButton1Up) end)
+      end
+
+      -- Нажатие через getconnections
+      if getconnections then
+        pcall(function()
+          for _, c in ipairs(getconnections(targetBtn.MouseButton1Click)) do
+            pcall(c.Fire, c)
+          end
+          for _, c in ipairs(getconnections(targetBtn.Activated)) do
+            pcall(c.Fire, c)
+          end
+        end)
+      end
+
+      -- Нажатие через VirtualInputManager (эмуляция реального клика мыши)
+      pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        if vim and targetBtn.AbsoluteSize.X > 0 and targetBtn.AbsoluteSize.Y > 0 then
+          local x = targetBtn.AbsolutePosition.X + targetBtn.AbsoluteSize.X / 2
+          local y = targetBtn.AbsolutePosition.Y + targetBtn.AbsoluteSize.Y / 2
+          vim:SendMouseButtonEvent(x, y, 0, true, game, 0)
+          task.wait(0.04)
+          vim:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        end
+      end)
+
+      buttonClicked = true
+    end
+
+    -- Визуально закрываем ItemShop
+    pcall(function()
+      itemShop.Visible = false
+    end)
+  end
+
+  -- 2. Серверный вызов удаленного события PreRunShop (второй аргумент true = confirm)
+  pcall(function()
+    local preRunShop = (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder") and replicatedStorage.RemotesFolder:FindFirstChild("PreRunShop"))
+      or (remotesFolder2 and remotesFolder2:FindFirstChild("PreRunShop"))
+    if preRunShop then
+      preRunShop:FireServer({}, true)
+    end
+  end)
+
+  return buttonClicked
+end
 
 function Functions.CheckAndAutoBuyLockpick()
   if not toggles.AutoBuyLockpicks or not toggles.AutoBuyLockpicks.Value then
@@ -3175,14 +3281,29 @@ task.spawn(function()
     if not mainUI then return end
     local itemShop = mainUI:WaitForChild("ItemShop", 5)
     if itemShop then
-      itemShop:GetPropertyChangedSignal("Visible"):Connect(function()
-        if itemShop.Visible and toggles.AutoBuyLockpicks and toggles.AutoBuyLockpicks.Value then
-          task.wait(0.5)
-          Functions.CheckAndAutoBuyLockpick()
-        end
-      end)
-      if itemShop.Visible and toggles.AutoBuyLockpicks and toggles.AutoBuyLockpicks.Value then
-        task.spawn(Functions.CheckAndAutoBuyLockpick)
+      local function onShopVisible()
+        if not itemShop.Visible then return end
+        task.spawn(function()
+          -- Если включен автобай отмычек, сначала покупаем отмычку
+          if toggles.AutoBuyLockpicks and toggles.AutoBuyLockpicks.Value then
+            task.wait(0.4)
+            Functions.CheckAndAutoBuyLockpick()
+            task.wait(0.4)
+          else
+            task.wait(0.3)
+          end
+          -- Если включено авто-закрытие магазина или активен автофарм
+          local shouldClose = (toggles.AutoClosePreRunShop and toggles.AutoClosePreRunShop.Value)
+            or (KnobFarm and KnobFarm.Active)
+          if shouldClose then
+            Functions.ConfirmPreRunShop()
+          end
+        end)
+      end
+
+      itemShop:GetPropertyChangedSignal("Visible"):Connect(onShopVisible)
+      if itemShop.Visible then
+        onShopVisible()
       end
     end
   end
@@ -14912,6 +15033,15 @@ function KnobFarm.RunLoop()
       local roomsFolder = workspace:FindFirstChild("CurrentRooms")
       if not roomsFolder or #roomsFolder:GetChildren() == 0 then
         KnobFarm.SetStatus("Waiting for rooms...")
+        pcall(function()
+          if Functions and Functions.ConfirmPreRunShop then
+            local mainUI = localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") and localPlayer2.PlayerGui:FindFirstChild("MainUI")
+            local itemShop = mainUI and mainUI:FindFirstChild("ItemShop")
+            if itemShop and itemShop.Visible then
+              Functions.ConfirmPreRunShop()
+            end
+          end
+        end)
         if not KnobFarm.StartKnobs then
           local k = GetPlayerKnobs()
           if k then
@@ -15160,6 +15290,13 @@ function KnobFarm.RunLoop()
           end
         end
         pcall(function()
+          if Functions and Functions.ConfirmPreRunShop then
+            local mainUI = localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") and localPlayer2.PlayerGui:FindFirstChild("MainUI")
+            local itemShop = mainUI and mainUI:FindFirstChild("ItemShop")
+            if itemShop and itemShop.Visible then
+              Functions.ConfirmPreRunShop()
+            end
+          end
           if toggles and toggles.Godmode and not toggles.Godmode.Value then
             toggles.Godmode:SetValue(true)
           end
