@@ -2626,23 +2626,40 @@ do
     local lock = door:FindFirstChild("Lock") or door:FindFirstChild("UnlockPrompt", true)
     if not lock then return end
 
-    local function getKeyTool()
+    local function getUnlockTool()
+      -- 1. Check for keys first (приоритет ключу для дверей)
       if char:FindFirstChild("Key") then return char:FindFirstChild("Key") end
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
       if bp and bp:FindFirstChild("Key") then return bp:FindFirstChild("Key") end
       for _, item in ipairs(char:GetChildren()) do
-        if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+        if item:IsA("Tool") and item.Name:lower():find("key") and not item.Name:lower():find("skeleton") then return item end
       end
       if bp then
         for _, item in ipairs(bp:GetChildren()) do
-          if item:IsA("Tool") and item.Name:lower():find("key") then return item end
+          if item:IsA("Tool") and item.Name:lower():find("key") and not item.Name:lower():find("skeleton") then return item end
         end
       end
+
+      -- 2. Check for lockpicks if no key
+      local lp = (char and (char:FindFirstChild("Lockpick") or char:FindFirstChild("Lockpicks")))
+        or (bp and (bp:FindFirstChild("Lockpick") or bp:FindFirstChild("Lockpicks")))
+      if lp then return lp end
+      if char then
+        for _, item in ipairs(char:GetChildren()) do
+          if item:IsA("Tool") and item.Name:lower():find("lockpick", 1, true) then return item end
+        end
+      end
+      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+          if item:IsA("Tool") and item.Name:lower():find("lockpick", 1, true) then return item end
+        end
+      end
+
       return nil
     end
 
-    local keyTool = getKeyTool()
-    if not keyTool then
+    local unlockTool = getUnlockTool()
+    if not unlockTool then
       local keyObj = room:FindFirstChild("KeyObtain", true) or room:FindFirstChild("Key", true)
       if not keyObj then
         for _, pr in ipairs(room:GetDescendants()) do
@@ -2664,11 +2681,11 @@ do
           task.wait(0.25)
         end
       end
-      keyTool = getKeyTool()
+      unlockTool = getUnlockTool()
     end
 
-    if keyTool and hum and keyTool.Parent ~= char then
-      pcall(function() hum:EquipTool(keyTool) end)
+    if unlockTool and hum and unlockTool.Parent ~= char then
+      pcall(function() hum:EquipTool(unlockTool) end)
       task.wait(0.15)
     end
 
@@ -3212,19 +3229,22 @@ Connections.InfiniteItemsHandler = ProximityPromptService.PromptTriggered:Connec
     return
   end
 
+  local curChar = localPlayer2 and localPlayer2.Character
   local val104 = {
-    "Lockpick", "Shears", "SkeletonKey", "Key", "GeneratorFuse", "KeyElectrical", "KeyBackdoor", "KeyIron", "Multitool", }
+    "Lockpick", "Lockpicks", "Shears", "SkeletonKey", "Key", "GeneratorFuse", "KeyElectrical", "KeyBackdoor", "KeyIron", "Multitool", }
 
   local val105 = {
-    "Lockpick", "Shears", "SkeletonKey", "Key", "KeyElectrical", "KeyBackdoor", "KeyIron", "Multitool", }
+    "Lockpick", "Lockpicks", "Shears", "SkeletonKey", "Key", "KeyElectrical", "KeyBackdoor", "KeyIron", "Multitool", }
 
   local findFirstChild3
 
-  for index11, value19 in ipairs(val104) do
-    findFirstChild3 = character:FindFirstChild(value19)
+  if curChar then
+    for index11, value19 in ipairs(val104) do
+      findFirstChild3 = curChar:FindFirstChild(value19)
 
-    if findFirstChild3 then
-      break
+      if findFirstChild3 then
+        break
+      end
     end
   end
 
@@ -3242,7 +3262,7 @@ Connections.InfiniteItemsHandler = ProximityPromptService.PromptTriggered:Connec
     end
 
     local val107 = {
-      "Key", "GeneratorFuse", "KeyBackdoor", "KeyElectrical", "KeyIron", "Lockpick", "SkeletonKey", "Shears", "Multitool", }
+      "Key", "GeneratorFuse", "KeyBackdoor", "KeyElectrical", "KeyIron", "Lockpick", "Lockpicks", "SkeletonKey", "Shears", "Multitool", }
 
     local val108 = { "Key", "GeneratorFuse", "KeyElectrical", "KeyIron" }
     local val109 = false
@@ -3642,10 +3662,10 @@ local function helper27(val112)
     local currentFloor = localPlayer2:GetAttribute("CurrentFloor") or ""
 
     if currentFloor ~= "OldHotel" and currentFloor ~= "Fools" then
-      if val113[val112.Name]
+      if toggles.InfiniteItemsToggle and toggles.InfiniteItemsToggle.Value and (val113[val112.Name]
         or val112.Parent and val112.Parent:GetAttribute("Locked") == true
         or val112.Parent and val112.Parent.Parent and val112.Parent.Parent.Name == "Locker_Small_Locked"
-          and val112.Name == "ActivateEventPrompt" then
+          and val112.Name == "ActivateEventPrompt") then
         local clone = val112:Clone()
         clone:SetAttribute("FakePrompt", true)
 
@@ -4736,10 +4756,64 @@ else
 end
 
 function Functions.HasItem(p74, p75)
-  if not p75 and localPlayer2.Backpack:FindFirstChild(p74) then
-    return localPlayer2.Backpack:FindFirstChild(p74)
-  elseif character:FindFirstChild(p74) then
-    return character:FindFirstChild(p74)
+  if not p74 then return nil end
+  local char = localPlayer2 and localPlayer2.Character
+  local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+  local aliases = { p74 }
+  if p74 == "Lockpick" then
+    table.insert(aliases, "Lockpicks")
+  elseif p74 == "Lockpicks" then
+    table.insert(aliases, "Lockpick")
+  elseif p74 == "SkeletonKey" then
+    table.insert(aliases, "Skeleton Key")
+  elseif p74 == "Skeleton Key" then
+    table.insert(aliases, "SkeletonKey")
+  end
+
+  -- 1. Check in Character (equipped)
+  if char then
+    for _, name in ipairs(aliases) do
+      local it = char:FindFirstChild(name)
+      if it then return it end
+    end
+    for _, it in ipairs(char:GetChildren()) do
+      if it:IsA("Tool") then
+        local iname = it.Name:lower()
+        for _, name in ipairs(aliases) do
+          if iname == name:lower() or iname:find(name:lower(), 1, true) then
+            return it
+          end
+        end
+      end
+    end
+  end
+
+  -- 2. Check in Backpack
+  if bp then
+    for _, name in ipairs(aliases) do
+      local it = bp:FindFirstChild(name)
+      if it then
+        if p75 and hum then
+          pcall(function() hum:EquipTool(it) end)
+        end
+        return it
+      end
+    end
+    for _, it in ipairs(bp:GetChildren()) do
+      if it:IsA("Tool") then
+        local iname = it.Name:lower()
+        for _, name in ipairs(aliases) do
+          if iname == name:lower() or iname:find(name:lower(), 1, true) then
+            if p75 and hum then
+              pcall(function() hum:EquipTool(it) end)
+            end
+            return it
+          end
+        end
+      end
+    end
   end
 
   return nil
@@ -6772,7 +6846,12 @@ local function helper53(val159)
     or val159:FindFirstAncestor("Regal_Couch") or val159:FindFirstAncestor("ArchivesLargePrinter")
     or val159:FindFirstAncestor("ForgetMeNotVineDoors")
     or val159:FindFirstAncestor("StairwellTerminal")
-    or val159:FindFirstAncestor("StairwellOfficeChair") then
+    or val159:FindFirstAncestor("StairwellOfficeChair")
+    or val159:FindFirstAncestor("Fireplace")
+    or val159:FindFirstAncestor("FirePlace")
+    or (val159.Parent and val159.Parent.Name:lower():find("fireplace", 1, true))
+    or (val159.Parent and val159.Parent.Name:lower():find("hearth", 1, true))
+    or (val159.ObjectText and val159.ObjectText:lower():find("fireplace", 1, true)) then
     return
   end
 
@@ -6793,7 +6872,7 @@ local function helper53(val159)
     end
 
     local val160 = {
-      "Key", "GeneratorFuse", "KeyBackdoor", "KeyElectrical", "KeyIron", "Lockpick", "SkeletonKey", "Shears", "Multitool", }
+      "Key", "GeneratorFuse", "KeyBackdoor", "KeyElectrical", "KeyIron", "Lockpick", "Lockpicks", "SkeletonKey", "Shears", "Multitool", }
 
     local val161 = { "Key", "GeneratorFuse", "KeyElectrical", "KeyIron" }
     local val162 = false
@@ -12259,22 +12338,44 @@ local function HasKeyTool()
   return false, nil
 end
 
-local function EquipUnlockTool()
+local function EquipUnlockTool(preferLockpick)
   local char = localPlayer2 and localPlayer2.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not hum then return end
+  if not hum or not char then return end
 
-  local hasLp, lpTool = HasLockpick()
-  if hasLp and lpTool then
-    if lpTool.Parent == char then return end
-    pcall(function() hum:EquipTool(lpTool) end)
+  if preferLockpick then
+    local hasLp, lpTool = HasLockpick()
+    if hasLp and lpTool then
+      if lpTool.Parent ~= char then
+        pcall(function()
+          hum:UnequipTools()
+          hum:EquipTool(lpTool)
+        end)
+      end
+      return
+    end
+  end
+
+  -- При открытии дверей: если есть ключ, ВСЕГДА берем именно ключ (прячем отмычки, если они в руке)
+  local hasKey, keyTool = HasKeyTool()
+  if hasKey and keyTool then
+    if keyTool.Parent ~= char then
+      pcall(function()
+        hum:UnequipTools()
+        hum:EquipTool(keyTool)
+      end)
+    end
     return
   end
 
-  local hasKey, keyTool = HasKeyTool()
-  if hasKey and keyTool then
-    if keyTool.Parent == char then return end
-    pcall(function() hum:EquipTool(keyTool) end)
+  local hasLp, lpTool = HasLockpick()
+  if hasLp and lpTool then
+    if lpTool.Parent ~= char then
+      pcall(function()
+        hum:UnequipTools()
+        hum:EquipTool(lpTool)
+      end)
+    end
     return
   end
 end
@@ -12643,14 +12744,28 @@ local function IsLootablePrompt(prompt)
   local objText = (prompt.ObjectText or ""):lower()
   local actionText = (prompt.ActionText or ""):lower()
 
-  -- Exclude doors, locks, gate levers, figure triggers, hint papers/books, fuse boxes, closets
-  if pName == "Door" or pName == "Padlock" or pName == "Lock"
+  -- Exclude doors, door locks, gate levers, figure triggers, hint papers/books, fuse boxes, closets, fireplaces
+  if pName == "Door" or (pName == "Padlock" and parent:FindFirstAncestor("Door"))
+    or (pName == "Lock" and parent:FindFirstAncestor("Door"))
     or parent:FindFirstAncestor("Door") or pName == "DoorFake" or pName == "FakeDoor"
     or pName:find("Gate", 1, true) or pName:find("Lever", 1, true)
     or pName == "LiveHintBook" or pName == "LibraryHintPaper"
     or pName == "FusePickup" or pName == "FuseObtain"
-    or pNameLower:find("closet", 1, true) or pNameLower:find("wardrobe", 1, true) then
+    or pNameLower:find("closet", 1, true) or pNameLower:find("wardrobe", 1, true)
+    or pNameLower:find("fireplace", 1, true) or pNameLower:find("hearth", 1, true) or pNameLower:find("chimney", 1, true)
+    or parent:FindFirstAncestor("Fireplace") or parent:FindFirstAncestor("FirePlace")
+    or objText:find("fireplace", 1, true) or objText:find("hearth", 1, true) or objText:find("chimney", 1, true)
+    or actionText:find("light", 1, true) or actionText:find("ignite", 1, true) or actionText:find("burn", 1, true) then
     return false
+  end
+
+  local checkAnc = parent
+  while checkAnc and checkAnc ~= workspace do
+    local ancName = checkAnc.Name:lower()
+    if ancName:find("fireplace", 1, true) or ancName:find("hearth", 1, true) or ancName:find("chimney", 1, true) then
+      return false
+    end
+    checkAnc = checkAnc.Parent
   end
 
   -- Don't close drawers
@@ -12664,12 +12779,13 @@ local function IsLootablePrompt(prompt)
     return true
   end
 
-  -- 2. Drawers, Chests, Toolboxes, Containers
+  -- 2. Drawers, Chests, Toolboxes, Containers, Chest Locks
   if pName:find("Drawer", 1, true) or pName:find("Chest", 1, true)
     or pName:find("Toolbox", 1, true) or pName:find("Toolshed", 1, true)
-    or pName:find("Box", 1, true) or objText:find("drawer", 1, true)
-    or objText:find("chest", 1, true) or objText:find("box", 1, true)
-    or actionText == "open" or actionText == "search" or actionText == "loot" then
+    or pName:find("Box", 1, true) or pName == "Lock" or pName == "Padlock"
+    or objText:find("drawer", 1, true) or objText:find("chest", 1, true)
+    or objText:find("box", 1, true) or objText:find("lock", 1, true)
+    or actionText == "open" or actionText == "search" or actionText == "loot" or actionText == "unlock" then
     return true
   end
 
@@ -12696,6 +12812,23 @@ local function LootAllInRoom(room)
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return end
 
+  -- Отключаем и помечаем любые камины в комнате, чтобы бот никогда к ним не бегал
+  for _, desc in ipairs(room:GetDescendants()) do
+    if desc:IsA("ProximityPrompt") then
+      local p = desc.Parent
+      local pName = p and p.Name:lower() or ""
+      local obj = (desc.ObjectText or ""):lower()
+      local act = (desc.ActionText or ""):lower()
+      if pName:find("fireplace", 1, true) or pName:find("hearth", 1, true) or pName:find("chimney", 1, true)
+        or obj:find("fireplace", 1, true) or obj:find("hearth", 1, true) or obj:find("chimney", 1, true)
+        or act:find("light", 1, true) or act:find("ignite", 1, true) or act:find("burn", 1, true)
+        or desc:FindFirstAncestor("Fireplace") or desc:FindFirstAncestor("FirePlace") then
+        pcall(function() desc.Enabled = false end)
+        KnobFarm.LootedObjects[desc] = true
+      end
+    end
+  end
+
   -- 1. Сбор всех доступных промптов в радиусе вокруг персонажа (все ящики текущей тумбочки + золото)
   local function lootAroundPlayer(radius)
     local curChar = localPlayer2 and localPlayer2.Character
@@ -12710,18 +12843,32 @@ local function LootAllInRoom(room)
           local pos = GetInstancePosition(desc.Parent) or GetInstancePosition(desc)
           if pos and (pos - curRoot.Position).Magnitude <= rad then
             if HasFloorUnder(pos) then
-              pcall(function() Functions.ForceFirePrompt(desc) end)
+              local p = desc.Parent
+              local isLocked = (desc.Name == "UnlockPrompt" or desc.Name == "LockPrompt"
+                or (p and (p.Name:lower():find("lock", 1, true) or p:GetAttribute("Locked") == true)))
+              if isLocked then
+                EquipUnlockTool(true)
+                task.wait(0.04)
+              end
+
+              pcall(function()
+                desc.HoldDuration = 0
+                desc.RequiresLineOfSight = false
+                desc.MaxActivationDistance = 30
+                desc.Enabled = true
+              end)
               if fireproximityprompt then
                 pcall(fireproximityprompt, desc, 0, true)
                 pcall(fireproximityprompt, desc)
               end
+              pcall(function()
+                desc:InputHoldBegin()
+                task.wait(0.03)
+                desc:InputHoldEnd()
+              end)
               KnobFarm.LootedObjects[desc] = true
 
-              local p = desc.Parent
               if p then
-                if p.Name:lower():find("locked", 1, true) then
-                  EquipUnlockTool()
-                end
                 if p.Name == "GoldPile" or p.Name == "TinyGold" or p.Name == "Gold" or p:GetAttribute("GoldValue") then
                   KnobFarm.LootedObjects[p] = true
                   local gVal = p:GetAttribute("GoldValue") or 10
@@ -12793,11 +12940,29 @@ local function LootAllInRoom(room)
     -- Если цель уже рядом (до 7 стадов) — открываем сразу
     if target.dist <= 7.0 then
       if target.prompt and target.prompt.Enabled and not KnobFarm.LootedObjects[target.prompt] then
-        pcall(function() Functions.ForceFirePrompt(target.prompt) end)
+        local p = target.parent
+        local isLocked = (target.prompt.Name == "UnlockPrompt" or target.prompt.Name == "LockPrompt"
+          or (p and (p.Name:lower():find("lock", 1, true) or p:GetAttribute("Locked") == true)))
+        if isLocked then
+          EquipUnlockTool(true)
+          task.wait(0.05)
+        end
+
+        pcall(function()
+          target.prompt.HoldDuration = 0
+          target.prompt.RequiresLineOfSight = false
+          target.prompt.MaxActivationDistance = 30
+          target.prompt.Enabled = true
+        end)
         if fireproximityprompt then
           pcall(fireproximityprompt, target.prompt, 0, true)
           pcall(fireproximityprompt, target.prompt)
         end
+        pcall(function()
+          target.prompt:InputHoldBegin()
+          task.wait(0.04)
+          target.prompt:InputHoldEnd()
+        end)
         KnobFarm.LootedObjects[target.prompt] = true
       end
       -- Сразу лутаем все ящики этой же тумбочки
@@ -12820,11 +12985,29 @@ local function LootAllInRoom(room)
       if okNav or curDist <= 7.5 then
         -- Открываем целевой ящик
         if target.prompt and target.prompt.Enabled and not KnobFarm.LootedObjects[target.prompt] then
-          pcall(function() Functions.ForceFirePrompt(target.prompt) end)
+          local p = target.parent
+          local isLocked = (target.prompt.Name == "UnlockPrompt" or target.prompt.Name == "LockPrompt"
+            or (p and (p.Name:lower():find("lock", 1, true) or p:GetAttribute("Locked") == true)))
+          if isLocked then
+            EquipUnlockTool(true)
+            task.wait(0.05)
+          end
+
+          pcall(function()
+            target.prompt.HoldDuration = 0
+            target.prompt.RequiresLineOfSight = false
+            target.prompt.MaxActivationDistance = 30
+            target.prompt.Enabled = true
+          end)
           if fireproximityprompt then
             pcall(fireproximityprompt, target.prompt, 0, true)
             pcall(fireproximityprompt, target.prompt)
           end
+          pcall(function()
+            target.prompt:InputHoldBegin()
+            task.wait(0.04)
+            target.prompt:InputHoldEnd()
+          end)
           KnobFarm.LootedObjects[target.prompt] = true
         end
 
@@ -13208,21 +13391,31 @@ PassDoorStraight = function(door, root, hum)
       end
     end
 
-    local statusMsg = HasLockpick() and "Unlocking door with lockpick..." or "Unlocking door with key..."
+    local statusMsg = HasKeyTool() and "Unlocking door with key..." or "Unlocking door with lockpick..."
     KnobFarm.SetStatus(statusMsg)
     EquipUnlockTool()
     local unStart = tick()
-    while IsDoorLocked(door) and tick() - unStart < 2.5 and KnobFarm.Active and not _Unloading do
+    while IsDoorLocked(door) and tick() - unStart < 3.0 and KnobFarm.Active and not _Unloading do
       EquipUnlockTool()
       local _, curPrompt = IsDoorLocked(door)
       if curPrompt and curPrompt.Enabled then
-        pcall(function() Functions.ForceFirePrompt(curPrompt) end)
+        pcall(function()
+          curPrompt.HoldDuration = 0
+          curPrompt.RequiresLineOfSight = false
+          curPrompt.MaxActivationDistance = 30
+          curPrompt.Enabled = true
+        end)
         if fireproximityprompt then
           pcall(fireproximityprompt, curPrompt, 0, true)
           pcall(fireproximityprompt, curPrompt)
         end
+        pcall(function()
+          curPrompt:InputHoldBegin()
+          task.wait(0.04)
+          curPrompt:InputHoldEnd()
+        end)
       end
-      task.wait(0.05)
+      task.wait(0.06)
     end
   end
 
