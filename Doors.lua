@@ -14045,33 +14045,24 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     local targetPoint = (curWp and ((typeof(curWp) == "Vector3" and curWp) or curWp.Position)) or targetPos
     currentTargetPoint = targetPoint
 
-    -- Проверка спуска по лестнице / крутому уклону вниз
-    local isDescending = false
-    local dy = targetPoint.Y - rootPos.Y
-    if dy < -0.6 then
-      isDescending = true
-    else
-      local hasF, _, floorPart = HasFloorUnder(rootPos, 4)
-      if floorPart then
-        local pName = floorPart.Name:lower()
-        local parName = (floorPart.Parent and floorPart.Parent.Name:lower()) or ""
-        if (pName:find("stair") or pName:find("step") or parName:find("stair") or parName:find("step")) and dy < 0.2 then
-          isDescending = true
-        end
+    -- Проверка нахождения на лестнице
+    local hasF, _, floorPart = HasFloorUnder(rootPos, 4)
+    local isStair = false
+    if floorPart then
+      local pName = floorPart.Name:lower()
+      local parName = (floorPart.Parent and floorPart.Parent.Name:lower()) or ""
+      if pName:find("stair") or pName:find("step") or parName:find("stair") or parName:find("step") then
+        isStair = true
       end
+    end
+
+    -- Гасим физический подброс вверх от ступенек (чтобы бот не взлетал в потолок)
+    if isStair and root.AssemblyLinearVelocity.Y > 0.1 then
+      root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
     end
 
     local curDesiredSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
       or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or desiredSpeed
-
-    -- Защита от катапультирования на лестнице: на спуске ограничиваем скорость до 16-17 стадов/сек
-    if isDescending then
-      curDesiredSpeed = math.min(curDesiredSpeed, 17)
-      -- Обнуляем вертикальный подброс вверх от ступенек (чтобы бот не взлетал в потолок)
-      if root.AssemblyLinearVelocity.Y > 0.3 then
-        root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
-      end
-    end
 
     if options and options.Walkspeed and options.Walkspeed.Value ~= curDesiredSpeed then
       options.Walkspeed:SetValue(curDesiredSpeed)
@@ -14107,8 +14098,8 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       h:Move(Vector3.zero, false)
     end
 
-    -- Jump action (строго запрещен на спуске с лестниц!)
-    if curWp and curWp.Action == Enum.PathWaypointAction.Jump and not isDescending then
+    -- Jump action (запрещен на лестницах)
+    if curWp and curWp.Action == Enum.PathWaypointAction.Jump and not isStair then
       h.Jump = true
     end
 
@@ -14166,20 +14157,17 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
           end)
         end
 
-        local isDesc = false
-        if targetPoint and (targetPoint.Y - root.Position.Y) < -0.5 then
-          isDesc = true
-        else
-          local hasF, _, floorPart = HasFloorUnder(root.Position, 4)
-          if floorPart then
-            local pName = floorPart.Name:lower()
-            if pName:find("stair") or pName:find("step") then
-              isDesc = true
-            end
+        local isStairStuck = false
+        local hasF, _, floorPart = HasFloorUnder(root.Position, 4)
+        if floorPart then
+          local pName = floorPart.Name:lower()
+          local parName = (floorPart.Parent and floorPart.Parent.Name:lower()) or ""
+          if pName:find("stair") or pName:find("step") or parName:find("stair") or parName:find("step") then
+            isStairStuck = true
           end
         end
 
-        if not isDesc then
+        if not isStairStuck then
           h.Jump = true
         end
 
