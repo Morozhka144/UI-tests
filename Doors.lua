@@ -12027,8 +12027,12 @@ end
 local function ResetFarmState()
   ClearPathNodes()
   KnobFarm.PassedFirstDoor = false
+  KnobFarm.CurrentRoomNum = nil
+  KnobFarm.LastRoomNum = nil
+  KnobFarm.RoomEntryTime = nil
   KnobFarm.LootedObjects = setmetatable({}, { __mode = "k" })
   KnobFarm.OpenedDoors = setmetatable({}, { __mode = "k" })
+  KnobFarm.IgnoredDoors = setmetatable({}, { __mode = "k" })
   KnobFarm.StartKnobs = nil
   KnobFarm.StartKnobsBeforeShop = false
   KnobFarm.LockpickBoughtThisRun = false
@@ -14886,8 +14890,10 @@ function KnobFarm.RunLoop()
         KnobFarm.SetStatus("Dead. Waiting for Play Again...")
         task.wait(4.0)
         pcall(function()
-          if remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain") then
-            remotesFolder2.PlayAgain:FireServer()
+          local playAgain = (remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain"))
+            or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder") and replicatedStorage.RemotesFolder:FindFirstChild("PlayAgain"))
+          if playAgain then
+            playAgain:FireServer()
           end
         end)
         ResetFarmState()
@@ -15149,8 +15155,33 @@ function KnobFarm.RunLoop()
         KnobFarm.SetStatus("Gate room detected — ignoring obstacles, heading straight to Door...")
       end
 
-      -- 6. Room 50 (Figure & Library Flight Solver)
+      -- 5.5. Room 49: Reset Character for overnight AFK farm
       local currentLatest = latestRoomVal and tonumber(latestRoomVal.Value) or 0
+      if (roomNum and roomNum >= 49) or currentLatest >= 49 then
+        KnobFarm.SetStatus("Room 49 reached! Resetting character for Play Again...")
+        pcall(function()
+          if toggles and toggles.Godmode and toggles.Godmode.Value then
+            toggles.Godmode:SetValue(false)
+          end
+        end)
+        pcall(function()
+          if hum then
+            hum.Health = 0
+          end
+          if char then
+            char:BreakJoints()
+          end
+          local underwater = (remotesFolder2 and remotesFolder2:FindFirstChild("Underwater"))
+            or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder") and replicatedStorage.RemotesFolder:FindFirstChild("Underwater"))
+          if underwater then
+            underwater:FireServer(true)
+          end
+        end)
+        task.wait(1.0)
+        continue
+      end
+
+      -- 6. Room 50 (Figure & Library Flight Solver)
       if roomNum == 50 or currentLatest == 50 then
         local room50 = (curRooms and curRooms:FindFirstChild("50")) or room
         handleRoom50(room50, room50 and room50:FindFirstChild("Door"))
