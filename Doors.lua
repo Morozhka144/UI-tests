@@ -2314,6 +2314,122 @@ do
     end
   end
 
+  Groupboxes.AutoDoorSkip:AddButton({
+    Text = "TP to Book",
+    Tooltip = "Teleports to any uncollected book in Room 50",
+    Callback = function()
+      task.spawn(function()
+        local char = localPlayer2 and localPlayer2.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        local curRooms = workspace:FindFirstChild("CurrentRooms")
+        local targetRoom = (curRooms and curRooms:FindFirstChild("50")) or workspace
+        local targetBook = nil
+
+        for _, desc in ipairs(targetRoom:GetDescendants()) do
+          if desc.Name == "LiveHintBook" then
+            local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if pr and pr.Enabled then
+              targetBook = desc
+              break
+            end
+          end
+        end
+
+        if not targetBook and curRooms then
+          for _, desc in ipairs(curRooms:GetDescendants()) do
+            if desc.Name == "LiveHintBook" then
+              targetBook = desc
+              break
+            end
+          end
+        end
+
+        if targetBook then
+          local pos = (targetBook:IsA("BasePart") and targetBook.Position)
+            or (targetBook:IsA("Model") and targetBook:GetPivot().Position)
+          if pos then
+            pcall(function()
+              if KnobFarm then KnobFarm.Teleporting = true end
+            end)
+            root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+            root.AssemblyLinearVelocity = Vector3.zero
+            local pr = targetBook:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if pr then
+              safeFirePrompt(pr)
+            end
+            pcall(function()
+              if library and library.Notify then
+                library:Notify({ Title = "Teleported to Book!", Time = 3 })
+              end
+            end)
+          end
+        else
+          pcall(function()
+            if library and library.Notify then
+              library:Notify({ Title = "No Books found in Room 50!", Time = 3 })
+            end
+          end)
+        end
+      end)
+    end
+  })
+
+  Groupboxes.AutoDoorSkip:AddButton({
+    Text = "TP to Library Paper",
+    Tooltip = "Teleports to the hint paper with the code in Room 50",
+    Callback = function()
+      task.spawn(function()
+        local char = localPlayer2 and localPlayer2.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        local curRooms = workspace:FindFirstChild("CurrentRooms")
+        local targetRoom = (curRooms and curRooms:FindFirstChild("50")) or workspace
+        local paper = (targetRoom and targetRoom:FindFirstChild("LibraryHintPaper", true))
+          or (curRooms and curRooms:FindFirstChild("LibraryHintPaper", true))
+          or (targetRoom and targetRoom:FindFirstChild("PickupItem", true))
+
+        if not paper and targetRoom then
+          for _, pr in ipairs(targetRoom:GetDescendants()) do
+            if pr:IsA("ProximityPrompt") and pr.ObjectText:lower():find("paper", 1, true) then
+              paper = pr.Parent
+              break
+            end
+          end
+        end
+
+        if paper then
+          local pPos = (paper:IsA("BasePart") and paper.Position)
+            or (paper:IsA("Model") and paper:GetPivot().Position)
+          if pPos then
+            pcall(function()
+              if KnobFarm then KnobFarm.Teleporting = true end
+            end)
+            root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 0))
+            root.AssemblyLinearVelocity = Vector3.zero
+            local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if pr then
+              safeFirePrompt(pr)
+            end
+            pcall(function()
+              if library and library.Notify then
+                library:Notify({ Title = "Teleported to Library Paper!", Time = 3 })
+              end
+            end)
+          end
+        else
+          pcall(function()
+            if library and library.Notify then
+              library:Notify({ Title = "Library Paper not found!", Time = 3 })
+            end
+          end)
+        end
+      end)
+    end
+  })
+
   local function HasRushAmbushBlitz()
     local threatNames = {
       RushMoving = true, Rush = true,
@@ -11839,6 +11955,12 @@ local function ResetFarmState()
   KnobFarm.LockpickBoughtThisRun = false
   KnobFarm.StatsRecordedThisRun = false
   KnobFarm.RunGold = 0
+  KnobFarm.FirstChaseDone = false
+  KnobFarm.SecondChaseDone = false
+  KnobFarm.InSeekChase = false
+  KnobFarm.SeekDoorsSkipped = 0
+  KnobFarm.LastSkippedRoom = nil
+  KnobFarm.SeekChaseStartRoom = nil
   pcall(function()
     if toggles.Phase and toggles.Phase.Value then
       toggles.Phase:SetValue(false)
@@ -12738,22 +12860,31 @@ local function isAtSeek(room, roomNum)
   local curRooms = workspace:FindFirstChild("CurrentRooms")
   local targetRoom = (curRooms and curRooms:FindFirstChild(tostring(curNum))) or room
 
-  -- 1. Первая погоня длится 5 комнат, а вторая 10
-  if KnobFarm and KnobFarm.SeekChaseStartRoom then
-    local chaseLength = (KnobFarm.SeekChaseStartRoom < 60) and 5 or 10
-    if curNum >= (KnobFarm.SeekChaseStartRoom + chaseLength) then
-      KnobFarm.SeekChaseStartRoom = nil
-      return false
-    end
-    local inChase = gameData and gameData:FindFirstChild("ChaseInSession")
-    if inChase and inChase.Value == false then
-      KnobFarm.SeekChaseStartRoom = nil
+  -- 1. Если первая погоня уже завершена (5 дверей скипнуто), до комнаты 60 Сик больше НЕ запускается!
+  if curNum < 60 and KnobFarm and KnobFarm.FirstChaseDone then
+    return false
+  end
+  -- 2. Если вторая погоня уже завершена (10 дверей скипнуто), Сик больше НЕ запускается!
+  if curNum >= 60 and KnobFarm and KnobFarm.SecondChaseDone then
+    return false
+  end
+
+  -- 3. Если уже идет активная погоня Сика:
+  if KnobFarm and KnobFarm.InSeekChase then
+    local maxDoors = (curNum < 60) and 5 or 10
+    if (KnobFarm.SeekDoorsSkipped or 0) >= maxDoors then
+      if curNum < 60 then
+        KnobFarm.FirstChaseDone = true
+      else
+        KnobFarm.SecondChaseDone = true
+      end
+      KnobFarm.InSeekChase = false
       return false
     end
     return true
   end
 
-  -- 2. Проверяем начало погони (появление Сика, триггеры или флаг игры)
+  -- 4. Проверяем начало погони (только если данная погоня еще НЕ была завершена!)
   local isStarting = false
   if gameData then
     local inChase = gameData:FindFirstChild("ChaseInSession")
@@ -12762,15 +12893,13 @@ local function isAtSeek(room, roomNum)
     end
   end
 
-  if not isStarting then
+  if not isStarting and targetRoom then
     local triggers = {
       "TriggerEventCollision", "ChaseStartTrigger", "SeekTrigger",
       "Seeking", "Seek_Arm", "SeekMoving", "SeekMovingNewClone", "SeekRig"
     }
     for _, t in ipairs(triggers) do
-      if (targetRoom and targetRoom:FindFirstChild(t, true))
-        or (room and room:FindFirstChild(t, true))
-        or (workspace:FindFirstChild(t)) then
+      if targetRoom:FindFirstChild(t, true) then
         isStarting = true
         break
       end
@@ -12779,6 +12908,9 @@ local function isAtSeek(room, roomNum)
 
   if isStarting and curNum > 0 then
     if KnobFarm then
+      KnobFarm.InSeekChase = true
+      KnobFarm.SeekDoorsSkipped = 0
+      KnobFarm.LastSkippedRoom = curNum
       KnobFarm.SeekChaseStartRoom = curNum
     end
     return true
@@ -14284,8 +14416,36 @@ function KnobFarm.RunLoop()
         root.AssemblyLinearVelocity = Vector3.zero
         if hum then hum:Move(Vector3.zero, false) end
 
+        local maxDoors = (curRoomNum < 60) and 5 or 10
+
+        -- Проверяем лимит пропущенных дверей (строго 5 для 1-й погони, 10 для 2-й)
+        if (KnobFarm.SeekDoorsSkipped or 0) >= maxDoors then
+          if curRoomNum < 60 then
+            KnobFarm.FirstChaseDone = true
+          else
+            KnobFarm.SecondChaseDone = true
+          end
+          KnobFarm.InSeekChase = false
+          KnobFarm.DisabledNoclipForSeek = false
+          KnobFarm.Teleporting = false
+          pcall(function()
+            if toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
+              toggles.AutoDoorSkip:SetValue(false)
+            end
+            if toggles and toggles.AutoFarmEnabled and not toggles.AutoFarmEnabled.Value then
+              toggles.AutoFarmEnabled:SetValue(true)
+            end
+            if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+              toggles.PhantomNoclip:SetValue(true)
+            end
+          end)
+          KnobFarm.SetStatus("Seek (" .. tostring(maxDoors) .. " doors) skipped! Knob Farm resumed.")
+          task.wait(0.2)
+          continue
+        end
+
         -- 2. ОРИГИНАЛЬНЫЙ АВТО СКИП (1 в 1 как в door skipper.lua):
-        KnobFarm.SetStatus("Seek Chase: Auto Door Skip")
+        KnobFarm.SetStatus("Seek Chase: Skipped " .. tostring(KnobFarm.SeekDoorsSkipped or 0) .. "/" .. tostring(maxDoors) .. " Doors")
         local targetRoom = (latestRoomVal and curRooms and curRooms:FindFirstChild(tostring(latestRoomVal.Value))) or room
         local door = FindRealSeekDoor(targetRoom, curRoomNum) or (targetRoom and targetRoom:FindFirstChild("Door"))
         if not door and targetRoom then
@@ -14321,12 +14481,24 @@ function KnobFarm.RunLoop()
           if door:FindFirstChild("ClientOpen") then
             pcall(function() door.ClientOpen:FireServer() end)
           end
+
+          -- Фиксируем пропуск двери
+          local currentTargetNum = tonumber(latestRoomVal and latestRoomVal.Value) or curRoomNum
+          if currentTargetNum ~= KnobFarm.LastSkippedRoom then
+            KnobFarm.LastSkippedRoom = currentTargetNum
+            KnobFarm.SeekDoorsSkipped = (KnobFarm.SeekDoorsSkipped or 0) + 1
+          end
         end
 
         task.wait(0.1)
         continue
       elseif KnobFarm.DisabledNoclipForSeek then
         -- Погоня Сика завершена: выключаем скип, включаем фарм и возвращаем ноуклип
+        if curRoomNum < 60 then
+          KnobFarm.FirstChaseDone = true
+        else
+          KnobFarm.SecondChaseDone = true
+        end
         KnobFarm.DisabledNoclipForSeek = false
         KnobFarm.InSeekChase = false
         KnobFarm.Teleporting = false
