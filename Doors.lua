@@ -14073,7 +14073,7 @@ local function handleRoom50(room, door)
     or (curRooms and curRooms:FindFirstChild("50"))
     or room
 
-  -- 1. Выключаем фантом ноуклип
+  -- 1. Выключаем фантом ноуклип (коллизии строго включены, сквозь стены не ходим!)
   KnobFarm.DisableGodmodeForBoss = true
   pcall(function()
     if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
@@ -14094,7 +14094,7 @@ local function handleRoom50(room, door)
     end
   end)
   SetCrouched(true)
-  KnobFarm.Teleporting = true
+  KnobFarm.Teleporting = false
 
   -- Хелпер поиска Фигуры
   local function getFigurePos()
@@ -14113,96 +14113,7 @@ local function handleRoom50(room, door)
     return nil
   end
 
-  -- Плавный полет через BodyVelocity + BodyGyro с огибанием Фигуры
-  local function FlyToTarget(targetPos, speed, cruiseHeight, avoidFigure)
-    if not root then return end
-    speed = speed or 26
-    cruiseHeight = cruiseHeight or 12
-
-    local bv = root:FindFirstChild("Room50FlyBV") or Instance.new("BodyVelocity")
-    bv.Name = "Room50FlyBV"
-    bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-    bv.Velocity = Vector3.zero
-    bv.Parent = root
-
-    local bg = root:FindFirstChild("Room50FlyBG") or Instance.new("BodyGyro")
-    bg.Name = "Room50FlyBG"
-    bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-    bg.P = 10000
-    bg.CFrame = root.CFrame
-    bg.Parent = root
-
-    local startTime = tick()
-    local maxTime = 12.0
-    local targetAirY = targetPos.Y + cruiseHeight
-
-    -- Подъем на безопасную высоту в воздух
-    if root.Position.Y < targetAirY - 2 then
-      local riseStart = tick()
-      while tick() - riseStart < 1.5 and KnobFarm.Active and not _Unloading do
-        bv.Velocity = Vector3.new(0, speed, 0)
-        if root.Position.Y >= targetAirY - 1 then break end
-        task.wait(0.03)
-      end
-    end
-
-    -- Горизонтальный перелет с огибанием Фигуры
-    while tick() - startTime < maxTime and KnobFarm.Active and not _Unloading do
-      local currentPos = root.Position
-      local horizDiff = Vector3.new(targetPos.X - currentPos.X, 0, targetPos.Z - currentPos.Z)
-      local horizDist = horizDiff.Magnitude
-
-      local figPos = getFigurePos()
-      local figRepulsion = Vector3.zero
-      if figPos and avoidFigure then
-        local toFig = Vector3.new(currentPos.X - figPos.X, 0, currentPos.Z - figPos.Z)
-        local figDist = toFig.Magnitude
-        if figDist < 25 and figDist > 0.1 then
-          figRepulsion = toFig.Unit * (25 - figDist) * 1.5
-        end
-      end
-
-      if horizDist <= 2.0 then break end
-
-      local moveDir = (horizDiff.Unit * speed) + figRepulsion
-      if moveDir.Magnitude > speed then
-        moveDir = moveDir.Unit * speed
-      end
-
-      local yDiff = targetAirY - currentPos.Y
-      local yVel = math.clamp(yDiff * 3, -speed, speed)
-
-      bv.Velocity = Vector3.new(moveDir.X, yVel, moveDir.Z)
-      bg.CFrame = CFrame.new(currentPos, currentPos + Vector3.new(moveDir.X, 0, moveDir.Z))
-      task.wait(0.03)
-    end
-
-    -- Снижение к объекту
-    local descendStart = tick()
-    while tick() - descendStart < 2.5 and KnobFarm.Active and not _Unloading do
-      local targetExact = targetPos + Vector3.new(0, 1.2, 0)
-      local diff = targetExact - root.Position
-      if diff.Magnitude <= 1.5 then break end
-
-      bv.Velocity = diff.Unit * math.min(speed, diff.Magnitude * 4)
-      task.wait(0.03)
-    end
-
-    bv.Velocity = Vector3.zero
-    root.AssemblyLinearVelocity = Vector3.zero
-  end
-
-  local function StopFly()
-    if root then
-      local bv = root:FindFirstChild("Room50FlyBV")
-      if bv then bv:Destroy() end
-      local bg = root:FindFirstChild("Room50FlyBG")
-      if bg then bg:Destroy() end
-      root.AssemblyLinearVelocity = Vector3.zero
-    end
-  end
-
-  -- 2. Находим книги (LiveHintBook) и летим к каждой, избегая Фигуру
+  -- 2. Находим книги (LiveHintBook) и идем к каждой по полу через Pathfinding (НЕ сквозь стены), избегая Фигуру
   KnobFarm.SetStatus("Room 50: Finding Books...")
   local books = {}
   if targetRoom then
@@ -14245,41 +14156,55 @@ local function handleRoom50(room, door)
     if not bPos then
       KnobFarm.LootedObjects[targetBook] = true
     else
-      -- Если Фигура стоит прямо на книге (< 14 стадов), ждем пока отойдет
+      -- Если Фигура стоит прямо на книге (< 15 стадов), ждем пока отойдет
       local waitFig = tick()
-      while figPos and (bPos - figPos).Magnitude < 14 and tick() - waitFig < 3.0 do
+      while figPos and (bPos - figPos).Magnitude < 15 and tick() - waitFig < 4.0 and KnobFarm.Active and not _Unloading do
+        KnobFarm.SetStatus("Room 50: Waiting for Figure to pass...")
         task.wait(0.5)
         figPos = getFigurePos()
       end
 
-      KnobFarm.SetStatus("Room 50: Flying to Book (avoiding Figure)...")
-      FlyToTarget(bPos, 26, 12, true)
-
-      local pr = targetBook:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if pr and pr.Enabled then
-        pcall(function()
-          pr.HoldDuration = 0
-          pr.RequiresLineOfSight = false
-          pr.MaxActivationDistance = 30
-        end)
-        if fireproximityprompt then
-          pcall(fireproximityprompt, pr, 0, true)
-          pcall(fireproximityprompt, pr)
-        end
-        if Functions and Functions.ForceFirePrompt then
-          pcall(Functions.ForceFirePrompt, pr)
-        end
+      -- Идем к книге по полу (Pathfinding НЕ через стены, точно так же как к любым другим предметам)
+      KnobFarm.SetStatus("Room 50: Walking to Book (avoiding Figure)...")
+      local floorPos = GetFloorPosition(bPos) or bPos
+      if NavigateTo then
+        NavigateTo(floorPos, targetBook, "LiveHintBook", 8.0, "Loot")
       end
-      KnobFarm.LootedObjects[targetBook] = true
 
-      -- Пауза ровно 2.5с после того как бот берет книгу
-      KnobFarm.SetStatus("Room 50: Book collected! Waiting 2.5s...")
-      task.wait(2.5)
+      local curChar = localPlayer2 and localPlayer2.Character
+      local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+      local dist = curRoot and (curRoot.Position - bPos).Magnitude or 999
+
+      if dist <= 9.0 then
+        local pr = targetBook:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr and pr.Enabled then
+          pcall(function()
+            pr.HoldDuration = 0
+            pr.RequiresLineOfSight = false
+            pr.MaxActivationDistance = 30
+          end)
+          if fireproximityprompt then
+            pcall(fireproximityprompt, pr, 0, true)
+            pcall(fireproximityprompt, pr)
+          end
+          if Functions and Functions.ForceFirePrompt then
+            pcall(Functions.ForceFirePrompt, pr)
+          end
+        end
+        KnobFarm.LootedObjects[targetBook] = true
+
+        -- Пауза 0.65с после того как бот берет книгу
+        KnobFarm.SetStatus("Room 50: Book collected! Waiting 0.65s...")
+        task.wait(0.65)
+      else
+        -- Если не дошли (заблокировано) - помечаем чтобы не зацикливаться вечно
+        KnobFarm.LootedObjects[targetBook] = true
+      end
     end
   end
 
-  -- 3. Летит за листочком, берет его в руки
-  KnobFarm.SetStatus("Room 50: Flying to Hint Paper...")
+  -- 3. Идет за листочком по полу (НЕ через стены), берет его в руки
+  KnobFarm.SetStatus("Room 50: Walking to Hint Paper...")
   local paper = (targetRoom and targetRoom:FindFirstChild("LibraryHintPaper", true))
     or (curRooms and curRooms:FindFirstChild("LibraryHintPaper", true))
     or (targetRoom and targetRoom:FindFirstChild("PickupItem", true))
@@ -14292,41 +14217,51 @@ local function handleRoom50(room, door)
     end
   end
 
-  if paper and root then
+  if paper then
     local pPos = (paper:IsA("BasePart") and paper.Position) or (paper:IsA("Model") and paper:GetPivot().Position)
     if pPos then
-      FlyToTarget(pPos, 26, 12, true)
-      local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if pr and pr.Enabled then
-        pcall(function()
-          pr.HoldDuration = 0
-          pr.RequiresLineOfSight = false
-          pr.MaxActivationDistance = 30
-        end)
-        if fireproximityprompt then
-          pcall(fireproximityprompt, pr, 0, true)
-          pcall(fireproximityprompt, pr)
-        end
-        if Functions and Functions.ForceFirePrompt then
-          pcall(Functions.ForceFirePrompt, pr)
-        end
+      local floorPos = GetFloorPosition(pPos) or pPos
+      if NavigateTo then
+        NavigateTo(floorPos, paper, "Hint Paper", 8.0, "Loot")
       end
-      KnobFarm.LootedObjects[paper] = true
-      task.wait(0.3)
 
-      -- Берет листочек в руки (EquipTool)
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-      local paperTool = (char and (char:FindFirstChild("LibraryHintPaper") or char:FindFirstChild("LibraryHintPaperHard")))
-        or (bp and (bp:FindFirstChild("LibraryHintPaper") or bp:FindFirstChild("LibraryHintPaperHard")))
-      if paperTool and hum and paperTool.Parent ~= char then
-        pcall(function() hum:EquipTool(paperTool) end)
+      local curChar = localPlayer2 and localPlayer2.Character
+      local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+      local dist = curRoot and (curRoot.Position - pPos).Magnitude or 999
+
+      if dist <= 9.0 then
+        local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr and pr.Enabled then
+          pcall(function()
+            pr.HoldDuration = 0
+            pr.RequiresLineOfSight = false
+            pr.MaxActivationDistance = 30
+          end)
+          if fireproximityprompt then
+            pcall(fireproximityprompt, pr, 0, true)
+            pcall(fireproximityprompt, pr)
+          end
+          if Functions and Functions.ForceFirePrompt then
+            pcall(Functions.ForceFirePrompt, pr)
+          end
+        end
+        KnobFarm.LootedObjects[paper] = true
         task.wait(0.3)
+
+        -- Берет листочек в руки (EquipTool)
+        local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+        local paperTool = (char and (char:FindFirstChild("LibraryHintPaper") or char:FindFirstChild("LibraryHintPaperHard")))
+          or (bp and (bp:FindFirstChild("LibraryHintPaper") or bp:FindFirstChild("LibraryHintPaperHard")))
+        if paperTool and hum and paperTool.Parent ~= char then
+          pcall(function() hum:EquipTool(paperTool) end)
+          task.wait(0.3)
+        end
       end
     end
   end
 
-  -- 4. Летит к двери
-  KnobFarm.SetStatus("Room 50: Flying to Door / Padlock...")
+  -- 4. Идет к двери по полу (НЕ через стены)
+  KnobFarm.SetStatus("Room 50: Walking to Door / Padlock...")
   local padlock = (targetRoom and targetRoom:FindFirstChild("Padlock", true))
     or (curRooms and curRooms:FindFirstChild("Padlock", true))
     or (door and door:FindFirstChild("Padlock", true))
@@ -14335,11 +14270,12 @@ local function handleRoom50(room, door)
     or (door and door:FindFirstChild("Door"))
     or (door and door.PrimaryPart)
 
-  if padPart and root then
-    FlyToTarget(padPart.Position, 26, 12, true)
-    StopFly()
-    root.CFrame = padPart.CFrame * CFrame.new(0, 0, 2.5)
-    root.AssemblyLinearVelocity = Vector3.zero
+  if padPart then
+    local padPos = (padPart:IsA("BasePart") and padPart.Position) or padPart:GetPivot().Position
+    local floorPos = GetFloorPosition(padPos) or padPos
+    if NavigateTo then
+      NavigateTo(floorPos, padPart, "Door Padlock", 10.0, "Door")
+    end
     task.wait(0.3)
   end
 
@@ -14388,15 +14324,12 @@ local function handleRoom50(room, door)
     end)
   end
 
-  -- Проходим за 51 дверь в 51 комнату
+  -- Проходим через 51 дверь в 51 комнату на ногах
   if root and actualDoor then
     local dPart = actualDoor:FindFirstChild("Door") or actualDoor:FindFirstChild("Hidden") or actualDoor.PrimaryPart
     if dPart and dPart:IsA("BasePart") then
-      root.CFrame = dPart.CFrame * CFrame.new(0, 0, -10)
-    else
-      root.CFrame = root.CFrame * CFrame.new(0, 0, -12)
+      PassDoorStraight(targetRoom, actualDoor, dPart)
     end
-    root.AssemblyLinearVelocity = Vector3.zero
   end
 
   -- УДАЛЯЕМ ИЗ ПАМЯТИ 51-УЮ ДВЕРЬ (чтобы бот не останавливался на ней):
@@ -14424,7 +14357,6 @@ local function handleRoom50(room, door)
 
   KnobFarm.LastRoomNum = 50
   KnobFarm.PassedFirstDoor = true
-  StopFly()
   SetCrouched(false)
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.Teleporting = false
