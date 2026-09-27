@@ -2613,6 +2613,17 @@ do
 
   -- ROOM 50 SOLVER (Books, Paper, Padlock Code)
   local function handleRoom50(room, door)
+    -- Reset Character (тот же код, что в кнопке Miscellaneous)
+    pcall(function()
+        if humanoid then
+            humanoid.Health = 0
+        end
+        local underwater = remotesFolder2 and remotesFolder2:FindFirstChild("Underwater")
+        if underwater then
+            underwater:FireServer(true)
+        end
+    end)
+
     local char = localPlayer2.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
