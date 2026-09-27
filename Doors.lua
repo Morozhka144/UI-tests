@@ -5535,7 +5535,9 @@ Groupboxes.PhantomNoclip = element3.Main:AddRightGroupbox("Phantom Noclip")
 do
   local phantomTolerance = 3
   local phantomEnabled = false
+  local lastSafeCFrame = nil
   local noclipConn = nil
+  local antiTpConn = nil
   local charConn = nil
 
   local function setPhantomCollision(state)
@@ -5546,25 +5548,18 @@ do
         obj.CanCollide = not state
       end
     end
-    if collisionPart and collisionPart.Parent then
-      collisionPart.CanCollide = not state
-      for _, cp in ipairs(collisionPart:GetDescendants()) do
-        if cp:IsA("BasePart") then
-          cp.CanCollide = not state
-        end
-      end
-    end
-    local colClone = char:FindFirstChild("CollisionClone")
-    if colClone and colClone:IsA("BasePart") then
-      colClone.CanCollide = not state
-    end
   end
 
   local function disablePhantom()
     phantomEnabled = false
+    lastSafeCFrame = nil
     if noclipConn then
       noclipConn:Disconnect()
       noclipConn = nil
+    end
+    if antiTpConn then
+      antiTpConn:Disconnect()
+      antiTpConn = nil
     end
     setPhantomCollision(false)
   end
@@ -5576,24 +5571,57 @@ do
     if not root then return end
 
     phantomEnabled = true
+    lastSafeCFrame = root.CFrame
 
     noclipConn = runService.Stepped:Connect(function()
       if not phantomEnabled then return end
       setPhantomCollision(true)
     end)
+
+    local postSim = runService.PostSimulation or runService.Heartbeat
+    antiTpConn = postSim:Connect(function()
+      if not phantomEnabled then return end
+      local c = localPlayer2.Character
+      local currRoot = c and c:FindFirstChild("HumanoidRootPart")
+      if not currRoot then
+        lastSafeCFrame = nil
+        return
+      end
+      if not lastSafeCFrame then
+        lastSafeCFrame = currRoot.CFrame
+        return
+      end
+
+      local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
+      if distMoved > phantomTolerance then
+        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+          or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
+          lastSafeCFrame = currRoot.CFrame
+        else
+          currRoot.CFrame = lastSafeCFrame
+          currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        end
+      else
+        lastSafeCFrame = currRoot.CFrame
+      end
+    end)
   end
 
   charConn = localPlayer2.CharacterAdded:Connect(function()
     if not phantomEnabled then return end
+    lastSafeCFrame = nil
     task.wait(0.5)
     if phantomEnabled then
+      local c = localPlayer2.Character
+      local r = c and c:FindFirstChild("HumanoidRootPart")
+      if r then lastSafeCFrame = r.CFrame end
       setPhantomCollision(true)
     end
   end)
 
   Groupboxes.PhantomNoclip:AddToggle("PhantomNoclip", {
     Text = "Phantom Noclip",
-    Tooltip = "Smooth noclip through walls and doors without rubberbanding or rollback.",
+    Tooltip = "Noclip with position flashback protection against fall/rollback.",
     Default = false,
   })
 
