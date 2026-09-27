@@ -12285,6 +12285,23 @@ end
 
 KnobFarm.RecoverFromVoid = RecoverFromVoid
 
+local function safeFirePrompt(prompt)
+  if not prompt or not prompt:IsA("ProximityPrompt") then return end
+  pcall(function()
+    prompt.HoldDuration = 0
+    prompt.RequiresLineOfSight = false
+    prompt.MaxActivationDistance = 30
+    prompt.Enabled = true
+  end)
+  if fireproximityprompt then
+    pcall(fireproximityprompt, prompt, 0, true)
+    pcall(fireproximityprompt, prompt)
+  end
+  if Functions and Functions.ForceFirePrompt then
+    pcall(Functions.ForceFirePrompt, prompt)
+  end
+end
+
 local function HasCeilingAbove(pos, maxDist)
   if not pos then return false, nil, nil end
   local rayParams = RaycastParams.new()
@@ -14536,11 +14553,15 @@ local function handleRoom50(room, door)
   -- 6. Открытие 51 двери и удаление её из памяти вообще
   local actualDoor = door or (targetRoom and targetRoom:FindFirstChild("Door"))
   if actualDoor then
-    if actualDoor:FindFirstChild("ClientOpen") then
-      pcall(function() actualDoor.ClientOpen:FireServer() end)
+    if OpenDoor then
+      OpenDoor(actualDoor)
+    else
+      if actualDoor:FindFirstChild("ClientOpen") then
+        pcall(function() actualDoor.ClientOpen:FireServer() end)
+      end
+      local pr = actualDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if pr then safeFirePrompt(pr) end
     end
-    local pr = actualDoor:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if pr then safeFirePrompt(pr) end
     pcall(function()
       for _, dp in ipairs(actualDoor:GetDescendants()) do
         if dp:IsA("BasePart") then dp.CanCollide = false end
@@ -14549,11 +14570,8 @@ local function handleRoom50(room, door)
   end
 
   -- Проходим через 51 дверь в 51 комнату на ногах
-  if root and actualDoor then
-    local dPart = actualDoor:FindFirstChild("Door") or actualDoor:FindFirstChild("Hidden") or actualDoor.PrimaryPart
-    if dPart and dPart:IsA("BasePart") then
-      PassDoorStraight(targetRoom, actualDoor, dPart)
-    end
+  if root and actualDoor and hum then
+    PassDoorStraight(actualDoor, root, hum)
   end
 
   -- УДАЛЯЕМ ИЗ ПАМЯТИ 51-УЮ ДВЕРЬ (чтобы бот не останавливался на ней):
