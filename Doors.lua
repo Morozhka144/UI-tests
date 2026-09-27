@@ -2504,6 +2504,13 @@ do
   end
 
   local function isSeekChase(currentRoom, currentRoomNum)
+    local curNum = tonumber(currentRoomNum) or 0
+    if curNum < 60 and KnobFarm and KnobFarm.FirstChaseDone then
+      return false
+    end
+    if curNum >= 60 and KnobFarm and KnobFarm.SecondChaseDone then
+      return false
+    end
     local rep = game:GetService("ReplicatedStorage")
     local gameData = rep:FindFirstChild("GameData")
     if gameData then
@@ -13253,19 +13260,40 @@ local function isAtSeek(room, roomNum)
   local curRooms = workspace:FindFirstChild("CurrentRooms")
   local targetRoom = (curRooms and curRooms:FindFirstChild(tostring(curNum))) or room
 
-  -- 1. Если первая погоня уже завершена (5 дверей скипнуто), до комнаты 60 Сик больше НЕ запускается!
+  -- 1. Если первая погоня уже завершена, до комнаты 60 Сик больше НЕ запускается!
   if curNum < 60 and KnobFarm and KnobFarm.FirstChaseDone then
     return false
   end
-  -- 2. Если вторая погоня уже завершена (10 дверей скипнуто), Сик больше НЕ запускается!
+  -- 2. Если вторая погоня уже завершена, Сик больше НЕ запускается!
   if curNum >= 60 and KnobFarm and KnobFarm.SecondChaseDone then
     return false
   end
 
+  local inChase = false
+  if gameData then
+    local chaseVal = gameData:FindFirstChild("ChaseInSession")
+    if chaseVal and chaseVal.Value == true then
+      inChase = true
+    end
+  end
+
+  if not inChase and targetRoom then
+    local triggers = {
+      "TriggerEventCollision", "ChaseStartTrigger", "SeekTrigger",
+      "Seeking", "Seek_Arm", "SeekMoving", "SeekMovingNewClone", "SeekRig"
+    }
+    for _, t in ipairs(triggers) do
+      if targetRoom:FindFirstChild(t, true) then
+        inChase = true
+        break
+      end
+    end
+  end
+
   -- 3. Если уже идет активная погоня Сика:
   if KnobFarm and KnobFarm.InSeekChase then
-    local maxDoors = (curNum < 60) and 8 or 10
-    if (KnobFarm.SeekDoorsSkipped or 0) >= maxDoors then
+    local maxDoors = (curNum < 60) and 5 or 6
+    if (KnobFarm.SeekDoorsSkipped or 0) >= maxDoors or (not inChase and (KnobFarm.SeekDoorsSkipped or 0) >= 3) then
       if curNum < 60 then
         KnobFarm.FirstChaseDone = true
       else
@@ -13278,28 +13306,7 @@ local function isAtSeek(room, roomNum)
   end
 
   -- 4. Проверяем начало погони (только если данная погоня еще НЕ была завершена!)
-  local isStarting = false
-  if gameData then
-    local inChase = gameData:FindFirstChild("ChaseInSession")
-    if inChase and inChase.Value == true then
-      isStarting = true
-    end
-  end
-
-  if not isStarting and targetRoom then
-    local triggers = {
-      "TriggerEventCollision", "ChaseStartTrigger", "SeekTrigger",
-      "Seeking", "Seek_Arm", "SeekMoving", "SeekMovingNewClone", "SeekRig"
-    }
-    for _, t in ipairs(triggers) do
-      if targetRoom:FindFirstChild(t, true) then
-        isStarting = true
-        break
-      end
-    end
-  end
-
-  if isStarting and curNum > 0 then
+  if inChase and curNum > 0 then
     if KnobFarm then
       KnobFarm.InSeekChase = true
       KnobFarm.SeekDoorsSkipped = 0
@@ -14988,9 +14995,9 @@ function KnobFarm.RunLoop()
         root.AssemblyLinearVelocity = Vector3.zero
         if hum then hum:Move(Vector3.zero, false) end
 
-        local maxDoors = (curRoomNum < 60) and 8 or 10
+        local maxDoors = (curRoomNum < 60) and 5 or 6
 
-        -- Проверяем лимит пропущенных дверей (строго 8 для 1-й погони, 10 для 2-й)
+        -- Проверяем лимит пропущенных дверей (строго 5 для 1-й погони, 6 для 2-й)
         if (KnobFarm.SeekDoorsSkipped or 0) >= maxDoors then
           if curRoomNum < 60 then
             KnobFarm.FirstChaseDone = true
@@ -15000,6 +15007,7 @@ function KnobFarm.RunLoop()
           KnobFarm.InSeekChase = false
           KnobFarm.DisabledNoclipForSeek = false
           KnobFarm.Teleporting = false
+          KnobFarm.SeekChaseStartRoom = nil
           pcall(function()
             if toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
               toggles.AutoDoorSkip:SetValue(false)
@@ -15007,8 +15015,21 @@ function KnobFarm.RunLoop()
             if toggles and toggles.AutoFarmEnabled and not toggles.AutoFarmEnabled.Value then
               toggles.AutoFarmEnabled:SetValue(true)
             end
-            if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+            if toggles and toggles.PhantomNoclip then
+              toggles.PhantomNoclip:SetValue(false)
+              task.wait(0.05)
               toggles.PhantomNoclip:SetValue(true)
+            end
+            if toggles and toggles.Noclip and not toggles.Noclip.Value then
+              toggles.Noclip:SetValue(true)
+            end
+            local curChar = localPlayer2 and localPlayer2.Character
+            if curChar then
+              for _, p in ipairs(curChar:GetDescendants()) do
+                if p:IsA("BasePart") then
+                  p.CanCollide = false
+                end
+              end
             end
           end)
           KnobFarm.SetStatus("Seek (" .. tostring(maxDoors) .. " doors) skipped! Knob Farm resumed.")
@@ -15074,6 +15095,7 @@ function KnobFarm.RunLoop()
         KnobFarm.DisabledNoclipForSeek = false
         KnobFarm.InSeekChase = false
         KnobFarm.Teleporting = false
+        KnobFarm.SeekChaseStartRoom = nil
         pcall(function()
           if toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
             toggles.AutoDoorSkip:SetValue(false)
@@ -15081,12 +15103,26 @@ function KnobFarm.RunLoop()
           if toggles and toggles.AutoFarmEnabled and not toggles.AutoFarmEnabled.Value then
             toggles.AutoFarmEnabled:SetValue(true)
           end
-          if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+          if toggles and toggles.PhantomNoclip then
+            toggles.PhantomNoclip:SetValue(false)
+            task.wait(0.05)
             toggles.PhantomNoclip:SetValue(true)
+          end
+          if toggles and toggles.Noclip and not toggles.Noclip.Value then
+            toggles.Noclip:SetValue(true)
+          end
+          local curChar = localPlayer2 and localPlayer2.Character
+          if curChar then
+            for _, p in ipairs(curChar:GetDescendants()) do
+              if p:IsA("BasePart") then
+                p.CanCollide = false
+              end
+            end
           end
         end)
         KnobFarm.SetStatus("Seek passed! Knob Farm resumed.")
         task.wait(0.2)
+        continue
       end
 
       -- 4. Stuck detection
