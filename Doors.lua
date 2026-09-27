@@ -13054,7 +13054,7 @@ local function isAtSeek(room, roomNum)
 
   -- 3. Если уже идет активная погоня Сика:
   if KnobFarm and KnobFarm.InSeekChase then
-    local maxDoors = (curNum < 60) and 5 or 10
+    local maxDoors = (curNum < 60) and 8 or 10
     if (KnobFarm.SeekDoorsSkipped or 0) >= maxDoors then
       if curNum < 60 then
         KnobFarm.FirstChaseDone = true
@@ -14609,9 +14609,9 @@ function KnobFarm.RunLoop()
         root.AssemblyLinearVelocity = Vector3.zero
         if hum then hum:Move(Vector3.zero, false) end
 
-        local maxDoors = (curRoomNum < 60) and 5 or 10
+        local maxDoors = (curRoomNum < 60) and 8 or 10
 
-        -- Проверяем лимит пропущенных дверей (строго 5 для 1-й погони, 10 для 2-й)
+        -- Проверяем лимит пропущенных дверей (строго 8 для 1-й погони, 10 для 2-й)
         if (KnobFarm.SeekDoorsSkipped or 0) >= maxDoors then
           if curRoomNum < 60 then
             KnobFarm.FirstChaseDone = true
