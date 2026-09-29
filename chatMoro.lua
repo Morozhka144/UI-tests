@@ -48,13 +48,43 @@ local themes = {
 local themeNames = {"default", "amoled", "sunset", "ocean"}
 
 --// SOUND PRESETS
+local customAsset = getcustomasset or getsynasset
 local soundPresets = {
-    { name = "Default",  id = "rbxassetid://6895079853" },
-    { name = "Pop",      id = "rbxassetid://6026984224" },
-    { name = "Ding",     id = "rbxassetid://5765933949" },
-    { name = "Chime",    id = "rbxassetid://4590657391" },
-    { name = "Bell",     id = "rbxassetid://9116513797" }
+    { name = "Achievement", id = "rbxassetid://10469938989" },
+    { name = "Tone",        id = nil, file = "tone.mp3", url = "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/tone%20notification.mp3" },
+    { name = "Alert",       id = nil, file = "alert.mp3", url = "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/alert%20notification.mp3" },
+    { name = "Windows XP",  id = nil, file = "xp.ogg",   url = "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/windows%20xp%20exclamation.ogg" },
+    { name = "GTA Cell",    id = nil, file = "gta.ogg",  url = "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/gta%20notification.ogg" },
+    { name = "Litvin",      id = nil, file = "Litvin.m4a",  url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/Litvin.m4a" },
+    { name = "Payment",     id = nil, file = "payment.mp3", url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/payment.mp3" },
+    { name = "Soft",        id = nil, file = "soft.mp3",    url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/soft.mp3" },
+    { name = "Tuntun",      id = nil, file = "tuntun.mp3",  url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/tuntun.mp3" },
+    { name = "Vibe",        id = nil, file = "vibe.m4a",    url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/vibe.m4a" },
+    { name = "Voiced",      id = nil, file = "voiced.mp3",  url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/voiced.mp3" },
 }
+
+pcall(function()
+    if isfolder and makefolder and writefile and isfile and customAsset then
+        if not isfolder("moro") then
+            makefolder("moro")
+        end
+        if not isfolder("moro/Notification Sounds") then
+            makefolder("moro/Notification Sounds")
+        end
+        for _, preset in ipairs(soundPresets) do
+            if preset.url then
+                local path = "moro/Notification Sounds/" .. preset.file
+                if not isfile(path) then
+                    pcall(function() writefile(path, game:HttpGet(preset.url)) end)
+                end
+                if isfile(path) then
+                    local ok, asset = pcall(function() return customAsset(path) end)
+                    if ok and asset then preset.id = asset end
+                end
+            end
+        end
+    end
+end)
 
 --// CONFIG SYSTEM
 local CONFIG_FILE = "moro_chat_config.json"
@@ -137,22 +167,21 @@ local function draggable(handle, target)
 end
 
 --// SOUND
-local notifSounds = {}
-for i, preset in ipairs(soundPresets) do
-    local s = Instance.new("Sound")
-    s.SoundId = preset.id
-    s.Volume = 0.5
-    s.Parent = SoundService
-    s.Name = "MoroChatSound_" .. i
-    notifSounds[i] = s
-end
+local notifSound = Instance.new("Sound")
+notifSound.Name = "MoroChatSound"
+notifSound.Volume = 0.65
+pcall(function() notifSound.Parent = SoundService end)
 
 local function playNotifSound()
     local idx = math.clamp(settings.soundIndex or 1, 1, #soundPresets)
-    local s = notifSounds[idx]
-    if s then
-        s:Stop()
-        s:Play()
+    local preset = soundPresets[idx]
+    local sndId = (preset and preset.id) or soundPresets[1].id
+    if sndId and notifSound then
+        pcall(function()
+            notifSound.SoundId = sndId
+            notifSound.TimePosition = 0
+            notifSound:Play()
+        end)
     end
 end
 
@@ -689,7 +718,7 @@ function Library:CreateChatWindow()
     sectionLabel("DANGER ZONE")
     buttonRow("Unload Script","trash-2","UNLOAD",function()
         gui:Destroy()
-        for _, s in ipairs(notifSounds) do pcall(function() s:Destroy() end) end
+        pcall(function() notifSound:Destroy() end)
     end, true)
 
     ------------------------------------------------------------------ TAB SWITCH
@@ -754,15 +783,15 @@ function Library:CreateChatWindow()
     local seenServer, seenGlobal = {}, {}
     local firstLoad = true
     local lastSendTime = 0
-    local lastSeenTs = 0
-    local MAX_RENDERED = 50
-    local POLL_NORMAL = 2
-    local POLL_IDLE = 5
-    local POLL_ERROR_MAX = 10
-    local emptyPolls = 0
-    local errorStreak = 0
-    local serverMsgCount = 0
-    local globalMsgCount = 0
+    local lastSeenTs = 0        -- timestamp of the newest message we've seen
+    local MAX_RENDERED = 50     -- max bubbles per chat scroll before pruning old ones
+    local POLL_NORMAL = 2       -- normal poll interval (seconds)
+    local POLL_IDLE = 5         -- idle poll interval (seconds)
+    local POLL_ERROR_MAX = 10   -- max backoff on errors (seconds)
+    local emptyPolls = 0        -- counter for consecutive empty polls
+    local errorStreak = 0       -- counter for consecutive errors
+    local serverMsgCount = 0    -- rendered bubble count in server chat
+    local globalMsgCount = 0    -- rendered bubble count in global chat
 
     -- Build Firebase REST URL with query params to fetch only what we need
     local function buildQueryUrl()
@@ -880,7 +909,6 @@ function Library:CreateChatWindow()
             
             -- Track the highest ts for next startAt query
             local maxTs = lastSeenTs
-            local hadNewMessages = false
             
             for _, m in ipairs(newMessages) do
                 local ts = m.ts or 0
@@ -894,7 +922,6 @@ function Library:CreateChatWindow()
                     if not seenServer[m._id] then
                         seenServer[m._id] = true
                         isNew = true
-                        hadNewMessages = true
                         addMessage(serverChat, serverList, m.s or "?", m.t or "", isMine)
                         serverMsgCount = serverMsgCount + 1
                         serverMsgCount = pruneChat(serverChat, serverList, serverMsgCount)
@@ -903,7 +930,6 @@ function Library:CreateChatWindow()
                     if not seenGlobal[m._id] then
                         seenGlobal[m._id] = true
                         isNew = true
-                        hadNewMessages = true
                         addMessage(globalChat, globalList, m.s or "?", m.t or "", isMine)
                         globalMsgCount = globalMsgCount + 1
                         globalMsgCount = pruneChat(globalChat, globalList, globalMsgCount)
@@ -912,9 +938,7 @@ function Library:CreateChatWindow()
                 
                 -- Unified notification logic for BOTH server and global messages
                 if isNew and not firstLoad and not isMine then
-                    -- Determine if the message is on the currently INVISIBLE tab
                     local msgOnVisibleTab = (scope == currentTab)
-                    -- Notify if chat is closed OR if the message is on the other tab
                     local shouldNotify = (not isOpen) or (not msgOnVisibleTab)
                     
                     if shouldNotify then
