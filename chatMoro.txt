@@ -1,4 +1,4 @@
---[[ MORO CHAT — Premium Edition v2.8 (Text Fix + English UI) ]]--
+--[[ MORO CHAT — Premium Edition v3.0 (Notifications Fix + Sound Selection) ]]--
 local Library = {}
 local HttpService      = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -47,6 +47,15 @@ local themes = {
 }
 local themeNames = {"default", "amoled", "sunset", "ocean"}
 
+--// SOUND PRESETS
+local soundPresets = {
+    { name = "Default",  id = "rbxassetid://6895079853" },
+    { name = "Pop",      id = "rbxassetid://6026984224" },
+    { name = "Ding",     id = "rbxassetid://5765933949" },
+    { name = "Chime",    id = "rbxassetid://4590657391" },
+    { name = "Bell",     id = "rbxassetid://9116513797" }
+}
+
 --// CONFIG SYSTEM
 local CONFIG_FILE = "moro_chat_config.json"
 local defaultSettings = {
@@ -56,6 +65,7 @@ local defaultSettings = {
     notifications = true,
     toasts = true,
     sound = true,
+    soundIndex = 1,
     transparency = 0,
     width = 380,
     height = 250,
@@ -127,10 +137,24 @@ local function draggable(handle, target)
 end
 
 --// SOUND
-local notifSound = Instance.new("Sound")
-notifSound.SoundId = "rbxassetid://6895079853" 
-notifSound.Volume = 0.5
-notifSound.Parent = SoundService
+local notifSounds = {}
+for i, preset in ipairs(soundPresets) do
+    local s = Instance.new("Sound")
+    s.SoundId = preset.id
+    s.Volume = 0.5
+    s.Parent = SoundService
+    s.Name = "MoroChatSound_" .. i
+    notifSounds[i] = s
+end
+
+local function playNotifSound()
+    local idx = math.clamp(settings.soundIndex or 1, 1, #soundPresets)
+    local s = notifSounds[idx]
+    if s then
+        s:Stop()
+        s:Play()
+    end
+end
 
 --// FIREBASE
 local function getDB()
@@ -608,6 +632,17 @@ function Library:CreateChatWindow()
     toggleRow("Toast Popups","layout-grid",function() return settings.toasts end,function(v) settings.toasts=v end)
     toggleRow("Notification Sound","volume-2",function() return settings.sound end,function(v) settings.sound=v end)
     
+    -- Sound selector row
+    local soundRow, soundBtn = buttonRow("Sound Type","music",soundPresets[settings.soundIndex or 1].name,function()
+        local idx = settings.soundIndex or 1
+        idx = (idx % #soundPresets) + 1
+        settings.soundIndex = idx
+        soundBtn.Text = soundPresets[idx].name
+        saveConfig()
+        -- Preview the selected sound
+        if settings.sound then playNotifSound() end
+    end)
+    
     sectionLabel("APPEARANCE")
     local themeRow, themeBtn = buttonRow("UI Theme","palette",settings.theme,function()
         local idx = 1
@@ -646,7 +681,7 @@ function Library:CreateChatWindow()
     do
         local info=Instance.new("TextLabel",setScroll)
         info.Size=UDim2.new(1,0,0,60); info.BackgroundColor3=theme.panel; info.ZIndex=2
-        info.Text="  MORO CHAT v2.8\n  User: "..myName; info.TextColor3=theme.dim
+        info.Text="  MORO CHAT v3.0\n  User: "..myName; info.TextColor3=theme.dim
         info.Font=Enum.Font.GothamMedium; info.TextSize=13; info.TextXAlignment=Enum.TextXAlignment.Left
         info.TextYAlignment=Enum.TextYAlignment.Center; corner(info,12)
     end
@@ -654,7 +689,7 @@ function Library:CreateChatWindow()
     sectionLabel("DANGER ZONE")
     buttonRow("Unload Script","trash-2","UNLOAD",function()
         gui:Destroy()
-        notifSound:Destroy()
+        for _, s in ipairs(notifSounds) do pcall(function() s:Destroy() end) end
     end, true)
 
     ------------------------------------------------------------------ TAB SWITCH
@@ -719,15 +754,15 @@ function Library:CreateChatWindow()
     local seenServer, seenGlobal = {}, {}
     local firstLoad = true
     local lastSendTime = 0
-    local lastSeenTs = 0        -- timestamp of the newest message we've seen
-    local MAX_RENDERED = 50     -- max bubbles per chat scroll before pruning old ones
-    local POLL_NORMAL = 2       -- normal poll interval (seconds)
-    local POLL_IDLE = 5         -- idle poll interval (seconds)
-    local POLL_ERROR_MAX = 10   -- max backoff on errors (seconds)
-    local emptyPolls = 0        -- counter for consecutive empty polls
-    local errorStreak = 0       -- counter for consecutive errors
-    local serverMsgCount = 0    -- rendered bubble count in server chat
-    local globalMsgCount = 0    -- rendered bubble count in global chat
+    local lastSeenTs = 0
+    local MAX_RENDERED = 50
+    local POLL_NORMAL = 2
+    local POLL_IDLE = 5
+    local POLL_ERROR_MAX = 10
+    local emptyPolls = 0
+    local errorStreak = 0
+    local serverMsgCount = 0
+    local globalMsgCount = 0
 
     -- Build Firebase REST URL with query params to fetch only what we need
     local function buildQueryUrl()
@@ -853,10 +888,12 @@ function Library:CreateChatWindow()
                 
                 local scope = m.scope or "global"
                 local isMine = (m.s == myName)
+                local isNew = false
                 
                 if scope == "server" and m.j == myJobId then
                     if not seenServer[m._id] then
                         seenServer[m._id] = true
+                        isNew = true
                         hadNewMessages = true
                         addMessage(serverChat, serverList, m.s or "?", m.t or "", isMine)
                         serverMsgCount = serverMsgCount + 1
@@ -865,23 +902,30 @@ function Library:CreateChatWindow()
                 elseif scope == "global" then
                     if not seenGlobal[m._id] then
                         seenGlobal[m._id] = true
+                        isNew = true
                         hadNewMessages = true
                         addMessage(globalChat, globalList, m.s or "?", m.t or "", isMine)
                         globalMsgCount = globalMsgCount + 1
                         globalMsgCount = pruneChat(globalChat, globalList, globalMsgCount)
+                    end
+                end
+                
+                -- Unified notification logic for BOTH server and global messages
+                if isNew and not firstLoad and not isMine then
+                    -- Determine if the message is on the currently INVISIBLE tab
+                    local msgOnVisibleTab = (scope == currentTab)
+                    -- Notify if chat is closed OR if the message is on the other tab
+                    local shouldNotify = (not isOpen) or (not msgOnVisibleTab)
+                    
+                    if shouldNotify then
+                        if settings.toasts then showToast(m.s or "?", m.t or "") end
+                        if settings.sound then playNotifSound() end
                         
-                        -- Notifications only for new messages after first load
-                        if not firstLoad and not isOpen and not isMine then
-                            if settings.toasts then showToast(m.s or "?", m.t or "") end
-                            if settings.sound then notifSound:Play() end
-                            
-                            local relevant = (currentTab == "global") or (m.j == myJobId)
-                            if relevant and settings.notifications then
-                                unread = unread + 1; badge.Visible = true
-                                badgeT.Text = unread > 99 and "99+" or tostring(unread)
-                                tw(bubble, 0.12, {Size = UDim2.new(0, settings.bubbleSize + 6, 0, settings.bubbleSize + 6)})
-                                task.delay(0.12, function() tw(bubble, 0.12, {Size = UDim2.new(0, settings.bubbleSize, 0, settings.bubbleSize)}) end)
-                            end
+                        if settings.notifications then
+                            unread = unread + 1; badge.Visible = true
+                            badgeT.Text = unread > 99 and "99+" or tostring(unread)
+                            tw(bubble, 0.12, {Size = UDim2.new(0, settings.bubbleSize + 6, 0, settings.bubbleSize + 6)})
+                            task.delay(0.12, function() tw(bubble, 0.12, {Size = UDim2.new(0, settings.bubbleSize, 0, settings.bubbleSize)}) end)
                         end
                     end
                 end
