@@ -1,5 +1,4 @@
 --[[ MORO CHAT — Premium Edition v3.0 (Notifications Fix + Sound Selection) ]]--
-print("STARTTTT")
 local Library = {}
 local HttpService      = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -755,15 +754,15 @@ function Library:CreateChatWindow()
     local seenServer, seenGlobal = {}, {}
     local firstLoad = true
     local lastSendTime = 0
-    local lastSeenTs = 0        -- timestamp of the newest message we've seen
-    local MAX_RENDERED = 50     -- max bubbles per chat scroll before pruning old ones
-    local POLL_NORMAL = 2       -- normal poll interval (seconds)
-    local POLL_IDLE = 5         -- idle poll interval (seconds)
-    local POLL_ERROR_MAX = 10   -- max backoff on errors (seconds)
-    local emptyPolls = 0        -- counter for consecutive empty polls
-    local errorStreak = 0       -- counter for consecutive errors
-    local serverMsgCount = 0    -- rendered bubble count in server chat
-    local globalMsgCount = 0    -- rendered bubble count in global chat
+    local lastSeenTs = 0
+    local MAX_RENDERED = 50
+    local POLL_NORMAL = 2
+    local POLL_IDLE = 5
+    local POLL_ERROR_MAX = 10
+    local emptyPolls = 0
+    local errorStreak = 0
+    local serverMsgCount = 0
+    local globalMsgCount = 0
 
     -- Build Firebase REST URL with query params to fetch only what we need
     local function buildQueryUrl()
@@ -967,4 +966,3 @@ function Library:CreateChatWindow()
 end
 
 Library:CreateChatWindow()
-print("STOOOOOP")
