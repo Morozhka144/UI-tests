@@ -55,11 +55,11 @@ local soundPresets = {
     { name = "Alert",       id = nil, file = "alert.mp3", url = "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/alert%20notification.mp3" },
     { name = "Windows XP",  id = nil, file = "xp.ogg",   url = "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/windows%20xp%20exclamation.ogg" },
     { name = "GTA Cell",    id = nil, file = "gta.ogg",  url = "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/gta%20notification.ogg" },
-    { name = "Litvin",      id = nil, file = "Litvin.m4a",  url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/Litvin.m4a" },
+    { name = "Litvin",      id = nil, file = "Litvin.mp3",  url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/Litvin.mp3" },
     { name = "Payment",     id = nil, file = "payment.mp3", url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/payment.mp3" },
     { name = "Soft",        id = nil, file = "soft.mp3",    url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/soft.mp3" },
     { name = "Tuntun",      id = nil, file = "tuntun.mp3",  url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/tuntun.mp3" },
-    { name = "Vibe",        id = nil, file = "vibe.m4a",    url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/vibe.m4a" },
+    { name = "Vibe",        id = nil, file = "vibe.mp3",    url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/vibe.mp3" },
     { name = "Voiced",      id = nil, file = "voiced.mp3",  url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Sounds/voiced.mp3" },
 }
 
