@@ -1,4 +1,5 @@
 --[[ MORO CHAT — Premium Edition v3.0 (Notifications Fix + Sound Selection) ]]--
+print("STARTTTT")
 local Library = {}
 local HttpService      = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -966,3 +967,4 @@ function Library:CreateChatWindow()
 end
 
 Library:CreateChatWindow()
+print("STOOOOOP")
