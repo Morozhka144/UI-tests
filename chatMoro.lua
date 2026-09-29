@@ -94,6 +94,8 @@ local defaultSettings = {
     showHistory = true,
     notifications = true,
     toasts = true,
+    toastSize = 320,
+    muted = {},
     sound = true,
     soundIndex = 1,
     transparency = 0,
@@ -117,12 +119,15 @@ local function loadConfig()
             end
         end
     end
+    if not settings.toastSize then settings.toastSize = defaultSettings.toastSize end
+    if type(settings.muted) ~= "table" then settings.muted = {} end
 end
 
 local function saveConfig()
     local toSave = cloneTable(settings)
     toSave.openKey = settings.openKey.Name
     toSave.typeKey = settings.typeKey.Name
+    toSave.muted = settings.muted or {}
     pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(toSave)) end)
 end
 
@@ -134,6 +139,18 @@ local function corner(o, r) local c=Instance.new("UICorner",o); c.CornerRadius=U
 local function stroke(o,col,th,tr) local s=Instance.new("UIStroke",o); s.Color=col; s.Thickness=th or 1; s.Transparency=tr or 0; s.ApplyStrokeMode=Enum.ApplyStrokeMode.Border; return s end
 local function grad(o,c1,c2,rot) local g=Instance.new("UIGradient",o); g.Color=ColorSequence.new(c1,c2); g.Rotation=rot or 0; return g end
 local function pad(o,l,r,t,b) local p=Instance.new("UIPadding",o); p.PaddingLeft=UDim.new(0,l or 0); p.PaddingRight=UDim.new(0,r or 0); p.PaddingTop=UDim.new(0,t or 0); p.PaddingBottom=UDim.new(0,b or 0); return p end
+local function breakLongWords(str, maxLen)
+    return str:gsub("(%S+)", function(word)
+        if #word > maxLen then
+            local broken = ""
+            for i = 1, #word, maxLen do
+                broken = broken .. word:sub(i, i + maxLen - 1) .. " "
+            end
+            return broken:sub(1, -2)
+        end
+        return word
+    end)
+end
 local function tw(o,t,props,style)
     local tween=TweenService:Create(o,TweenInfo.new(t,style or Enum.EasingStyle.Quart,Enum.EasingDirection.Out),props)
     tween:Play(); return tween
@@ -207,41 +224,65 @@ function Library:CreateChatWindow()
     pcall(function() gui.Parent=game:GetService("CoreGui") end)
     if not gui.Parent then gui.Parent=Players.LocalPlayer:WaitForChild("PlayerGui") end
 
-    -- TOASTS CONTAINER
+    -- TOASTS CONTAINER (CENTER TOP)
     local toastContainer = Instance.new("Frame", gui)
-    toastContainer.Size = UDim2.new(0, 300, 1, 0)
-    toastContainer.Position = UDim2.new(1, -320, 0, 20)
+    toastContainer.AnchorPoint = Vector2.new(0.5, 0)
+    toastContainer.Position = UDim2.new(0.5, 0, 0, 16)
+    toastContainer.Size = UDim2.new(0, settings.toastSize or 320, 1, -20)
     toastContainer.BackgroundTransparency = 1
+    toastContainer.ClipsDescendants = false
+    toastContainer.Active = false
     toastContainer.ZIndex = 10
     local toastLayout = Instance.new("UIListLayout", toastContainer)
-    toastLayout.Padding = UDim.new(0, 10)
+    toastLayout.Padding = UDim.new(0, 8)
+    toastLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
     toastLayout.VerticalAlignment = Enum.VerticalAlignment.Top
     toastLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local toastOrder = 0
 
     local function showToast(sender, text)
         if not settings.toasts then return end
 
-        -- Ширина тоста фиксированная (контейнер 300px, минус паддинги)
-        local toastWidth = 300
-        local textWidth = toastWidth - 20  -- отступы по 10 с каждой стороны
+        sender = tostring(sender or "?")
+        if settings.muted and settings.muted[sender] then return end
+        text = tostring(text or "")
+        if #text > 240 then text = text:sub(1, 240) .. "..." end
+
+        local currentWidth = settings.toastSize or 320
+        local textWidth = math.max(currentWidth - 28, 80)
+        local maxWordLen = math.max(10, math.floor(textWidth / 8))
+        local formattedText = breakLongWords(text, maxWordLen)
 
         -- Считаем высоту текста с учётом переноса
-        local textSize = TextService:GetTextSize(text, 13, Enum.Font.GothamMedium, Vector2.new(textWidth, 10000))
-        local msgH = math.max(textSize.Y, 20)
+        local textSize = TextService:GetTextSize(formattedText, 13, Enum.Font.GothamMedium, Vector2.new(textWidth, 10000))
+        local msgH = math.max(textSize.Y, 18)
 
-        -- Общая высота: title(20) + отступ(8) + текст + нижний паддинг(8)
+        -- Общая высота: отступ(8) + title(20) + отступ(4) + msgH + отступ(8)
         local toastH = 8 + 20 + 4 + msgH + 8
 
-        local toast = Instance.new("Frame", toastContainer)
+        toastOrder = toastOrder - 1
+
+        local slot = Instance.new("Frame", toastContainer)
+        slot.Size = UDim2.new(1, 0, 0, 0)
+        slot.BackgroundTransparency = 1
+        slot.ClipsDescendants = false
+        slot.LayoutOrder = toastOrder
+        slot.ZIndex = 10
+
+        local toast = Instance.new("Frame", slot)
         toast.Size = UDim2.new(1, 0, 0, toastH)
+        toast.Position = UDim2.new(0, 0, 0, -toastH - 50)
         toast.BackgroundColor3 = theme.panel
-        corner(toast, 12)
-        stroke(toast, theme.accent, 1, 0.5)
         toast.BackgroundTransparency = 1
+        toast.Active = true
+        toast.ZIndex = 10
+        corner(toast, 12)
+        local toastStroke = stroke(toast, theme.accent, 1, 1)
 
         local title = Instance.new("TextLabel", toast)
-        title.Size = UDim2.new(1, -20, 0, 20)
-        title.Position = UDim2.new(0, 10, 0, 8)
+        title.Size = UDim2.new(1, -24, 0, 20)
+        title.Position = UDim2.new(0, 12, 0, 8)
         title.BackgroundTransparency = 1
         title.Text = sender
         title.TextColor3 = theme.accent
@@ -249,30 +290,148 @@ function Library:CreateChatWindow()
         title.TextSize = 14
         title.TextXAlignment = Enum.TextXAlignment.Left
         title.TextTransparency = 1
+        title.Active = false
+        title.ZIndex = 11
 
         local msg = Instance.new("TextLabel", toast)
-        msg.Size = UDim2.new(1, -20, 0, msgH)
-        msg.Position = UDim2.new(0, 10, 0, 30)
+        msg.Size = UDim2.new(1, -24, 0, msgH)
+        msg.Position = UDim2.new(0, 12, 0, 32)
         msg.BackgroundTransparency = 1
-        msg.Text = text
+        msg.Text = formattedText
         msg.TextColor3 = theme.text
         msg.Font = Enum.Font.GothamMedium
         msg.TextSize = 13
         msg.TextXAlignment = Enum.TextXAlignment.Left
         msg.TextYAlignment = Enum.TextYAlignment.Top
-        msg.TextWrapped = true                      -- перенос включён
-        msg.TextTruncate = Enum.TextTruncate.None   -- НЕ обрезаем
+        msg.TextWrapped = true
+        msg.TextTruncate = Enum.TextTruncate.None
         msg.TextTransparency = 1
+        msg.Active = false
+        msg.ZIndex = 11
 
-        tw(toast, 0.3, {BackgroundTransparency = 0})
-        tw(title, 0.3, {TextTransparency = 0})
-        tw(msg, 0.3, {TextTransparency = 0})
+        local isDismissed = false
+        local dismissCounter = 0
+        local connChanged = nil
+        local connEnded = nil
 
-        task.delay(4, function()
-            tw(toast, 0.3, {BackgroundTransparency = 1})
-            tw(title, 0.3, {TextTransparency = 1})
-            tw(msg, 0.3, {TextTransparency = 1})
-            task.delay(0.3, function() toast:Destroy() end)
+        local function cleanupConnections()
+            if connChanged then connChanged:Disconnect(); connChanged = nil end
+            if connEnded then connEnded:Disconnect(); connEnded = nil end
+        end
+
+        local function dismiss(flyDirection)
+            if isDismissed then return end
+            isDismissed = true
+            dismissCounter = dismissCounter + 1
+            cleanupConnections()
+
+            local targetPos
+            if flyDirection == "left" then
+                targetPos = UDim2.new(0, -currentWidth - 100, 0, toast.Position.Y.Offset)
+            elseif flyDirection == "right" then
+                targetPos = UDim2.new(0, currentWidth + 100, 0, toast.Position.Y.Offset)
+            else
+                -- "up" (плавный уезд наверх)
+                targetPos = UDim2.new(0, toast.Position.X.Offset, 0, -toastH - 50)
+            end
+
+            tw(toast, 0.35, {Position = targetPos, BackgroundTransparency = 1}, Enum.EasingStyle.Quart)
+            tw(toastStroke, 0.3, {Transparency = 1})
+            tw(title, 0.25, {TextTransparency = 1})
+            tw(msg, 0.25, {TextTransparency = 1})
+
+            task.delay(0.12, function()
+                if slot and slot.Parent then
+                    tw(slot, 0.28, {Size = UDim2.new(1, 0, 0, 0)}, Enum.EasingStyle.Quart)
+                end
+            end)
+
+            task.delay(0.42, function()
+                if slot and slot.Parent then
+                    slot:Destroy()
+                end
+            end)
+        end
+
+        -- Плавное появление: слот расширяется, тост выезжает сверху
+        tw(slot, 0.35, {Size = UDim2.new(1, 0, 0, toastH)}, Enum.EasingStyle.Quart)
+        tw(toast, 0.45, {Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0}, Enum.EasingStyle.Quart)
+        tw(toastStroke, 0.4, {Transparency = 0.5})
+        tw(title, 0.4, {TextTransparency = 0})
+        tw(msg, 0.4, {TextTransparency = 0})
+
+        -- Авто-закрытие через 4.5 секунды
+        local thisDismissId = dismissCounter
+        task.delay(4.5, function()
+            if not isDismissed and dismissCounter == thisDismissId then
+                dismiss("up")
+            end
+        end)
+
+        -- Смахивание (swipe-to-dismiss как на телефоне)
+        local dragging = false
+        local startInputPos = nil
+        local activeInput = nil
+
+        local function endDrag()
+            if not dragging then return end
+            dragging = false
+            activeInput = nil
+            cleanupConnections()
+
+            if isDismissed then return end
+
+            local dX = toast.Position.X.Offset
+            local dY = toast.Position.Y.Offset
+
+            if dY < -20 then
+                dismiss("up")
+            elseif dX < -50 then
+                dismiss("left")
+            elseif dX > 50 then
+                dismiss("right")
+            else
+                -- Возвращаем на исходную позицию
+                tw(toast, 0.25, {Position = UDim2.new(0, 0, 0, 0)}, Enum.EasingStyle.Quart)
+                dismissCounter = dismissCounter + 1
+                local resumeId = dismissCounter
+                task.delay(3.5, function()
+                    if not isDismissed and dismissCounter == resumeId then
+                        dismiss("up")
+                    end
+                end)
+            end
+        end
+
+        toast.InputBegan:Connect(function(inp)
+            if isDismissed then return end
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                activeInput = inp
+                startInputPos = inp.Position
+                dismissCounter = dismissCounter + 1 -- приостанавливаем таймер при касании
+
+                cleanupConnections()
+
+                connChanged = UserInputService.InputChanged:Connect(function(moveInp)
+                    if not dragging or isDismissed then return end
+                    local isTouch = (activeInput and activeInput.UserInputType == Enum.UserInputType.Touch and moveInp == activeInput)
+                    local isMouse = (activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1 and moveInp.UserInputType == Enum.UserInputType.MouseMovement)
+                    if isTouch or isMouse then
+                        local delta = moveInp.Position - startInputPos
+                        local clampY = math.min(delta.Y, 20)
+                        toast.Position = UDim2.new(0, delta.X, 0, clampY)
+                    end
+                end)
+
+                connEnded = UserInputService.InputEnded:Connect(function(endInp)
+                    local isTouchEnd = (activeInput and activeInput.UserInputType == Enum.UserInputType.Touch and endInp == activeInput)
+                    local isMouseEnd = (activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1 and endInp.UserInputType == Enum.UserInputType.MouseButton1)
+                    if isTouchEnd or isMouseEnd then
+                        endDrag()
+                    end
+                end)
+            end
         end)
     end
 
@@ -389,36 +548,50 @@ function Library:CreateChatWindow()
     local inputBar=Instance.new("Frame",chatPage)
     inputBar.Size=UDim2.new(1,-20,0,44); inputBar.Position=UDim2.new(0,10,1,-46)
     inputBar.BackgroundColor3=theme.input; inputBar.ZIndex=2
+    inputBar.ClipsDescendants=true
     corner(inputBar,12); local inStroke=stroke(inputBar,theme.accent,1.5,0.8)
 
     local box=Instance.new("TextBox",inputBar)
-    box.Size=UDim2.new(1,-58,1,0); box.Position=UDim2.new(0,14,0,0)
+    box.Size=UDim2.new(1,-58,1,-14); box.Position=UDim2.new(0,14,0,8)
     box.BackgroundTransparency=1; box.PlaceholderText="Message..."; box.PlaceholderColor3=theme.dim
     box.Text=""; box.TextColor3=theme.text; box.Font=Enum.Font.GothamMedium; box.TextSize=14
-    box.TextXAlignment=Enum.TextXAlignment.Left; box.ClearTextOnFocus=false; box.ZIndex=3
+    box.TextXAlignment=Enum.TextXAlignment.Left; box.TextYAlignment=Enum.TextYAlignment.Top
+    box.TextWrapped=true; box.MultiLine=true; box.ClearTextOnFocus=false; box.ClipsDescendants=true; box.ZIndex=3
 
     local send=Instance.new("TextButton",inputBar)
-    send.Size=UDim2.new(0,36,0,36); send.Position=UDim2.new(1,-40,0,4)
+    send.Size=UDim2.new(0,34,0,34)
+    send.AnchorPoint=Vector2.new(1,1)
+    send.Position=UDim2.new(1,-5,1,-5)
     send.BackgroundColor3=theme.accent; send.Text=""; send.AutoButtonColor=false; send.ZIndex=3
     corner(send,10); grad(send,theme.accent,theme.accent2,45)
     local sIco=icon(send,"send",16,theme.bg); sIco.AnchorPoint=Vector2.new(0.5,0.5); sIco.Position=UDim2.new(0.5,0,0.5,0); sIco.ZIndex=4
+
+    local function updateInputHeight()
+        local text = box.Text
+        local availWidth = box.AbsoluteSize.X
+        if availWidth <= 0 then
+            availWidth = math.max(100, (settings.width or 380) - 20 - 58 - 14)
+        end
+        local textH = 16
+        if text and text ~= "" then
+            local textSize = TextService:GetTextSize(text, 14, Enum.Font.GothamMedium, Vector2.new(availWidth, 1000))
+            textH = math.max(16, textSize.Y)
+        end
+        local barH = math.clamp(textH + 20, 44, 104)
+        inputBar.Size = UDim2.new(1, -20, 0, barH)
+        inputBar.Position = UDim2.new(0, 10, 1, -(barH + 2))
+        serverChat.Size = UDim2.new(1, -20, 1, -(barH + 16))
+        globalChat.Size = UDim2.new(1, -20, 1, -(barH + 16))
+    end
+
+    box:GetPropertyChangedSignal("Text"):Connect(updateInputHeight)
+    box:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateInputHeight)
 
     box.Focused:Connect(function() tw(inStroke,0.2,{Transparency=0}) end)
     box.FocusLost:Connect(function() tw(inStroke,0.2,{Transparency=0.8}) end)
 
     ------------------------------------------------------------------ ADD MESSAGE (FIXED TEXT WRAPPING)
-    local function breakLongWords(str, maxLen)
-        return str:gsub("(%S+)", function(word)
-            if #word > maxLen then
-                local broken = ""
-                for i = 1, #word, maxLen do
-                    broken = broken .. word:sub(i, i + maxLen - 1) .. " "
-                end
-                return broken:sub(1, -2)
-            end
-            return word
-        end)
-    end
+    local muteUpdaters = {}
 
     local function addMessage(parentScroll, parentList, sender, text, isMine)
         if #text > 300 then text = text:sub(1, 300) .. "..." end
@@ -454,13 +627,80 @@ function Library:CreateChatWindow()
         bub.ZIndex = 3; corner(bub, 14)
         if isMine then grad(bub, theme.accent, theme.accent2, 45) end
 
+        local hasMute = (not isMine) and (sender and sender ~= "" and sender ~= "?" and sender ~= myName)
+
         local nameLbl = Instance.new("TextLabel", bub)
-        nameLbl.Size = UDim2.new(1,-20,0,12); nameLbl.Position = UDim2.new(0,10,0,6)
+        nameLbl.Size = hasMute and UDim2.new(1,-42,0,12) or UDim2.new(1,-20,0,12)
+        nameLbl.Position = UDim2.new(0,10,0,6)
         nameLbl.BackgroundTransparency = 1; nameLbl.Text = sender
         nameLbl.TextColor3 = isMine and theme.bg or theme.accent
         nameLbl.Font = Enum.Font.GothamBold; nameLbl.TextSize = 11
         nameLbl.TextXAlignment = Enum.TextXAlignment.Left; nameLbl.ZIndex = 4
         nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+        if hasMute then
+            local muteBtn = Instance.new("TextButton", bub)
+            muteBtn.Size = UDim2.new(0, 18, 0, 18)
+            muteBtn.Position = UDim2.new(1, -24, 0, 3)
+            muteBtn.BackgroundTransparency = 1
+            muteBtn.AutoButtonColor = false
+            muteBtn.Text = ""
+            muteBtn.ZIndex = 5
+
+            local muteIco = icon(muteBtn, "volume-x", 13, theme.dim)
+            muteIco.AnchorPoint = Vector2.new(0.5, 0.5)
+            muteIco.Position = UDim2.new(0.5, 0, 0.5, 0)
+            muteIco.ZIndex = 6
+
+            local function refreshMuteVisual()
+                if not muteIco or not muteIco.Parent then return end
+                local isMuted = settings.muted and settings.muted[sender]
+                if isMuted then
+                    muteIco.ImageColor3 = theme.danger
+                    muteIco.ImageTransparency = 0
+                else
+                    muteIco.ImageColor3 = theme.dim
+                    muteIco.ImageTransparency = 0.55
+                end
+            end
+            refreshMuteVisual()
+
+            muteBtn.MouseEnter:Connect(function()
+                local isMuted = settings.muted and settings.muted[sender]
+                if not isMuted then
+                    tw(muteIco, 0.15, {ImageTransparency = 0, ImageColor3 = theme.accent})
+                end
+            end)
+            muteBtn.MouseLeave:Connect(function()
+                refreshMuteVisual()
+            end)
+
+            muteBtn.MouseButton1Click:Connect(function()
+                if not settings.muted then settings.muted = {} end
+                local isMuted = not settings.muted[sender]
+                if isMuted then
+                    settings.muted[sender] = true
+                else
+                    settings.muted[sender] = nil
+                end
+                saveConfig()
+                for _, updater in ipairs(muteUpdaters) do
+                    pcall(updater)
+                end
+            end)
+
+            table.insert(muteUpdaters, refreshMuteVisual)
+            muteBtn.AncestryChanged:Connect(function(_, parent)
+                if not parent then
+                    for idx, fn in ipairs(muteUpdaters) do
+                        if fn == refreshMuteVisual then
+                            table.remove(muteUpdaters, idx)
+                            break
+                        end
+                    end
+                end
+            end)
+        end
 
         local msgLbl = Instance.new("TextLabel", bub)
         msgLbl.Size = UDim2.new(1,-20,0,textH); msgLbl.Position = UDim2.new(0,10,0,22)
@@ -625,6 +865,185 @@ function Library:CreateChatWindow()
         return row, btn
     end
 
+    local themeListeners = {}
+    table.insert(themeListeners, function()
+        for _, fn in ipairs(muteUpdaters) do pcall(fn) end
+    end)
+    local activeDropdownCloser = nil
+
+    local function dropdownRow(labelTxt, iconName, getVal, items, onSelect)
+        local row = Instance.new("Frame", setScroll)
+        row.Size = UDim2.new(1, 0, 0, 50)
+        row.BackgroundColor3 = theme.panel
+        row.ZIndex = 2
+        row.ClipsDescendants = true
+        corner(row, 12)
+
+        local ico = icon(row, iconName, 20, theme.accent)
+        ico.Position = UDim2.new(0, 14, 0, 15)
+        ico.ZIndex = 3
+
+        local l = Instance.new("TextLabel", row)
+        l.Size = UDim2.new(0.5, -40, 0, 50)
+        l.Position = UDim2.new(0, 44, 0, 0)
+        l.BackgroundTransparency = 1
+        l.Text = labelTxt
+        l.TextColor3 = theme.text
+        l.Font = Enum.Font.GothamMedium
+        l.TextSize = 14
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.ZIndex = 3
+
+        local dropBtn = Instance.new("TextButton", row)
+        dropBtn.Size = UDim2.new(0, 125, 0, 34)
+        dropBtn.Position = UDim2.new(1, -137, 0, 8)
+        dropBtn.BackgroundColor3 = theme.input
+        dropBtn.AutoButtonColor = false
+        dropBtn.ZIndex = 3
+        dropBtn.Text = ""
+        corner(dropBtn, 8)
+        local dStroke = stroke(dropBtn, theme.accent, 1, 0.6)
+
+        local curValLbl = Instance.new("TextLabel", dropBtn)
+        curValLbl.Size = UDim2.new(1, -24, 1, 0)
+        curValLbl.Position = UDim2.new(0, 8, 0, 0)
+        curValLbl.BackgroundTransparency = 1
+        curValLbl.TextColor3 = theme.accent
+        curValLbl.Font = Enum.Font.GothamBold
+        curValLbl.TextSize = 13
+        curValLbl.TextXAlignment = Enum.TextXAlignment.Left
+        curValLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        curValLbl.Text = tostring(getVal() or "")
+        curValLbl.ZIndex = 4
+
+        local chevron = Instance.new("TextLabel", dropBtn)
+        chevron.Size = UDim2.new(0, 16, 1, 0)
+        chevron.Position = UDim2.new(1, -20, 0, 0)
+        chevron.BackgroundTransparency = 1
+        chevron.Text = "▾"
+        chevron.TextColor3 = theme.accent
+        chevron.Font = Enum.Font.GothamBold
+        chevron.TextSize = 13
+        chevron.ZIndex = 4
+
+        local maxVisible = math.min(#items, 5)
+        local itemH = 28
+        local scrollH = maxVisible * (itemH + 2) + 6
+
+        local optScroll = Instance.new("ScrollingFrame", row)
+        optScroll.Size = UDim2.new(1, -28, 0, scrollH)
+        optScroll.Position = UDim2.new(0, 14, 0, 48)
+        optScroll.BackgroundColor3 = theme.bg2
+        optScroll.BackgroundTransparency = 0.2
+        optScroll.BorderSizePixel = 0
+        optScroll.ScrollBarThickness = 3
+        optScroll.ScrollBarImageColor3 = theme.accent
+        optScroll.CanvasSize = UDim2.new(0, 0, 0, #items * (itemH + 2) + 6)
+        optScroll.Visible = false
+        optScroll.ZIndex = 5
+        corner(optScroll, 8)
+        local sStroke = stroke(optScroll, theme.accent, 1, 0.8)
+
+        local optList = Instance.new("UIListLayout", optScroll)
+        optList.Padding = UDim.new(0, 2)
+        optList.SortOrder = Enum.SortOrder.LayoutOrder
+
+        local optPad = Instance.new("UIPadding", optScroll)
+        optPad.PaddingTop = UDim.new(0, 3)
+        optPad.PaddingBottom = UDim.new(0, 3)
+        optPad.PaddingLeft = UDim.new(0, 3)
+        optPad.PaddingRight = UDim.new(0, 3)
+
+        local optionButtons = {}
+        local function updateDisplay()
+            local cur = tostring(getVal() or "")
+            curValLbl.Text = cur
+            for _, entry in ipairs(optionButtons) do
+                local isSel = (entry.name == cur)
+                entry.btn.BackgroundColor3 = isSel and theme.accent or theme.input
+                entry.btn.BackgroundTransparency = isSel and 0.1 or 0.7
+                entry.lbl.TextColor3 = isSel and theme.bg or theme.text
+            end
+        end
+
+        local isOpen = false
+        local function closeDropdown()
+            if not isOpen then return end
+            isOpen = false
+            if activeDropdownCloser == closeDropdown then activeDropdownCloser = nil end
+            chevron.Text = "▾"
+            tw(row, 0.18, { Size = UDim2.new(1, 0, 0, 50) })
+            task.delay(0.18, function()
+                if not isOpen then optScroll.Visible = false end
+            end)
+        end
+
+        local function openDropdown()
+            if activeDropdownCloser and activeDropdownCloser ~= closeDropdown then
+                activeDropdownCloser()
+            end
+            isOpen = true
+            activeDropdownCloser = closeDropdown
+            chevron.Text = "▴"
+            optScroll.Visible = true
+            updateDisplay()
+            local totalH = 50 + scrollH + 6
+            tw(row, 0.18, { Size = UDim2.new(1, 0, 0, totalH) })
+        end
+
+        dropBtn.MouseButton1Click:Connect(function()
+            if isOpen then closeDropdown() else openDropdown() end
+        end)
+
+        for idx, itm in ipairs(items) do
+            local itmName = (type(itm) == "table" and itm.name) or tostring(itm)
+            local ob = Instance.new("TextButton", optScroll)
+            ob.Size = UDim2.new(1, 0, 0, itemH)
+            ob.BackgroundColor3 = theme.input
+            ob.BackgroundTransparency = 0.7
+            ob.AutoButtonColor = false
+            ob.Text = ""
+            ob.LayoutOrder = idx
+            ob.ZIndex = 6
+            corner(ob, 6)
+
+            local ol = Instance.new("TextLabel", ob)
+            ol.Size = UDim2.new(1, -12, 1, 0)
+            ol.Position = UDim2.new(0, 8, 0, 0)
+            ol.BackgroundTransparency = 1
+            ol.Text = itmName
+            ol.TextColor3 = theme.text
+            ol.Font = Enum.Font.GothamMedium
+            ol.TextSize = 13
+            ol.TextXAlignment = Enum.TextXAlignment.Left
+            ol.ZIndex = 7
+
+            ob.MouseButton1Click:Connect(function()
+                closeDropdown()
+                onSelect(itm, idx)
+                updateDisplay()
+            end)
+
+            table.insert(optionButtons, { name = itmName, btn = ob, lbl = ol })
+        end
+
+        table.insert(themeListeners, function()
+            row.BackgroundColor3 = theme.panel
+            ico.ImageColor3 = theme.accent
+            lbl.TextColor3 = theme.text
+            dStroke.Color = theme.accent
+            curValLbl.TextColor3 = theme.accent
+            chevron.TextColor3 = theme.accent
+            optScroll.BackgroundColor3 = theme.bg2
+            optScroll.ScrollBarImageColor3 = theme.accent
+            sStroke.Color = theme.accent
+            updateDisplay()
+        end)
+
+        updateDisplay()
+        return row
+    end
+
     local function applyTheme(name)
         if not themes[name] then return end
         settings.theme = name
@@ -647,6 +1066,8 @@ function Library:CreateChatWindow()
         local g4 = send:FindFirstChildOfClass("UIGradient")
         if g4 then g4.Color = ColorSequence.new(theme.accent, theme.accent2) end
         
+        for _, fn in ipairs(themeListeners) do pcall(fn) end
+
         saveConfig()
     end
 
@@ -661,24 +1082,22 @@ function Library:CreateChatWindow()
     toggleRow("Toast Popups","layout-grid",function() return settings.toasts end,function(v) settings.toasts=v end)
     toggleRow("Notification Sound","volume-2",function() return settings.sound end,function(v) settings.sound=v end)
     
-    -- Sound selector row
-    local soundRow, soundBtn = buttonRow("Sound Type","music",soundPresets[settings.soundIndex or 1].name,function()
-        local idx = settings.soundIndex or 1
-        idx = (idx % #soundPresets) + 1
+    -- Sound selector row (dropdown)
+    dropdownRow("Sound Type", "music", function()
+        local idx = math.clamp(settings.soundIndex or 1, 1, #soundPresets)
+        return soundPresets[idx] and soundPresets[idx].name or "Sound"
+    end, soundPresets, function(preset, idx)
         settings.soundIndex = idx
-        soundBtn.Text = soundPresets[idx].name
         saveConfig()
-        -- Preview the selected sound
         if settings.sound then playNotifSound() end
     end)
     
     sectionLabel("APPEARANCE")
-    local themeRow, themeBtn = buttonRow("UI Theme","palette",settings.theme,function()
-        local idx = 1
-        for i, n in ipairs(themeNames) do if n == settings.theme then idx = i break end end
-        local nextName = themeNames[(idx % #themeNames) + 1]
-        applyTheme(nextName)
-        themeBtn.Text = nextName
+    -- UI Theme row (dropdown)
+    dropdownRow("UI Theme", "palette", function()
+        return settings.theme or "default"
+    end, themeNames, function(name)
+        applyTheme(name)
     end)
     
     sliderRow("Transparency","eye",0,80,
@@ -704,6 +1123,13 @@ function Library:CreateChatWindow()
         bubble.Size=UDim2.new(0,v,0,v)
         corner(bubble,v/2)
         bIco.Size=UDim2.new(0,math.floor(v*0.48),0,math.floor(v*0.48))
+    end,"px")
+    
+    sliderRow("Toast Size","bell",200,600,
+    function() return settings.toastSize or 320 end,
+    function(v) 
+        settings.toastSize=v
+        toastContainer.Size=UDim2.new(0,v,1,-20)
     end,"px")
 
     sectionLabel("INFO")
@@ -824,9 +1250,10 @@ function Library:CreateChatWindow()
 
     local function onSend()
         if tick() - lastSendTime < 1 then return end
-        local msg = box.Text
+        local msg = box.Text:gsub("\r", ""):gsub("^%s*\n+", ""):gsub("\n+%s*$", "")
         if msg:gsub("%s","") == "" then return end
         box.Text = ""
+        updateInputHeight()
         lastSendTime = tick()
         
         -- Reset idle counter on user activity
@@ -849,6 +1276,18 @@ function Library:CreateChatWindow()
     end
     send.MouseButton1Click:Connect(onSend)
     box.FocusLost:Connect(function(enter) if enter then onSend() end end)
+
+    UserInputService.InputBegan:Connect(function(inp)
+        if inp.KeyCode == Enum.KeyCode.Return and box:IsFocused() then
+            local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+            if not shift then
+                task.defer(function()
+                    box.Text = box.Text:gsub("\r", ""):gsub("\n$", "")
+                    box:ReleaseFocus(true)
+                end)
+            end
+        end
+    end)
 
     local function loop()
         while true do
@@ -938,8 +1377,9 @@ function Library:CreateChatWindow()
                 
                 -- Unified notification logic for BOTH server and global messages
                 if isNew and not firstLoad and not isMine then
+                    local isSenderMuted = settings.muted and settings.muted[m.s]
                     local msgOnVisibleTab = (scope == currentTab)
-                    local shouldNotify = (not isOpen) or (not msgOnVisibleTab)
+                    local shouldNotify = ((not isOpen) or (not msgOnVisibleTab)) and (not isSenderMuted)
                     
                     if shouldNotify then
                         if settings.toasts then showToast(m.s or "?", m.t or "") end
