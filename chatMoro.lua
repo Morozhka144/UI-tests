@@ -1202,8 +1202,10 @@ function Library:CreateChatWindow()
         end
     end
     closeBtn.MouseButton1Click:Connect(toggle)
-    send.MouseEnter:Connect(function() tw(send, 0.15, {Size = UDim2.new(0,38,0,38), Position = UDim2.new(1,-41,0,3)}) end)
-    send.MouseLeave:Connect(function() tw(send, 0.15, {Size = UDim2.new(0,36,0,36), Position = UDim2.new(1,-40,0,4)}) end)
+    send.MouseEnter:Connect(function() tw(send, 0.15, {Size = UDim2.new(0,36,0,36), Position = UDim2.new(1,-4,1,-4)}) end)
+    send.MouseLeave:Connect(function() tw(send, 0.15, {Size = UDim2.new(0,34,0,34), Position = UDim2.new(1,-5,1,-5)}) end)
+    send.MouseButton1Down:Connect(function() tw(send, 0.08, {Size = UDim2.new(0,32,0,32), Position = UDim2.new(1,-6,1,-6)}) end)
+    send.MouseButton1Up:Connect(function() tw(send, 0.12, {Size = UDim2.new(0,34,0,34), Position = UDim2.new(1,-5,1,-5)}) end)
 
     ------------------------------------------------------------------ SEND / RECEIVE
     local seenServer, seenGlobal = {}, {}
