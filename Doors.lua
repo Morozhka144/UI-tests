@@ -71,6 +71,7 @@ library.TabButtons = {}
 library.ScreenGui = nil
 
 local MoroWindow = nil
+local element3 = nil
 
 local dummyToggle = {
     Value = false,
@@ -84,6 +85,12 @@ local dummyToggle = {
         return { Value = Enum.KeyCode.F, SetValue = function() end, OnChanged = function() end }
     end,
 }
+setmetatable(dummyToggle, {
+    __index = function(t, k)
+        return function() end
+    end
+})
+
 local dummyOption = {
     Value = false,
     SetValue = function() end,
@@ -91,6 +98,12 @@ local dummyOption = {
     OnChanged = function() end,
     GetState = function() return {} end,
 }
+setmetatable(dummyOption, {
+    __index = function(t, k)
+        return function() end
+    end
+})
+
 setmetatable(library.Toggles, {
     __index = function(t, k) return dummyToggle end
 })
@@ -102,19 +115,37 @@ local dummySection = {
     AddToggle = function() return dummyToggle end,
     AddSlider = function() return dummyOption end,
     AddDropdown = function() return dummyOption end,
-    AddButton = function() end,
+    AddButton = function() return { OnClick = function() end } end,
     AddLabel = function() return { SetText = function() end, AddKeyPicker = function() return dummyOption end } end,
     AddDivider = function() end,
     AddInput = function() return dummyOption end,
     AddImage = function() return { SetImage = function() end, SetVisible = function() end } end,
 }
+setmetatable(dummySection, {
+    __index = function(t, k)
+        return function() end
+    end
+})
+
 local dummyTab = {
+    Name = "Home",
+    OriginalName = "Home",
     AddLeftGroupbox = function() return dummySection end,
     AddRightGroupbox = function() return dummySection end,
     AddLeftTabbox = function() return { AddTab = function() return dummySection end } end,
     AddRightTabbox = function() return { AddTab = function() return dummySection end } end,
     SetVisible = function() end,
+    Show = function(self)
+        if element3 and element3.Main and element3.Main.Show then
+            element3.Main:Show()
+        end
+    end,
 }
+setmetatable(dummyTab, {
+    __index = function(t, k)
+        return function() end
+    end
+})
 
 local function wrapSection(luminaSec, tab, colName)
     local secProxy = {
@@ -498,10 +529,23 @@ local function wrapSection(luminaSec, tab, colName)
     return secProxy
 end
 
-local function wrapTab(luminaTab)
+local function wrapTab(luminaTab, tabName)
     local tabProxy = {
         _raw = luminaTab,
+        Name = tabName or (luminaTab and luminaTab.Name) or "Tab",
+        OriginalName = tabName or (luminaTab and luminaTab.Name) or "Tab",
+        Button = luminaTab and (luminaTab._btn or luminaTab.Button),
+        _Button = luminaTab and (luminaTab._btn or luminaTab.Button),
+        _Label = luminaTab and luminaTab._label,
     }
+
+    local origActivate = luminaTab and luminaTab._activate
+    if origActivate then
+        luminaTab._activate = function(...)
+            library.ActiveTab = tabProxy
+            return origActivate(...)
+        end
+    end
 
     function tabProxy:AddLeftGroupbox(name)
         luminaTab:Column("left")
@@ -535,7 +579,32 @@ local function wrapTab(luminaTab)
         }
     end
 
-    function tabProxy:SetVisible(vis) end
+    function tabProxy:SetVisible(vis)
+        if luminaTab and luminaTab._btn then
+            luminaTab._btn.Visible = (vis == true or vis == nil)
+        end
+        if not vis and library.ActiveTab == tabProxy then
+            if element3 and element3.Main and element3.Main.Show then
+                element3.Main:Show()
+            end
+        end
+    end
+
+    function tabProxy:Show()
+        if luminaTab and luminaTab._activate then
+            luminaTab._activate()
+        end
+        library.ActiveTab = tabProxy
+    end
+
+    setmetatable(tabProxy, {
+        __index = function(t, k)
+            if luminaTab and luminaTab[k] then
+                return luminaTab[k]
+            end
+            return function() end
+        end
+    })
 
     return tabProxy
 end
@@ -566,9 +635,10 @@ function library:CreateWindow(cfg)
             Name = name,
             Icon = icon or "menu",
         })
-        local wrapped = wrapTab(luminaTab)
-        wrapped.Button = luminaTab.Button
-        wrapped._Button = luminaTab.Button
+        local wrapped = wrapTab(luminaTab, name)
+        wrapped.Button = luminaTab._btn or luminaTab.Button
+        wrapped._Button = luminaTab._btn or luminaTab.Button
+        wrapped._Label = luminaTab._label
         return wrapped
     end
 
@@ -1413,7 +1483,7 @@ local moroWindow = library:CreateWindow({
   ToggleKey = Enum.KeyCode.RightShift,
 })
 
-local element3 = {
+element3 = {
   Home = dummyTab, -- Home tab removed as requested
   Main = moroWindow:AddTab("Main", "house"),
   AutoFarm = moroWindow:AddTab("Auto Farm", "bot"),
@@ -4501,6 +4571,20 @@ toggles.BypassSnare:OnChanged(function(p63)
   end
 end)
 
+Groupboxes.Exploits_Removals:AddToggle("RemoveScreech", {
+  Text = "Remove Screech",
+  Default = false,
+  Tooltip = "Prevents 'Screech' from spawning and destroys active Screech.",
+})
+
+Groupboxes.Exploits_Removals:AddToggle("RemoveHalt", {
+  Text = "Remove Halt",
+  Default = false,
+  Tooltip = "Prevents 'Halt' from spawning.",
+})
+
+Groupboxes.Exploits_Removals:AddDivider()
+
 Groupboxes.Exploits_Removals:AddToggle("RemoveMaster", {
   Text = "Remove Features",
   Default = false,
@@ -4543,6 +4627,58 @@ end
 
 toggles.RemoveMaster:OnChanged(syncRemove)
 options.RemoveList:OnChanged(syncRemove)
+
+toggles.RemoveScreech:OnChanged(function(Value)
+  local object2 = helper19()
+  if object2 then
+    local screech = object2:FindFirstChild("Screech") or object2:FindFirstChild("Screech_Disabled")
+    if screech then
+      screech.Name = Value and "Screech_Disabled" or "Screech"
+    end
+  end
+
+  local floorRep = replicatedStorage:FindFirstChild("FloorReplicated")
+  if floorRep then
+    local glitchScreech = floorRep:FindFirstChild("GlitchScreech", true) or floorRep:FindFirstChild("GlitchScreech_Disabled", true)
+    if glitchScreech then
+      glitchScreech.Name = Value and "GlitchScreech_Disabled" or "GlitchScreech"
+    end
+  end
+
+  if Value then
+    task.spawn(function()
+      while toggles.RemoveScreech and toggles.RemoveScreech.Value do
+        local camera = workspace.CurrentCamera or workspace:FindFirstChild("Camera")
+        if camera then
+          local screech = camera:FindFirstChild("Screech")
+          if screech then
+            pcall(function() screech:Destroy() end)
+          end
+        end
+        task.wait()
+      end
+    end)
+  end
+end)
+
+toggles.RemoveHalt:OnChanged(function(Value)
+  local clientModules = replicatedStorage:FindFirstChild("ModulesClient") or replicatedStorage:FindFirstChild("ClientModules")
+  local entityModules = clientModules and clientModules:FindFirstChild("EntityModules")
+  if entityModules then
+    local shade = entityModules:FindFirstChild("Shade") or entityModules:FindFirstChild("Shade_Disabled")
+    if shade then
+      shade.Name = Value and "Shade_Disabled" or "Shade"
+    end
+  end
+
+  local object2 = helper19()
+  if object2 then
+    local shade = object2:FindFirstChild("Shade") or object2:FindFirstChild("Shade_Disabled")
+    if shade then
+      shade.Name = Value and "Shade_Disabled" or "Shade"
+    end
+  end
+end)
 
 toggles.RemoveA90:OnChanged(function(p64)
   local object2 = helper19()
@@ -5550,6 +5686,9 @@ toggles.AutoBreakerBox:OnChanged(function(p86)
   end
 end)
 
+Groupboxes.Character:AddToggle("EnableWalkspeed", {
+  Text = "Enable Walkspeed", Default = false, Tooltip = "Enables custom walkspeed modification", })
+
 Groupboxes.Character:AddSlider("Walkspeed", {
   Text = "Walkspeed", Min = 16, Max = 150, Default = 16, Rounding = 0, Compact = true, })
 
@@ -5826,7 +5965,8 @@ end
 local function helper41()
   helper39()
 
-  if not toggles.FlyToggle.Value and options.Walkspeed.Value == 16 then
+  local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value and options.Walkspeed.Value ~= 16)
+  if not toggles.FlyToggle.Value and not walkspeedActive then
     return
   end
 
@@ -5884,7 +6024,8 @@ local function helper42()
       return
     end
 
-    local value42 = options.Walkspeed.Value
+    local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value)
+    local value42 = walkspeedActive and options.Walkspeed.Value or 16
 
     if value42 == 16 then
       return
@@ -5916,7 +6057,8 @@ local function helper43()
   helper40()
   helper39()
 
-  if not toggles.FlyToggle.Value and options.Walkspeed.Value == 16 then
+  local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value and options.Walkspeed.Value ~= 16)
+  if not toggles.FlyToggle.Value and not walkspeedActive then
     return
   end
 
@@ -5929,7 +6071,8 @@ local function helper43()
       return
     end
 
-    local value43 = options.Walkspeed.Value
+    local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value)
+    local value43 = walkspeedActive and options.Walkspeed.Value or 16
 
     character:SetAttribute("SpeedBoost", value43 - 16)
     character:SetAttribute("SpeedBoostBehind", 0)
@@ -6380,17 +6523,24 @@ function helper14()
   helper40()
   helper39()
 
+  local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value and options.Walkspeed.Value ~= 16)
+
+  if not walkspeedActive and not (toggles.FlyToggle and toggles.FlyToggle.Value) then
+    return
+  end
+
   if options.SpeedBypassMode.Value == "Boost" then
     helper43()
   else
     helper42()
 
-    if toggles.FlyToggle.Value or options.Walkspeed.Value ~= 16 then
+    if toggles.FlyToggle.Value or walkspeedActive then
       helper41()
     end
   end
 end
 
+toggles.EnableWalkspeed:OnChanged(helper14)
 options.Walkspeed:OnChanged(helper14)
 options.SpeedBypassMode:OnChanged(helper14)
 
@@ -8763,11 +8913,165 @@ end
 
 Groupboxes.ArchivesMain = element3.Archives:AddLeftGroupbox("Archives")
 
+Groupboxes.ArchivesMain:AddToggle("BypassDrones", {
+  Text = "Bypass Drones",
+  Default = false,
+  Tooltip = "Prevents 'Drones' from attacking you by disabling walk triggers.",
+})
+
 Groupboxes.ArchivesMain:AddToggle("AntiDrone", {
-  Text = "Anti Drone", Default = false, Tooltip = "Prevents you from bumping/falling over when walking into (singular) drones", })
+  Text = "Anti Drone",
+  Default = false,
+  Tooltip = "Prevents you from bumping/falling over when walking into (singular) drones",
+})
+
+Groupboxes.ArchivesMain:AddToggle("BypassDronesStampede", {
+  Text = "Stop Time/Anti Stampede",
+  Default = false,
+  Tooltip = "Prevents 'The Drones Stampede' from attacking you by looking at the clock.",
+})
 
 Groupboxes.ArchivesMain:AddToggle("DisableDroneStampede", {
-  Text = "Disable Drone Stampede (FE)", Default = false, Tooltip = "Disables the drone stampede from spawning FE", })
+  Text = "Disable Drone Stampede (FE)",
+  Default = false,
+  Tooltip = "Disables the drone stampede from spawning FE",
+})
+
+Groupboxes.ArchivesMain:AddToggle("TimeShower", {
+  Text = "Time Shower",
+  Default = false,
+  Tooltip = "Shows the Archives clock time on your screen.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("DroneTimer", {
+  Text = "Drone Stampede Timer",
+  Default = false,
+  Tooltip = "Notifies you 60s and 30s before the 05:00 and 09:00 drone stampede",
+})
+
+Groupboxes.ArchivesMain:AddDivider()
+
+Groupboxes.ArchivesMain:AddToggle("BypassWater", {
+  Text = "Bypass Electric Water",
+  Default = false,
+  Tooltip = "Creates a safe collision platform above electric water to walk freely.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("AntiElectricPuddle", {
+  Text = "Anti Electric Puddle",
+  Default = false,
+  Tooltip = "Moves your character above to not step on electric puddles",
+})
+
+Groupboxes.ArchivesMain:AddToggle("BypassAlma", {
+  Text = "Bypass Alma",
+  Default = false,
+  Tooltip = "Prevents 'Alma' from spawning by destroying it.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("NoAlmaDamage", {
+  Text = "Anti Alma",
+  Default = false,
+  Tooltip = "Prevents alma from ever interacting with you/you can look at her freely",
+})
+
+Groupboxes.ArchivesMain:AddDivider()
+
+Groupboxes.ArchivesMain:AddToggle("AntiClosetTrash", {
+  Text = "Anti Closet Trash",
+  Default = false,
+  Tooltip = "Prevents closet trash (binders, shoes, shelves) from spawning.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("ForgetMeNotSolver", {
+  Text = "Forget Me Not Skipper",
+  Default = false,
+  Tooltip = "Automatically solves and skips Forget Me Not doors.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("HonchoCorrectBoxESP", {
+  Text = "Honcho Correct Box ESP",
+  Default = false,
+  Tooltip = "ESPs the Archives Correct Boxes for Honcho minigame.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("AntiRansom", {
+  Text = "Anti Ransom",
+  Default = false,
+  Tooltip = "Prevents 'Ransom' from attacking you.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("AntiScribbles", {
+  Text = "Bypass Scribbles",
+  Default = false,
+  Tooltip = "Prevents 'Scribbles' from attacking you.",
+})
+
+local DroneConnection = nil
+local DroneWalkedIntoParents = {}
+toggles.BypassDrones:OnChanged(function(Value)
+  local function ProcessDrones(drones)
+    local WalkedInto = drones:FindFirstChild("WalkedInto") or drones:WaitForChild("WalkedInto", 3)
+    if WalkedInto and not DroneWalkedIntoParents[WalkedInto] then
+      DroneWalkedIntoParents[WalkedInto] = drones
+      WalkedInto.Parent = replicatedStorage
+    end
+  end
+
+  if Value then
+    for _, child in ipairs(workspace:GetChildren()) do
+      if child.Name == "Drones" then
+        ProcessDrones(child)
+      end
+    end
+
+    if DroneConnection then
+      DroneConnection:Disconnect()
+    end
+    DroneConnection = workspace.ChildAdded:Connect(function(child)
+      if child.Name == "Drones" then
+        ProcessDrones(child)
+      end
+    end)
+    table.insert(Connections, DroneConnection)
+  else
+    for WalkedInto, originalParent in pairs(DroneWalkedIntoParents) do
+      if WalkedInto and WalkedInto.Parent and originalParent and originalParent.Parent then
+        WalkedInto.Parent = originalParent
+      end
+    end
+    table.clear(DroneWalkedIntoParents)
+
+    if DroneConnection then
+      DroneConnection:Disconnect()
+      DroneConnection = nil
+    end
+  end
+end)
+
+local BypassDronesStampedeConnection = nil
+toggles.BypassDronesStampede:OnChanged(function(Value)
+  if BypassDronesStampedeConnection then
+    task.cancel(BypassDronesStampedeConnection)
+    BypassDronesStampedeConnection = nil
+  end
+
+  if not Value then return end
+
+  BypassDronesStampedeConnection = task.spawn(function()
+    while toggles.BypassDronesStampede and toggles.BypassDronesStampede.Value do
+      local clock = helper65()
+      local lookedAtRemote = clock and clock:FindFirstChild("LookedAtRemote", true)
+
+      if lookedAtRemote and lookedAtRemote:IsA("RemoteEvent") then
+        pcall(function() lookedAtRemote:FireServer() end)
+        task.wait(0.5)
+      else
+        task.wait(0.25)
+      end
+    end
+  end)
+end)
 
 toggles.DisableDroneStampede:OnChanged(function(p125)
   if p125 and not val85.DisableDroneStampedeRunning then
@@ -8790,8 +9094,73 @@ toggles.DisableDroneStampede:OnChanged(function(p125)
   end
 end)
 
-Groupboxes.ArchivesMain:AddToggle("DroneTimer", {
-  Text = "Drone Stampede Timer", Default = false, Tooltip = "Notifies you 60s and 30s before the 05:00 and 09:00 drone stampede", })
+local TimeShowerGui = nil
+local TimeShowerLabel = nil
+local TimeShowerConnection = nil
+local TimeShowerToken = 0
+
+local function GetTimeShowerLabel()
+  if TimeShowerLabel and TimeShowerLabel.Parent then
+    return TimeShowerLabel
+  end
+  local parentGui = (gethui and gethui()) or coreGui or localPlayer2:FindFirstChildOfClass("PlayerGui")
+  TimeShowerGui = Instance.new("ScreenGui")
+  TimeShowerGui.Name = "TimeShowerGui"
+  TimeShowerGui.ResetOnSpawn = false
+  TimeShowerGui.DisplayOrder = 32767
+  TimeShowerGui.Parent = parentGui
+
+  TimeShowerLabel = Instance.new("TextLabel")
+  TimeShowerLabel.Name = "TimeShower"
+  TimeShowerLabel.AnchorPoint = Vector2.new(0, 1)
+  TimeShowerLabel.Position = UDim2.new(0, 12, 1, -12)
+  TimeShowerLabel.Size = UDim2.new(0, 180, 0, 32)
+  TimeShowerLabel.BackgroundTransparency = 1
+  TimeShowerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+  TimeShowerLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+  TimeShowerLabel.TextStrokeTransparency = 0.35
+  TimeShowerLabel.Font = Enum.Font.GothamBold
+  TimeShowerLabel.TextSize = 18
+  TimeShowerLabel.TextXAlignment = Enum.TextXAlignment.Left
+  TimeShowerLabel.Text = "Time: " .. string.char(45, 45, 58, 45, 45)
+  TimeShowerLabel.Visible = false
+  TimeShowerLabel.Parent = TimeShowerGui
+  return TimeShowerLabel
+end
+
+local function StopTimeShower()
+  TimeShowerToken = TimeShowerToken + 1
+  if TimeShowerConnection then
+    TimeShowerConnection:Disconnect()
+    TimeShowerConnection = nil
+  end
+  if TimeShowerLabel then
+    TimeShowerLabel.Visible = false
+    TimeShowerLabel.Text = "Time: " .. string.char(45, 45, 58, 45, 45)
+  end
+end
+
+toggles.TimeShower:OnChanged(function(Value)
+  StopTimeShower()
+  if not Value then return end
+
+  local lbl = GetTimeShowerLabel()
+  local Token = TimeShowerToken
+  lbl.Visible = true
+
+  TimeShowerConnection = runService.Heartbeat:Connect(function()
+    if Token ~= TimeShowerToken then return end
+    local clock = helper65()
+    local timeModel = clock and clock:FindFirstChild("Time")
+    local txtLabel = timeModel and timeModel:FindFirstChild("TextLabel")
+    if txtLabel and txtLabel.Text and txtLabel.Text ~= "" then
+      lbl.Text = "Time: " .. txtLabel.Text
+    else
+      lbl.Text = "Time: " .. string.char(45, 45, 58, 45, 45)
+    end
+  end)
+  table.insert(Connections, TimeShowerConnection)
+end)
 
 toggles.DroneTimer:OnChanged(function(p126)
   if p126 and not val85.DroneTimerRunning then
@@ -8847,8 +9216,136 @@ toggles.DroneTimer:OnChanged(function(p126)
   end
 end)
 
-Groupboxes.ArchivesMain:AddToggle("NoAlmaDamage", {
-  Text = "Anti Alma", Default = false, Tooltip = "Prevents alma from ever interacting with you/you can look at her freely", })
+local WaterBypassConnection = nil
+local WaterParts = {}
+toggles.BypassWater:OnChanged(function(Value)
+  if WaterBypassConnection then
+    WaterBypassConnection:Disconnect()
+    WaterBypassConnection = nil
+  end
+
+  if Value then
+    library:Notify({ Title = "Archives", Description = "PositionSpoof Will Break This!.", Time = 4 })
+
+    local function ProcessWaterBypassRoom(WaterBypassRoom)
+      if not tonumber(WaterBypassRoom.Name) then return end
+      task.wait(3)
+
+      local WaterBypassWater = WaterBypassRoom:FindFirstChild("Water")
+      if not WaterBypassWater or WaterParts[WaterBypassWater] then return end
+
+      local WaterBypassPart = Instance.new("Part")
+      WaterBypassPart.Name = "WaterBypass"
+      WaterBypassPart.Anchored = true
+      WaterBypassPart.CanCollide = true
+      WaterBypassPart.CanTouch = false
+      WaterBypassPart.CanQuery = false
+      WaterBypassPart.Transparency = 0.25
+      WaterBypassPart.Color = Color3.fromRGB(0, 150, 255)
+      WaterBypassPart.Material = Enum.Material.ForceField
+
+      if WaterBypassWater:IsA("BasePart") then
+        WaterBypassPart.Size = WaterBypassWater.Size + Vector3.new(0, 0.5, 0)
+        WaterBypassPart.CFrame = WaterBypassWater.CFrame * CFrame.new(0, 0.25, 0)
+      elseif WaterBypassWater:IsA("Model") then
+        local WaterBypassCFrame, WaterBypassSize = WaterBypassWater:GetBoundingBox()
+        WaterBypassPart.Size = WaterBypassSize + Vector3.new(0, 0.5, 0)
+        WaterBypassPart.CFrame = WaterBypassCFrame * CFrame.new(0, 0.25, 0)
+      else
+        WaterBypassPart.Size = Vector3.new(10, 1.5, 10)
+        WaterBypassPart.CFrame = WaterBypassWater:GetPivot() * CFrame.new(0, 0.25, 0)
+      end
+
+      if WaterBypassPart.Size.Y > 3 then
+        WaterBypassPart:Destroy()
+        library:Notify({ Title = "Archives", Description = "Water Bypass removed: Softlock.", Time = 4 })
+        return
+      end
+
+      WaterBypassPart.Parent = WaterBypassRoom
+      WaterParts[WaterBypassWater] = WaterBypassPart
+    end
+
+    local currentRooms = workspace:FindFirstChild("CurrentRooms")
+    if currentRooms then
+      local latestRoomVal = replicatedStorage:FindFirstChild("GameData") and replicatedStorage.GameData:FindFirstChild("LatestRoom")
+      local WaterBypassLatestRoomNumber = latestRoomVal and tonumber(latestRoomVal.Value) or tonumber(localPlayer2:GetAttribute("CurrentRoom")) or 0
+
+      for WaterBypassRoomNumber = math.max(0, WaterBypassLatestRoomNumber - 4), WaterBypassLatestRoomNumber do
+        local WaterBypassRoom = currentRooms:FindFirstChild(tostring(WaterBypassRoomNumber))
+        if WaterBypassRoom then
+          task.spawn(ProcessWaterBypassRoom, WaterBypassRoom)
+        end
+      end
+
+      WaterBypassConnection = currentRooms.ChildAdded:Connect(function(WaterBypassRoom)
+        task.spawn(ProcessWaterBypassRoom, WaterBypassRoom)
+      end)
+      table.insert(Connections, WaterBypassConnection)
+    end
+  else
+    for _, WaterBypassPart in pairs(WaterParts) do
+      if WaterBypassPart then
+        pcall(function() WaterBypassPart:Destroy() end)
+      end
+    end
+    table.clear(WaterParts)
+  end
+end)
+
+toggles.AntiElectricPuddle:OnChanged(function(p130)
+  if p130 then
+    val85.DefaultHipHeight = val85.DefaultHipHeight or humanoid and humanoid.HipHeight or 2.396
+
+    Connections.AntiElectricPuddle = runService.Heartbeat:Connect(function()
+      if val83 and val83.Sunk then
+        return
+      end
+
+      if humanoid and humanoid.FloorMaterial == Enum.Material.Glass then
+        if humanoid.HipHeight ~= 3 then
+          humanoid.HipHeight = 3
+        end
+      elseif humanoid and val85.DefaultHipHeight then
+        if humanoid.HipHeight ~= val85.DefaultHipHeight then
+          humanoid.HipHeight = val85.DefaultHipHeight
+        end
+      end
+    end)
+  else
+    if Connections.AntiElectricPuddle then
+      Connections.AntiElectricPuddle:Disconnect()
+      Connections.AntiElectricPuddle = nil
+    end
+
+    if humanoid and val85.DefaultHipHeight then
+      humanoid.HipHeight = val85.DefaultHipHeight
+    end
+  end
+end)
+
+local AlmaConnection = nil
+toggles.BypassAlma:OnChanged(function(Value)
+  if AlmaConnection then
+    AlmaConnection:Disconnect()
+    AlmaConnection = nil
+  end
+
+  if Value then
+    for _, child in ipairs(workspace:GetChildren()) do
+      if child.Name == "Alma" then
+        pcall(function() child:Destroy() end)
+      end
+    end
+
+    AlmaConnection = workspace.ChildAdded:Connect(function(child)
+      if child.Name == "Alma" then
+        pcall(function() child:Destroy() end)
+      end
+    end)
+    table.insert(Connections, AlmaConnection)
+  end
+end)
 
 toggles.NoAlmaDamage:OnChanged(function(p127)
   if p127 and not val85.NoAlmaDamageRunning then
@@ -8904,45 +9401,379 @@ toggles.NoAlmaDamage:OnChanged(function(p127)
   end
 end)
 
-Groupboxes.ArchivesMain:AddToggle("AntiElectricPuddle", {
-  Text = "Anti Electric Puddle", Default = false, Tooltip = "Moves your character above to not step on electric puddles", })
+local AntiClosetTrash_Connection = nil
+toggles.AntiClosetTrash:OnChanged(function(Value)
+  if AntiClosetTrash_Connection then
+    AntiClosetTrash_Connection:Disconnect()
+    AntiClosetTrash_Connection = nil
+  end
 
-toggles.AntiElectricPuddle:OnChanged(function(p130)
-  if p130 then
-    val85.DefaultHipHeight = val85.DefaultHipHeight or humanoid and humanoid.HipHeight or 2.396
+  if not Value then return end
 
-    Connections.AntiElectricPuddle = runService.Heartbeat:Connect(function()
-      if val83 and val83.Sunk then
+  local function checkTrash(Child)
+    if not (toggles.AntiClosetTrash and toggles.AntiClosetTrash.Value) then return end
+    local Name = Child.Name
+    if Name:sub(1, 6) == "Binder" or Name:sub(1, 4) == "Shoe" or Name:sub(1, 5) == "Shelf" then
+      pcall(function() Child:Destroy() end)
+    end
+  end
+
+  for _, child in ipairs(workspace:GetChildren()) do
+    checkTrash(child)
+  end
+
+  AntiClosetTrash_Connection = workspace.ChildAdded:Connect(checkTrash)
+  table.insert(Connections, AntiClosetTrash_Connection)
+end)
+
+local ForgetMeNotConnection = nil
+local ForgetMeNotRunning = false
+local ForgetMeNotProcessing = {}
+local ForgetMeNotNotified = {}
+
+toggles.ForgetMeNotSolver:OnChanged(function(Value)
+  if ForgetMeNotConnection then
+    ForgetMeNotConnection:Disconnect()
+    ForgetMeNotConnection = nil
+  end
+
+  ForgetMeNotRunning = false
+  ForgetMeNotProcessing = {}
+  ForgetMeNotNotified = {}
+
+  if not Value then return end
+
+  ForgetMeNotRunning = true
+
+  local function GetCharacter()
+    return localPlayer2.Character or localPlayer2.CharacterAdded:Wait()
+  end
+
+  local function GetNextRoom(Number)
+    while ForgetMeNotRunning do
+      for RoomNumber = Number + 1, Number + 5 do
+        local NextRoom = workspace.CurrentRooms:FindFirstChild(tostring(RoomNumber))
+        if NextRoom then
+          return NextRoom
+        end
+      end
+      task.wait(0.1)
+    end
+    return nil
+  end
+
+  local function FireLookAts(Room)
+    for i = 1, 6 do
+      local Obj = Room:FindFirstChild(tostring(i))
+      if Obj then
+        local LookAt = Obj:FindFirstChild("LookAt")
+        if LookAt then
+          pcall(function()
+            LookAt:FireServer()
+          end)
+        end
+      end
+    end
+  end
+
+  local function Run(Room)
+    if not ForgetMeNotRunning or ForgetMeNotProcessing[Room] then
+      return
+    end
+
+    ForgetMeNotProcessing[Room] = true
+
+    task.wait(2)
+
+    if not ForgetMeNotRunning or not Room.Parent then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    if not Room:FindFirstChild("ForgetMeNotVineDoors", true) then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    FireLookAts(Room)
+
+    local NextRoom = GetNextRoom(tonumber(Room.Name))
+    if not NextRoom then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    local Door = NextRoom:FindFirstChild("Door")
+    if not Door then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    if Door:GetAttribute("Opened") == true then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    if not Room:FindFirstChild(localPlayer2.Name, true) then
+      if not ForgetMeNotNotified[Room] then
+        ForgetMeNotNotified[Room] = true
+        library:Notify({ Title = "Archives", Description = "Please Enter The First ForgetMeNot Door", Time = 5 })
+      end
+
+      repeat
+        task.wait()
+      until Room:FindFirstChild(localPlayer2.Name, true)
+        or not ForgetMeNotRunning
+        or not Room.Parent
+
+      if not ForgetMeNotRunning or not Room.Parent then
+        ForgetMeNotProcessing[Room] = nil
+        return
+      end
+    end
+
+    if not ForgetMeNotRunning or Door:GetAttribute("Opened") == true then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    local Hidden = Door:WaitForChild("Hidden", 10)
+    if not Hidden or not ForgetMeNotRunning or Door:GetAttribute("Opened") == true then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    task.wait(3)
+
+    if not ForgetMeNotRunning or not NextRoom.Parent or Door:GetAttribute("Opened") == true then
+      ForgetMeNotProcessing[Room] = nil
+      return
+    end
+
+    while ForgetMeNotRunning and NextRoom.Parent and Door:GetAttribute("Opened") ~= true do
+      local Character = GetCharacter()
+      if Character then
+        if Hidden:IsA("BasePart") then
+          Character:PivotTo(Hidden.CFrame)
+        elseif Hidden:IsA("Model") then
+          Character:PivotTo(Hidden:GetPivot())
+        end
+      end
+
+      local clientOpen = Door:FindFirstChild("ClientOpen")
+      if clientOpen then
+        pcall(function() clientOpen:Fire() end)
+        pcall(function() clientOpen:FireServer() end)
+      end
+
+      task.wait()
+    end
+
+    if ForgetMeNotRunning and Door:GetAttribute("Opened") == true then
+      local Character = GetCharacter()
+      if Character then
+        Character:PivotTo(CFrame.new(0, -120, 0))
+        Character:PivotTo(CFrame.new(0, -120, 0))
+        Character:PivotTo(CFrame.new(0, -120, 0))
+        Character:PivotTo(CFrame.new(0, -120, 0))
+        library:Notify({ Title = "Archives", Description = "Spam Void In Debug If Stuck In ForgetMeNot", Time = 5 })
+      end
+      ForgetMeNotNotified[Room] = nil
+    end
+
+    ForgetMeNotProcessing[Room] = nil
+  end
+
+  local function CheckRooms()
+    local latestRoomVal = replicatedStorage:FindFirstChild("GameData") and replicatedStorage.GameData:FindFirstChild("LatestRoom")
+    local LatestRoomNumber = latestRoomVal and tonumber(latestRoomVal.Value) or tonumber(localPlayer2:GetAttribute("CurrentRoom")) or 0
+    local FirstRoomNumber = math.max(0, LatestRoomNumber - 4)
+    for RoomNumber = FirstRoomNumber, LatestRoomNumber do
+      if not ForgetMeNotRunning then
         return
       end
 
-      if humanoid and humanoid.FloorMaterial == Enum.Material.Glass then
-        if humanoid.HipHeight ~= 3 then
-          humanoid.HipHeight = 3
-        end
-      elseif humanoid and val85.DefaultHipHeight then
-        if humanoid.HipHeight ~= val85.DefaultHipHeight then
-          humanoid.HipHeight = val85.DefaultHipHeight
-        end
+      local Room = workspace.CurrentRooms:FindFirstChild(tostring(RoomNumber))
+      if Room and not ForgetMeNotProcessing[Room] then
+        task.spawn(Run, Room)
       end
+    end
+  end
+
+  local currentRooms = workspace:FindFirstChild("CurrentRooms")
+  if currentRooms then
+    ForgetMeNotConnection = currentRooms.ChildAdded:Connect(function(Room)
+      if not tonumber(Room.Name) then
+        return
+      end
+
+      task.spawn(function()
+        task.wait(2)
+        if ForgetMeNotRunning and Room.Parent then
+          task.spawn(Run, Room)
+        end
+      end)
     end)
-  else
-    if Connections.AntiElectricPuddle then
-      Connections.AntiElectricPuddle:Disconnect()
-      Connections.AntiElectricPuddle = nil
+    table.insert(Connections, ForgetMeNotConnection)
+  end
+
+  task.spawn(function()
+    while ForgetMeNotRunning do
+      CheckRooms()
+      task.wait(2)
+    end
+  end)
+end)
+
+local HonchoCorrectBoxConnection = nil
+local HonchoESPObjects = {}
+local HonchoProcessedRooms = {}
+
+toggles.HonchoCorrectBoxESP:OnChanged(function(Value)
+  if HonchoCorrectBoxConnection then
+    HonchoCorrectBoxConnection:Disconnect()
+    HonchoCorrectBoxConnection = nil
+  end
+
+  for _, Object in pairs(HonchoESPObjects) do
+    if Object and Object.Parent then
+      Functions.RemoveESP(Object)
+    end
+  end
+  table.clear(HonchoESPObjects)
+  table.clear(HonchoProcessedRooms)
+
+  if not Value then return end
+
+  local function ProcessHonchoRoom(Room)
+    if not tonumber(Room.Name) then return end
+    if HonchoProcessedRooms[Room] then return end
+    HonchoProcessedRooms[Room] = true
+
+    task.wait(3)
+
+    if not (toggles.HonchoCorrectBoxESP and toggles.HonchoCorrectBoxESP.Value) or not Room.Parent then
+      HonchoProcessedRooms[Room] = nil
+      return
     end
 
-    if humanoid and val85.DefaultHipHeight then
-      humanoid.HipHeight = val85.DefaultHipHeight
+    local HonchoRoom = Room:FindFirstChild("ArchivesHonchoRoom", true)
+    if not HonchoRoom then
+      HonchoProcessedRooms[Room] = nil
+      return
     end
+
+    local BoxIDs = {}
+    for _, Desc in ipairs(Room:GetDescendants()) do
+      if Desc.Name == "ArchivesPackageDeposit" then
+        local BoxID = Desc:GetAttribute("BoxID")
+        if BoxID ~= nil then
+          BoxIDs[BoxID] = true
+        end
+      end
+    end
+
+    if next(BoxIDs) == nil then
+      HonchoProcessedRooms[Room] = nil
+      return
+    end
+
+    local RoomNumber = tonumber(Room.Name)
+    for _, Child in ipairs(HonchoRoom:GetDescendants()) do
+      if Child.Name == "ArchivesStorageBox" then
+        local ToolBoxID = Child:GetAttribute("Tool_BoxID")
+        if ToolBoxID ~= nil and BoxIDs[ToolBoxID] then
+          if toggles.HonchoCorrectBoxESP.Value then
+            if not Child:GetAttribute("ParentRoom") then
+              Child:SetAttribute("ParentRoom", RoomNumber)
+            end
+
+            local Color = (options.ObjectiveESPColor and options.ObjectiveESPColor.Value) or Color3.fromRGB(0, 255, 0)
+            Functions.AddESP({
+              Object = Child,
+              Text = "Correct Box",
+              Color = Color
+            }, true)
+
+            table.insert(HonchoESPObjects, Child)
+
+            Child.Destroying:Once(function()
+              Functions.RemoveESP(Child)
+              local pos = table.find(HonchoESPObjects, Child)
+              if pos then
+                table.remove(HonchoESPObjects, pos)
+              end
+            end)
+          end
+        end
+      end
+    end
+  end
+
+  local currentRooms = workspace:FindFirstChild("CurrentRooms")
+  if currentRooms then
+    for _, Room in ipairs(currentRooms:GetChildren()) do
+      task.spawn(ProcessHonchoRoom, Room)
+    end
+
+    HonchoCorrectBoxConnection = currentRooms.ChildAdded:Connect(function(Room)
+      task.spawn(ProcessHonchoRoom, Room)
+    end)
+    table.insert(Connections, HonchoCorrectBoxConnection)
   end
 end)
 
-Groupboxes.ArchivesMain:AddToggle("AntiRansom", {
-  Text = "Anti Ransom", Default = false, Tooltip = "Prevents ransom from attacking you even when moving", Disabled = not (Executor.hookmetamethod and Executor.newcclosure and Executor.getnamecallmethod), DisabledTooltip = "Your executor doesn't support this feature :(", })
+local AntiRansom_Connection = nil
+toggles.AntiRansom:OnChanged(function(Value)
+  if AntiRansom_Connection then
+    AntiRansom_Connection:Disconnect()
+    AntiRansom_Connection = nil
+  end
 
-Groupboxes.ArchivesMain:AddToggle("AntiScribbles", {
-  Text = "No Scribbles Damage", Default = false, Tooltip = "Prevents scribbles from damaging you", Disabled = not (Executor.hookmetamethod and Executor.newcclosure and Executor.getnamecallmethod), DisabledTooltip = "Your executor doesn't support this feature :(", })
+  if not Value then return end
+
+  for _, child in ipairs(workspace:GetChildren()) do
+    if child.Name == "Ransom" then
+      pcall(function() child:Destroy() end)
+    end
+  end
+
+  AntiRansom_Connection = workspace.ChildAdded:Connect(function(Child)
+    if Child.Name == "Ransom" and toggles.AntiRansom and toggles.AntiRansom.Value then
+      pcall(function() Child:Destroy() end)
+    end
+  end)
+  table.insert(Connections, AntiRansom_Connection)
+end)
+
+local AntiScribbles_Connection = nil
+toggles.AntiScribbles:OnChanged(function(Value)
+  if AntiScribbles_Connection then
+    AntiScribbles_Connection:Disconnect()
+    AntiScribbles_Connection = nil
+  end
+
+  if not Value then return end
+
+  for _, child in ipairs(workspace:GetChildren()) do
+    if child.Name == "Scribbles" then
+      local warning = child:FindFirstChild("IfYoureExploitingDeleteThis")
+      if warning then
+        pcall(function() warning:Destroy() end)
+      end
+    end
+  end
+
+  AntiScribbles_Connection = workspace.ChildAdded:Connect(function(Child)
+    if Child.Name == "Scribbles" and toggles.AntiScribbles and toggles.AntiScribbles.Value then
+      local warning = Child:FindFirstChild("IfYoureExploitingDeleteThis")
+      if warning then
+        pcall(function() warning:Destroy() end)
+      end
+    end
+  end)
+  table.insert(Connections, AntiScribbles_Connection)
+end)
 
 Groupboxes.ArchivesBypass = element3.Archives:AddRightGroupbox("Anticheat Bypass")
 
@@ -9249,6 +10080,197 @@ toggles.StairwellChairFly:OnChanged(function()
   else
     helper46()
   end
+end)
+
+Groupboxes.StairwellExperimental = element3.Stairwell:AddRightGroupbox("Experimental")
+
+local function BringDroppedItems()
+  local workspaceDropsFolder = workspace:FindFirstChild("Drops")
+  local character = localPlayer2.Character
+  local playerHumanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
+  if playerHumanoidRootPart and workspaceDropsFolder then
+    for _, itemToBring in ipairs(workspaceDropsFolder:GetChildren()) do
+      if itemToBring:IsA("Model") then
+        pcall(function() itemToBring:PivotTo(playerHumanoidRootPart.CFrame) end)
+      elseif itemToBring:IsA("BasePart") then
+        pcall(function() itemToBring.CFrame = playerHumanoidRootPart.CFrame end)
+      end
+    end
+  end
+end
+
+Groupboxes.StairwellExperimental:AddButton({
+  Text = "Bring Dropped Items",
+  Func = function() BringDroppedItems() end,
+  DoubleClick = false,
+  Tooltip = "Brings all dropped items to your character.",
+})
+
+Groupboxes.StairwellExperimental:AddToggle("EnableDroppedItemsInterval", {
+  Text = "Enable Interval",
+  Default = false,
+  Tooltip = "Automatically brings dropped items at the selected interval.",
+})
+
+Groupboxes.StairwellExperimental:AddSlider("DroppedItemsInterval", {
+  Text = "Interval",
+  Default = 1,
+  Min = 0,
+  Max = 60,
+  Rounding = 1,
+  Compact = false,
+  Tooltip = "How often dropped items are brought (seconds).",
+})
+
+local droppedItemsIntervalRunning = false
+toggles.EnableDroppedItemsInterval:OnChanged(function(enabled)
+  if enabled then
+    if droppedItemsIntervalRunning then return end
+    droppedItemsIntervalRunning = true
+    task.spawn(function()
+      while toggles.EnableDroppedItemsInterval and toggles.EnableDroppedItemsInterval.Value do
+        BringDroppedItems()
+        local interval = (options.DroppedItemsInterval and options.DroppedItemsInterval.Value) or 1
+        if interval <= 0 then
+          task.wait()
+        else
+          task.wait(interval)
+        end
+      end
+      droppedItemsIntervalRunning = false
+    end)
+  end
+end)
+
+Groupboxes.StairwellExperimental:AddDivider()
+
+Groupboxes.StairwellExperimental:AddToggle("AntiNoise", {
+  Text = "Anti Noise",
+  Default = false,
+  Tooltip = "Prevents the game from making noise when moving.",
+})
+
+Groupboxes.StairwellExperimental:AddToggle("BypassNoise", {
+  Text = "Noise Tv Breaker",
+  Default = false,
+  Tooltip = "Breaks the tv of noise while holding it.",
+})
+
+local antiNoiseConn = nil
+toggles.AntiNoise:OnChanged(function(value)
+  if antiNoiseConn then
+    antiNoiseConn:Disconnect()
+    antiNoiseConn = nil
+  end
+
+  if not value then return end
+
+  antiNoiseConn = runService.PreSimulation:Connect(function(dt)
+    if not (toggles.AntiNoise and toggles.AntiNoise.Value) then return end
+    if not localPlayer2:GetAttribute("Alive") then return end
+
+    local character = localPlayer2.Character
+    if not character then return end
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local camera = workspace.CurrentCamera
+
+    if not rootPart or not humanoid or not camera then return end
+    if humanoid.Health <= 0 then return end
+    if rootPart.Anchored then return end
+
+    local state = humanoid:GetState()
+    if state == Enum.HumanoidStateType.Dead
+      or state == Enum.HumanoidStateType.Ragdoll
+      or state == Enum.HumanoidStateType.Climbing
+      or state == Enum.HumanoidStateType.Swimming
+    then
+      return
+    end
+
+    humanoid.AutoRotate = false
+    humanoid:Move(Vector3.zero, false)
+
+    local controls = nil
+    pcall(function()
+      controls = require(localPlayer2.PlayerScripts.PlayerModule):GetControls()
+    end)
+    local inputVector = controls and controls:GetMoveVector() or Vector3.zero
+    local inputMagnitude = inputVector.Magnitude
+
+    if inputMagnitude <= 0 then
+      rootPart.AssemblyLinearVelocity = Vector3.zero
+      return
+    end
+
+    local cameraCFrame = camera.CFrame
+    local cameraForward = Vector3.new(cameraCFrame.LookVector.X, 0, cameraCFrame.LookVector.Z)
+    local cameraRight = Vector3.new(cameraCFrame.RightVector.X, 0, cameraCFrame.RightVector.Z)
+
+    if cameraForward.Magnitude < 0.001 or cameraRight.Magnitude < 0.001 then return end
+
+    cameraForward = cameraForward.Unit
+    cameraRight = cameraRight.Unit
+
+    local worldDirection = (cameraRight * inputVector.X) + (cameraForward * -inputVector.Z)
+    if worldDirection.Magnitude <= 0 then return end
+    worldDirection = worldDirection.Unit
+
+    local finalSpeed = humanoid.WalkSpeed * math.clamp(inputMagnitude, 0, 1)
+    local clampedDt = math.clamp(dt, 0, 1/30)
+
+    rootPart.AssemblyLinearVelocity = Vector3.zero
+    rootPart.CFrame = rootPart.CFrame + (worldDirection * finalSpeed * clampedDt)
+    rootPart.CFrame = CFrame.new(rootPart.Position, rootPart.Position + worldDirection)
+  end)
+  table.insert(Connections, antiNoiseConn)
+end)
+
+local bypassNoiseMiscChildAddedConnection = nil
+toggles.BypassNoise:OnChanged(function(value)
+  if bypassNoiseMiscChildAddedConnection then
+    bypassNoiseMiscChildAddedConnection:Disconnect()
+    bypassNoiseMiscChildAddedConnection = nil
+  end
+
+  if not value then return end
+
+  local bypassNoiseLocalPlayerUserId = localPlayer2 and localPlayer2.UserId
+  local function checkBypassNoiseTvStand(targetTvStand)
+    if not targetTvStand:IsA("Model") then return end
+    if targetTvStand.Name ~= "TV_Stand" then return end
+    if targetTvStand:GetAttribute("LastPusherId") ~= bypassNoiseLocalPlayerUserId then return end
+    local tvStandCurrentCFrame = targetTvStand:GetPivot()
+    if tvStandCurrentCFrame.Position.Y > -119 then
+      targetTvStand:PivotTo(CFrame.new(tvStandCurrentCFrame.Position.X, -120, tvStandCurrentCFrame.Position.Z))
+      library:Notify({ Title = "Stairwell", Description = "Unequip the tv.", Time = 5 })
+    end
+  end
+
+  local function checkBypassNoiseAllTvStands()
+    local bypassNoiseMiscFolder = workspace:FindFirstChild("Misc")
+    if not bypassNoiseMiscFolder then return end
+    for _, bypassNoiseMiscChild in ipairs(bypassNoiseMiscFolder:GetChildren()) do
+      checkBypassNoiseTvStand(bypassNoiseMiscChild)
+    end
+  end
+
+  local bypassNoiseMiscFolder = workspace:FindFirstChild("Misc")
+  if bypassNoiseMiscFolder then
+    bypassNoiseMiscChildAddedConnection = bypassNoiseMiscFolder.ChildAdded:Connect(function(bypassNoiseNewChild)
+      task.wait(0.1)
+      checkBypassNoiseTvStand(bypassNoiseNewChild)
+    end)
+    table.insert(Connections, bypassNoiseMiscChildAddedConnection)
+  end
+
+  task.spawn(function()
+    while toggles.BypassNoise and toggles.BypassNoise.Value do
+      checkBypassNoiseAllTvStands()
+      task.wait(1)
+    end
+  end)
 end)
 
 Groupboxes.SubfloorsRooms = element3.Rooms:AddLeftGroupbox("Rooms")
@@ -13697,6 +14719,10 @@ PassDoorStraight = function(door, root, hum)
   local farmSpeed = (options and options.AutoFarmSpeed and options.AutoFarmSpeed.Value)
     or (options and options.AutoFarmWalkSpeed and options.AutoFarmWalkSpeed.Value) or 35
 
+  if toggles and toggles.EnableWalkspeed and not toggles.EnableWalkspeed.Value then
+    toggles.EnableWalkspeed:SetValue(true)
+  end
+
   -- Поддерживаем максимальную скорость ползунка
   if options and options.Walkspeed and options.Walkspeed.Value ~= farmSpeed then
     options.Walkspeed:SetValue(farmSpeed)
@@ -15974,12 +17000,21 @@ local function safeCall11()
 
     if object12 then
       for index85, value133 in ipairs({
-        "Screech", "GlitchScreech", "A90", "Dread", "SurgeVignette", }) do
+        "Screech", "GlitchScreech", "A90", "Dread", "SurgeVignette", "Shade", }) do
         local findFirstChild18 = object12:FindFirstChild(value133 .. "_Disabled")
 
         if findFirstChild18 then
           findFirstChild18.Name = value133
         end
+      end
+    end
+
+    local clientModules = replicatedStorage:FindFirstChild("ModulesClient") or replicatedStorage:FindFirstChild("ClientModules")
+    local entityModules = clientModules and clientModules:FindFirstChild("EntityModules")
+    if entityModules then
+      local shade = entityModules:FindFirstChild("Shade_Disabled")
+      if shade then
+        shade.Name = "Shade"
       end
     end
   end)
