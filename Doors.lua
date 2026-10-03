@@ -1608,15 +1608,20 @@ else
   Greeting = "Good evening"
 end
 
-RootEnv = nil
-pcall(function() RootEnv = getfenv(0) end)
-
-if type(RootEnv) ~= "table" then
-  RootEnv = _G
-end
+local rawGenv = (type(getgenv) == "function" and getgenv()) or {}
+RootEnv = setmetatable({}, {
+  __index = function(_, k)
+    if rawGenv[k] ~= nil then return rawGenv[k] end
+    local ok, res = pcall(function() return getfenv(0)[k] end)
+    if ok and res ~= nil then return res end
+    local ok2, res2 = pcall(function() return getfenv()[k] end)
+    if ok2 and res2 ~= nil then return res2 end
+    return _G[k]
+  end
+})
 
 Executor = {
-  isnetworkowner = RootEnv.isnetworkowner, firetouchinterest = RootEnv.firetouchinterest, replicatesignal = RootEnv.replicatesignal, fireproximityprompt = RootEnv.fireproximityprompt, hookmetamethod = RootEnv.hookmetamethod, newcclosure = RootEnv.newcclosure, getnamecallmethod = RootEnv.getnamecallmethod, require = RootEnv.require, }
+  isnetworkowner = RootEnv.isnetworkowner, firetouchinterest = RootEnv.firetouchinterest, replicatesignal = RootEnv.replicatesignal, fireproximityprompt = RootEnv.fireproximityprompt, hookmetamethod = RootEnv.hookmetamethod, newcclosure = RootEnv.newcclosure, getnamecallmethod = RootEnv.getnamecallmethod, require = RootEnv.require, hookfunction = RootEnv.hookfunction or RootEnv.replaceclosure, getconnections = RootEnv.getconnections, }
 
 Groupboxes.HomeFunctions = element3.Home:AddLeftGroupbox("Functions & Features")
 
@@ -4628,12 +4633,86 @@ end
 toggles.RemoveMaster:OnChanged(syncRemove)
 options.RemoveList:OnChanged(syncRemove)
 
+local function disableScreechModule(moduleScript)
+  if not moduleScript or not moduleScript:IsA("ModuleScript") then
+    return
+  end
+  pcall(function()
+    local mod = require(moduleScript)
+    local target = nil
+    if type(mod) == "function" then
+      target = mod
+    elseif type(mod) == "table" then
+      for k, v in pairs(mod) do
+        if type(v) == "function" and (Executor.hookfunction or RootEnv.hookfunction or RootEnv.replaceclosure) then
+          local hooker = Executor.hookfunction or RootEnv.hookfunction or RootEnv.replaceclosure
+          pcall(function()
+            hooker(v, function(...)
+              if toggles.RemoveScreech and toggles.RemoveScreech.Value then
+                return
+              end
+              return v(...)
+            end)
+          end)
+        end
+      end
+    end
+
+    if target and (Executor.hookfunction or RootEnv.hookfunction or RootEnv.replaceclosure) then
+      local hooker = Executor.hookfunction or RootEnv.hookfunction or RootEnv.replaceclosure
+      pcall(function()
+        hooker(target, function(...)
+          if toggles.RemoveScreech and toggles.RemoveScreech.Value then
+            return
+          end
+          return target(...)
+        end)
+      end)
+    end
+  end)
+end
+
+local function setScreechConnections(enabled)
+  pcall(function()
+    local realRemote = (FakeEvents and FakeEvents.Screech_Real) or (remotesFolder2 and remotesFolder2:FindFirstChild("Screech"))
+    local getconns = Executor.getconnections or RootEnv.getconnections
+    if realRemote and getconns then
+      for _, conn in ipairs(getconns(realRemote.OnClientEvent)) do
+        pcall(function()
+          if enabled then
+            conn:Enable()
+          else
+            conn:Disable()
+          end
+        end)
+      end
+    end
+  end)
+end
+
 toggles.RemoveScreech:OnChanged(function(Value)
+  setScreechConnections(not Value)
+
   local object2 = helper19()
   if object2 then
     local screech = object2:FindFirstChild("Screech") or object2:FindFirstChild("Screech_Disabled")
     if screech then
       screech.Name = Value and "Screech_Disabled" or "Screech"
+      if Value then
+        disableScreechModule(screech)
+      end
+    end
+  end
+
+  local clientModules = replicatedStorage:FindFirstChild("ModulesClient") or replicatedStorage:FindFirstChild("ClientModules")
+  local entityModules = clientModules and clientModules:FindFirstChild("EntityModules")
+  if entityModules then
+    local screechM = entityModules:FindFirstChild("Screech") or entityModules:FindFirstChild("Screech_Disabled")
+    if screechM then
+      screechM.Name = Value and "Screech_Disabled" or "Screech"
+      if Value then
+        disableScreechModule(screechM)
+      end
     end
   end
 
@@ -4642,17 +4721,74 @@ toggles.RemoveScreech:OnChanged(function(Value)
     local glitchScreech = floorRep:FindFirstChild("GlitchScreech", true) or floorRep:FindFirstChild("GlitchScreech_Disabled", true)
     if glitchScreech then
       glitchScreech.Name = Value and "GlitchScreech_Disabled" or "GlitchScreech"
+      if Value then
+        disableScreechModule(glitchScreech)
+      end
+    end
+  end
+
+  if remotesFolder2 and FakeEvents then
+    if Value then
+      if FakeEvents.Screech_Real and FakeEvents.Screech_Real.Parent then
+        FakeEvents.Screech.Parent = remotesFolder2
+        FakeEvents.Screech_Real.Parent = nil
+      end
+    elseif not (toggles.NoScreechDamage and toggles.NoScreechDamage.Value) then
+      if FakeEvents.Screech_Real then
+        FakeEvents.Screech_Real.Parent = remotesFolder2
+        FakeEvents.Screech.Parent = nil
+      end
     end
   end
 
   if Value then
     task.spawn(function()
+      local handledScreech = {}
       while toggles.RemoveScreech and toggles.RemoveScreech.Value do
         local camera = workspace.CurrentCamera or workspace:FindFirstChild("Camera")
         if camera then
           local screech = camera:FindFirstChild("Screech")
-          if screech then
-            pcall(function() screech:Destroy() end)
+          if screech and not handledScreech[screech] then
+            handledScreech[screech] = true
+
+            pcall(function() runService:UnbindFromRenderStep("Screech") end)
+            pcall(function() runService:UnbindFromRenderStep("screech") end)
+            pcall(function() runService:UnbindFromRenderStep("ScreechFollow") end)
+            pcall(function() runService:UnbindFromRenderStep("ScreechAttack") end)
+            pcall(function() runService:UnbindFromRenderStep("ScreechCamera") end)
+            pcall(function() runService:UnbindFromRenderStep("ScreechLoop") end)
+
+            pcall(function() screech:PivotTo(CFrame.new(0, -50000, 0)) end)
+
+            for _, v in ipairs(screech:GetDescendants()) do
+              pcall(function()
+                if v:IsA("BasePart") then
+                  v.Transparency = 1
+                  v.CanCollide = false
+                elseif v:IsA("Sound") then
+                  v.Volume = 0
+                  v:Stop()
+                elseif v:IsA("ParticleEmitter") or v:IsA("Light") or v:IsA("BillboardGui") then
+                  v.Enabled = false
+                end
+              end)
+            end
+
+            pcall(function()
+              local rem = (remotesFolder2 and remotesFolder2:FindFirstChild("Screech")) or (FakeEvents and FakeEvents.Screech_Real)
+              if rem then
+                rem:FireServer(true)
+              end
+            end)
+
+            task.delay(0.5, function()
+              pcall(function()
+                if screech and screech.Parent then
+                  screech:Destroy()
+                end
+              end)
+              handledScreech[screech] = nil
+            end)
           end
         end
         task.wait()
@@ -5259,6 +5395,40 @@ local function helper35()
     local val141 = { ... }
     local executor = Executor.getnamecallmethod()
 
+    if executor == "BindToRenderStep" then
+      local bindName = tostring(val141[1] or "")
+      local isScreechBinding = string.find(string.lower(bindName), "screech") ~= nil
+      if not isScreechBinding and type(val141[3]) == "function" then
+        local src = ""
+        pcall(function() src = debug.info(val141[3], "s") or "" end)
+        if string.find(string.lower(src), "screech") then
+          isScreechBinding = true
+        end
+      end
+
+      if isScreechBinding then
+        if toggles.RemoveScreech and toggles.RemoveScreech.Value then
+          return
+        end
+        local origCallback = val141[3]
+        if type(origCallback) == "function" then
+          val141[3] = function(...)
+            local ok, res = pcall(origCallback, ...)
+            if ok then
+              return res
+            end
+          end
+        end
+      end
+    end
+
+    if p80.Name == "Screech" and executor == "FireServer" then
+      if (toggles.RemoveScreech and toggles.RemoveScreech.Value)
+        or (toggles.NoScreechDamage and toggles.NoScreechDamage.Value) then
+        return MainHook(p80, true)
+      end
+    end
+
     if p80.Name == "MotorReplication" and executor == "FireServer" then
       if toggles.BypassEyes.Value and val85.IsEyes
         or toggles.BypassLookman.Value and val85.IsLookman then
@@ -5369,6 +5539,35 @@ local function helper35()
 
     return val142
   end))
+
+  pcall(function()
+    local origBind = runService.BindToRenderStep
+    runService.BindToRenderStep = function(self, name, priority, callback)
+      local bindName = tostring(name or "")
+      local isScreech = string.find(string.lower(bindName), "screech") ~= nil
+      if not isScreech and type(callback) == "function" then
+        local src = ""
+        pcall(function() src = debug.info(callback, "s") or "" end)
+        if string.find(string.lower(src), "screech") then
+          isScreech = true
+        end
+      end
+
+      if isScreech then
+        if toggles.RemoveScreech and toggles.RemoveScreech.Value then
+          return
+        end
+        local origCb = callback
+        if type(origCb) == "function" then
+          callback = function(...)
+            local ok, res = pcall(origCb, ...)
+            if ok then return res end
+          end
+        end
+      end
+      return origBind(self, name, priority, callback)
+    end
+  end)
 end
 
 helper35()
@@ -17016,12 +17215,24 @@ local function safeCall11()
       if shade then
         shade.Name = "Shade"
       end
+      local screechM = entityModules:FindFirstChild("Screech_Disabled")
+      if screechM then
+        screechM.Name = "Screech"
+      end
     end
   end)
 
   if FakeEvents then
     if FakeEvents.Screech_Real then
       FakeEvents.Screech_Real.Parent = remotesFolder2
+      pcall(function()
+        local getconns = Executor.getconnections or RootEnv.getconnections
+        if getconns then
+          for _, conn in ipairs(getconns(FakeEvents.Screech_Real.OnClientEvent)) do
+            pcall(function() conn:Enable() end)
+          end
+        end
+      end)
     end
 
     if FakeEvents.Shade_Real then
