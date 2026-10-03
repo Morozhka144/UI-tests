@@ -1,11 +1,9 @@
 --[[
     Demon Soul Simulator - Lumina UI Edition
-    Fully ported to Lumina UI Framework (Clean Version)
+    Fully ported to Lumina UI Framework (Fixed Version)
 ]]
 
 local function SafeLoad()
-    -- Убираем загрузку из локальных файлов, чтобы избежать подгрузки битых библиотек из кэша эксплойтера.
-    -- Грузим оригинальную Lumina напрямую по ссылке.
     local url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
     local ok, content = pcall(function() return game:HttpGet(url) end)
     if ok and content and #content > 0 then
@@ -15,7 +13,6 @@ local function SafeLoad()
             if success and lib then return lib end
         end
     end
-    
     warn("[Moro Soul] Не удалось загрузить библиотеку Lumina!")
     return nil
 end
@@ -88,7 +85,6 @@ if Library then
         table.sort(roleNames)
     end)
     
-    -- Fallback hero table if RoleConfig is not accessible
     if #heroNames == 0 then
         heroData = {
             ["Akaza"] = "漪窝座", ["Daki"] = "堕姬", ["Douma"] = "童魔", ["Enmu"] = "魇梦",
@@ -126,12 +122,9 @@ if Library then
         table.sort(roleNames)
     end
 
-    -- Window Creation (Lumina API)
+    -- Window Creation (Lumina API) - ИСПРАВЛЕНО: убраны неподдерживаемые параметры
     local Win = Library:CreateWindow({
-        Title = "Moro Soul",
-        ToggleKey = Enum.KeyCode.RightShift,
-        LoaderSound = true,
-        NotifySound = true
+        ToggleKey = Enum.KeyCode.RightShift
     })
 
     -- Universal Notification Helper
@@ -145,11 +138,8 @@ if Library then
             })
         end
     end
-    Library.Notify = function(self, title, content, dur, nType)
-        Notify(title, content, dur, nType)
-    end
 
-    -- Tabs Creation (Lumina API)
+    -- Tabs Creation (Lumina API) - ИСПРАВЛЕНО: SettingsTab создается как обычный таб
     local MainTab     = Win:CreateTab({ Name = "Attacks", Icon = "swords" })
     local TrainTab    = Win:CreateTab({ Name = "Train", Icon = "train" })
     local FishTab     = Win:CreateTab({ Name = "Fishing & Food", Icon = "fish" })
@@ -157,15 +147,9 @@ if Library then
     local DispatchTab = Win:CreateTab({ Name = "Dispatch", Icon = "send" })
     local RewardsTab  = Win:CreateTab({ Name = "Rewards", Icon = "gift" })
     local ExploitsTab = Win:CreateTab({ Name = "Exploits", Icon = "shield" })
-    
-    local SettingsTab
-    if Win.AddSettingsTab then
-        SettingsTab = Win:AddSettingsTab()
-    else
-        SettingsTab = Win:CreateTab({ Name = "Settings", Icon = "settings" })
-    end
+    local SettingsTab = Win:CreateTab({ Name = "Settings", Icon = "settings" })
 
-    -- Compatibility aliases for Section methods
+    -- Compatibility wrapper for Section methods
     local function wrapSection(sec)
         if sec then
             if not sec.AddTextBox and sec.AddTextbox then
@@ -212,7 +196,7 @@ if Library then
         end
     end)
 
-    -- Hook DebugOptions to enable "无限火力" (Infinite Firepower mode) on client
+    -- Hook DebugOptions
     pcall(function()
         local DebugOptions = require(rs:WaitForChild("Packages"):WaitForChild("DebugOptions"))
         local oldIsEnable = DebugOptions.IsEnable
@@ -356,9 +340,8 @@ if Library then
     end)
 
     -- === 7. ANTI AFK ===
-    local xAFKx = nil
     pcall(function()
-        xAFKx = player.Idled:Connect(function()
+        player.Idled:Connect(function()
             local vu = game:GetService("VirtualUser")
             vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
             task.wait(1)
@@ -669,7 +652,7 @@ if Library then
         end
     end)
 
-    -- Train Mode V2 (Attack + Selected Skill) - FIXED CLEAN LOGIC
+    -- Train Mode V2 (Attack + Selected Skill) - FIXED
     task.spawn(function()
         while true do
             task.wait(0.15)
@@ -1052,7 +1035,7 @@ if Library then
     VisualSec:AddButton({ Name = "Full Bright / Night Vision", Primary = false, Callback = function() lighting.Ambient = Color3.fromRGB(255, 255, 255); lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255); lighting.Brightness = 2; lighting.ClockTime = 14; lighting.FogEnd = 1e5; lighting.GlobalShadows = false; Notify("Moro Soul", "Full Bright Activated!", 2, "Success") end })
 
     -- =====================================================================
-    --                           SETTINGS TAB (Custom Extras)
+    --                           SETTINGS TAB
     -- =====================================================================
     SettingsTab:Column("right")
     local GameOptSec = wrapSection(SettingsTab:CreateSection({ Name = "Game Optimizations", Collapsible = true }))
