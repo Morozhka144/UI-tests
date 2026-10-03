@@ -1,67 +1,240 @@
+--[[
+    Demon Soul Simulator - Lumina UI Edition
+    Fully ported to MoroLumina UI Framework v2.0 (Emerald Edition)
+--]]
+
 local function SafeLoad()
     local path = "MoroLumina.lua"
-    if not isfile(path) then 
-        print("Библиотека не найдена!")
-        return nil 
+    if isfile and isfile(path) then 
+        local ok, res = pcall(function() return loadstring(readfile(path))() end)
+        if ok and res then return res end
     end
-    return loadstring(readfile(path))()
+    
+    local path2 = "Lumina.lua"
+    if isfile and isfile(path2) then 
+        local ok, res = pcall(function() return loadstring(readfile(path2))() end)
+        if ok and res then return res end
+    end
+    
+    local url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
+    local ok, content = pcall(function() return game:HttpGet(url) end)
+    if ok and content and #content > 0 then
+        local func, err = loadstring(content)
+        if func then
+            local success, lib = pcall(func)
+            if success and lib then
+                if writefile then pcall(function() writefile(path, content) end) end
+                return lib
+            end
+        end
+    end
+    
+    warn("[Moro Soul] Не удалось загрузить библиотеку Lumina!")
+    return nil
 end
 
 local Library = SafeLoad()
 
 if Library then
     local rs = game:GetService("ReplicatedStorage")
-    local player = game:GetService("Players").LocalPlayer
+    local players = game:GetService("Players")
+    local player = players.LocalPlayer
     local runService = game:GetService("RunService")
     local lighting = game:GetService("Lighting")
-    local remoteFolder = rs:WaitForChild("RemoteEvents")
+    local tweenService = game:GetService("TweenService")
+    local vim = game:GetService("VirtualInputManager")
+    local teleportService = game:GetService("TeleportService")
+    local guiService = game:GetService("GuiService")
+    local uis = game:GetService("UserInputService")
     
+    local remoteFolder = rs:WaitForChild("RemoteEvents", 10) or rs:FindFirstChild("RemoteEvents")
     local attackRemote = remoteFolder:WaitForChild("GeneralAttack")
     local skillRemote = remoteFolder:WaitForChild("SkillAttack")
+    
+    local EventBus = nil
+    pcall(function()
+        EventBus = require(rs:WaitForChild("Packages"):WaitForChild("EventBus"))
+    end)
+    
+    local AttackHelper = nil
+    pcall(function()
+        AttackHelper = require(rs:WaitForChild("AttackHelpers"):WaitForChild("AttackHelper"))
+    end)
 
-    -- Settings
+    -- Settings & State
     local states = {attack = false, skill1 = false, skill2 = false, skill3 = false}
     local speeds = {attack = 20} 
     local killAuraActive = false
     local priorityHighHP = false 
     local animCancel = false
+    local noSkillCd = false
+    local autoCastSkills = false
+    local autoRoulette = false
+    local autoMissions = false
     local monsterNearby = false
     local isSpeedHack = false
-    local minHealthLimit = 1000000 
-    local flySpeedToTarget = 300 
+    local minHealthLimit = 0
     local tpHeight = 2
     local walkSpeedValue = 50
     local speedConn = nil
     local currentTarget = nil
+    
+    -- Dynamic Hero Data from RoleConfig
+    local heroData = {}
+    local heroNames = {}
+    local dispatchRoles = {}
+    local roleNames = {}
+    
+    pcall(function()
+        local rc = require(rs:WaitForChild("Configs"):WaitForChild("RoleConfig"))
+        for id, r in pairs(rc) do
+            if r.RoleName and r.RoleIndex then
+                heroData[r.RoleName] = r.RoleIndex
+                table.insert(heroNames, r.RoleName)
+            end
+            if r.RoleName and r.RoleId then
+                dispatchRoles[r.RoleName] = r.RoleId
+                table.insert(roleNames, r.RoleName)
+            end
+        end
+        table.sort(heroNames)
+        table.sort(roleNames)
+    end)
+    
+    -- Fallback hero table if RoleConfig is not accessible
+    if #heroNames == 0 then
+        heroData = {
+            ["Akaza"] = "漪窝座",
+            ["Daki"] = "堕姬",
+            ["Douma"] = "童魔",
+            ["Enmu"] = "魇梦",
+            ["Genya Shinazugawa"] = "不死川玄弥",
+            ["Giyu Tomioka"] = "富冈义勇",
+            ["Gyomei Himejima"] = "悲鸣屿行冥",
+            ["Gyutaro"] = "妓夫太郎",
+            ["Himejima Kyoumei"] = "悲鸣屿行冥",
+            ["Hinatsuru"] = "雏鹤",
+            ["Iguro Obanai"] = "伊黑小芭内",
+            ["Inosuke Hashibira"] = "伊之助",
+            ["Inosuke (Entertainment District)"] = "伊之助_游郭篇",
+            ["Kaigaku"] = "稻玉狯岳",
+            ["Kanao Tsuyuri"] = "栗花落香奈乎",
+            ["Kyojuro Rengoku"] = "炼狱杏寿郎",
+            ["Mitsuri Kanroji"] = "甘露寺蜜璃",
+            ["Muichiro Tokito"] = "时透无一郎",
+            ["Murata"] = "村田",
+            ["Nezuko Kamado"] = "弥豆子",
+            ["Nezuko (Berserk)"] = "弥豆子_鬼化",
+            ["Rui"] = "累",
+            ["Sakonji Urokodaki"] = "左近次",
+            ["Sanemi Shinazugawa"] = "不死川实弥",
+            ["Shinobu Kocho"] = "蝴蝶忍",
+            ["Susamaru"] = "朱纱丸",
+            ["Tanjiro (Entertainment District)"] = "炭治郎_游郭篇",
+            ["Tanjiro (Hinokami)"] = "炭治郎_火之神神乐",
+            ["Tanjiro (Swordsmith Village)"] = "炭治郎_锻刀村篇",
+            ["Tanjiro (Water)"] = "炭治郎_水",
+            ["Tengen Uzui"] = "宇髓天元",
+            ["Yahaba"] = "矢琵羽",
+            ["Yushiro"] = "愈史郎",
+            ["Yushiro & Tamayo"] = "愈史郎",
+            ["Zenitsu Agatsuma"] = "我妻善逸",
+            ["Zenitsu (Entertainment District)"] = "我妻善逸_游郭篇",
+            ["Zohakuten"] = "憎珀天"
+        }
+        for name, _ in pairs(heroData) do table.insert(heroNames, name) end
+        table.sort(heroNames)
+    end
+    
+    if #roleNames == 0 then
+        local defaultDispatch = {
+            ["Nezuko"] = 1, ["Inosuke"] = 2, ["Tanjirou[Water]"] = 3, ["Rui"] = 4,
+            ["Zenitsu"] = 5, ["Tanjirou[HinokamiKagura]"] = 6, ["Shinobu"] = 7, ["Giyu"] = 8,
+            ["Rengoku"] = 9, ["Akaza"] = 10, ["Susamaru"] = 11, ["Yahaba"] = 12,
+            ["Yushirou"] = 13, ["Enmu"] = 14, ["Urokodaki"] = 15, ["Tsuyuri Kanawo"] = 16,
+            ["Kanroji Mitsuri"] = 17, ["Kaigaku"] = 18, ["Daki"] = 19, ["Gyuutarou"] = 20,
+            ["Uzui Tengen"] = 21, ["Iguro Obanai"] = 22, ["Tokitou Muichirou"] = 23, ["Shinazugawa Sanemi"] = 24,
+            ["Himejima Kyoumei"] = 25, ["Douma"] = 26, ["Tanjiro[Yoshiwara]"] = 27, ["Zenitsu[Yoshiwara]"] = 28,
+            ["Inosuke[Yoshiwara]"] = 29, ["Nezuko[Demonic]"] = 30, ["Murata"] = 31, ["Shinazugawa Genya"] = 32,
+            ["Hinatsuru"] = 33, ["Zohakuten"] = 34, ["Tanjirou[Swordsmith]"] = 35
+        }
+        for name, id in pairs(defaultDispatch) do
+            dispatchRoles[name] = id
+            table.insert(roleNames, name)
+        end
+        table.sort(roleNames)
+    end
 
-    local Win = Library:CreateWindow("Moro Soul", "67 GOD")
-    local MainTab = Win:CreateTab("Attacks")
-    local TrainTab = Win:CreateTab("Train")
-    local ExploitsTab = Win:CreateTab("Exploits")
-    local FishTab = Win:CreateTab("Fishing&Food" )
-    local UpgradeTab = Win:CreateTab("Upgrade")
-    local DispatchTab = Win:CreateTab("Dispatch")
-    local SettingsTab = Win:CreateTab("Settings")
+    -- Window Creation (Lumina API)
+    local Win = Library:CreateWindow({
+        Title = "Moro Soul",
+        ToggleKey = Enum.KeyCode.RightShift,
+        LoaderSound = true,
+        NotifySound = true
+    })
 
-    -- === 1. A SINGLE OPTIMIZED TARGET SEARCH ===
+    -- Universal Notification Helper
+    local function Notify(title, content, dur, nType)
+        if Win and Win.Notify then
+            Win:Notify({
+                Title = title or "Moro Soul",
+                Content = content or "",
+                Duration = dur or 2.5,
+                Type = nType or "Info"
+            })
+        end
+    end
+    Library.Notify = function(self, title, content, dur, nType)
+        Notify(title, content, dur, nType)
+    end
+
+    -- Tabs Creation (Lumina API)
+    local MainTab     = Win:CreateTab({ Name = "Attacks", Icon = "swords" })
+    local TrainTab    = Win:CreateTab({ Name = "Train", Icon = "train" })
+    local FishTab     = Win:CreateTab({ Name = "Fishing & Food", Icon = "fish" })
+    local UpgradeTab  = Win:CreateTab({ Name = "Upgrade", Icon = "sparkles" })
+    local DispatchTab = Win:CreateTab({ Name = "Dispatch", Icon = "send" })
+    local RewardsTab  = Win:CreateTab({ Name = "Rewards", Icon = "gift" })
+    local ExploitsTab = Win:CreateTab({ Name = "Exploits", Icon = "shield" })
+    local SettingsTab = Win:AddSettingsTab()
+
+    -- Compatibility aliases for Section methods
+    local function wrapSection(sec)
+        if sec and not sec.AddTextBox then
+            sec.AddTextBox = sec.AddTextbox
+        end
+        return sec
+    end
+
+    -- === 1. ULTRA OPTIMIZED TARGET SEARCH (Direct workspace.Monsters check) ===
     task.spawn(function()
-        while task.wait(0.3) do
-            if killAuraActive or states.skill1 or states.skill2 or states.skill3 then
+        while task.wait(0.15) do
+            if killAuraActive or states.attack or states.skill1 or states.skill2 or states.skill3 then
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local target = nil
                     local bestValue = priorityHighHP and 0 or math.huge
+                    local monstersFolder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
 
-                    for _, obj in pairs(workspace:GetDescendants()) do
-                        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
-                            local eHum = obj.Humanoid
-                            if obj.Name ~= player.Name and eHum.Health > 0 and eHum.Health >= minHealthLimit then
-                                local dist = (obj.HumanoidRootPart.Position - hrp.Position).Magnitude
-                                if priorityHighHP then
-                                    if eHum.Health > bestValue then bestValue = eHum.Health target = obj end
-                                else
-                                    if dist < bestValue then bestValue = dist target = obj end
+                    if monstersFolder then
+                        for _, obj in ipairs(monstersFolder:GetChildren()) do
+                            if obj:IsA("Model") then
+                                local eHum = obj:FindFirstChildOfClass("Humanoid")
+                                local eHrp = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+                                if eHum and eHrp and eHum.Health > 0 and eHum.Health >= minHealthLimit then
+                                    local dist = (eHrp.Position - hrp.Position).Magnitude
+                                    if priorityHighHP then
+                                        if eHum.Health > bestValue then
+                                            bestValue = eHum.Health
+                                            target = obj
+                                        end
+                                    else
+                                        if dist < bestValue then
+                                            bestValue = dist
+                                            target = obj
+                                        end
+                                    end
                                 end
                             end
                         end
@@ -74,19 +247,77 @@ if Library then
         end
     end)
 
-    -- === 2. ANIMATION CANCEL ===
+    -- Hook DebugOptions to enable "无限火力" (Infinite Firepower mode) on client
+    pcall(function()
+        local DebugOptions = require(rs:WaitForChild("Packages"):WaitForChild("DebugOptions"))
+        local oldIsEnable = DebugOptions.IsEnable
+        DebugOptions.IsEnable = function(opt)
+            if noSkillCd and opt == "无限火力" then
+                return true
+            end
+            return oldIsEnable(opt)
+        end
+    end)
+
+    -- === 2. ANIMATION CANCEL & NO SKILL LOCK ===
     task.spawn(function()
         while true do
-            if animCancel then
+            if noSkillCd or animCancel then
                 local char = player.Character
                 local hum = char and char:FindFirstChild("Humanoid")
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                
+                if noSkillCd then
+                    _G.Skilling = false
+                    if hrp then
+                        local p = hrp:FindFirstChild("SkillAlignPosition")
+                        local o = hrp:FindFirstChild("SkillAlignOrientation")
+                        if p and p.Enabled then p.Enabled = false end
+                        if o and o.Enabled then o.Enabled = false end
+                    end
+                end
+
                 if hum then
-                    for _, track in pairs(hum:GetPlayingAnimationTracks()) do
-                        track:Stop()
+                    for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
+                        local name = track.Name:lower()
+                        if noSkillCd and name:find("skill") then
+                            track:Stop(0)
+                        elseif animCancel and name:find("attack") then
+                            track:Stop(0)
+                        end
                     end
                 end
             end
-            task.wait(0.1)
+            task.wait(0.05)
+        end
+    end)
+
+    -- === AUTO CAST SKILLS IN AURA ===
+    task.spawn(function()
+        while true do
+            if autoCastSkills and (monsterNearby or killAuraActive) then
+                local energy = player.LeaderEnergy and player.LeaderEnergy.Value or 0
+                _G.Skilling = false
+                _G.Attacking = false
+                
+                -- Priority: Skill 3 (costs 40) > Skill 2 (costs 25) > Skill 1 (costs 15)
+                if energy >= 40 then
+                    skillRemote:FireServer(3)
+                    task.wait(0.1)
+                    _G.Skilling = false
+                elseif energy >= 25 then
+                    skillRemote:FireServer(2)
+                    task.wait(0.1)
+                    _G.Skilling = false
+                elseif energy >= 15 then
+                    skillRemote:FireServer(1)
+                    task.wait(0.1)
+                    _G.Skilling = false
+                end
+                task.wait(0.15)
+            else
+                task.wait(0.4)
+            end
         end
     end)
 
@@ -94,95 +325,105 @@ if Library then
     task.spawn(function()
         while true do
             if states.attack then
-                if monsterNearby then
+                if monsterNearby or killAuraActive then
+                    _G.Attacking = false
+                    _G.AttackAnim = nil
+                    
                     attackRemote:FireServer(4)
                     
                     if animCancel then
                         local hum = player.Character and player.Character:FindFirstChild("Humanoid")
                         if hum then
-                            for _, track in pairs(hum:GetPlayingAnimationTracks()) do
-                                track:Stop()
+                            for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
+                                if track.Name:find("Attack") then
+                                    track:Stop(0)
+                                end
                             end
                         end
                     end
                     
-                    task.wait(1/speeds.attack)
+                    task.wait(1 / (speeds.attack or 20))
                 else
                     task.wait(0.1)
                 end
             else
-                task.wait(0.5)
+                task.wait(0.3)
             end
         end
     end)
 
-    -- === 4. FAT SKILLS ===
+    -- === 4. FAST SKILLS ===
     local function startSkillLoop(stateKey, skillNum)
         task.spawn(function()
             while states[stateKey] do
-                if monsterNearby then
-                    -- 1. СБРОС СОСТОЯНИЯ ИГРЫ (Освобождаем персонажа для нового действия)
+                if monsterNearby or killAuraActive then
                     _G.Skilling = false
+                    _G.Attacking = false
                     _G.AttackAnim = nil
                 
-                    -- 2. СБРОС АНИМАЦИИ (Прерываем текущий каст на клиенте)
                     local char = player.Character
                     local hum = char and char:FindFirstChild("Humanoid")
                     if hum then
                         for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-                            -- На всякий случай проверяем, что это не анимация бега/стойки, а именно атака/скилл
-                            if track.Name:find("Attack") or track.Name:find("Skill") or track.Name:find("SkillAttack") then
-                                track:Stop()
+                            if track.Name:find("Attack") or track.Name:find("Skill") then
+                                track:Stop(0)
                             end
                         end
                     end
                 
-                -- 3. ОТПРАВКА СКИЛЛА
                     skillRemote:FireServer(skillNum)
-                
-                    -- Пауза между кастами (регулируется через ползунок CPS в настройках)
-                    -- Если speeds.attack = 20, то задержка будет 0.05 сек
-                    task.wait(1 / speeds.attack) 
+                    task.wait(1 / (speeds.attack or 20))
                 else
-                    task.wait(0.3)
+                    task.wait(0.2)
                 end
             end
         end)
     end
 
-
-
-    -- === 5. SAFE SKILLS ===
+    -- === 5. MONSTER NEARBY CHECK ===
     task.spawn(function()
         while true do
-            if states.attack or states.skill1 or states.skill2 or states.skill3 then
+            if states.attack or states.skill1 or states.skill2 or states.skill3 or killAuraActive then
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 local found = false
                 
                 if hrp then
-                    local folder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies") or workspace
-                    for _, v in pairs(folder:GetChildren()) do
-                        if v:IsA("Model") and v:FindFirstChild("HumanoidRootPart") and v:FindFirstChild("Humanoid") then
-                            if v.Humanoid.Health > 0 and (v.HumanoidRootPart.Position - hrp.Position).Magnitude < 19 then
-                                found = true
-                                break 
+                    if currentTarget and currentTarget.Parent and currentTarget:FindFirstChildOfClass("Humanoid") and currentTarget:FindFirstChildOfClass("Humanoid").Health > 0 then
+                        local tPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget.PrimaryPart
+                        if tPart and (tPart.Position - hrp.Position).Magnitude < 30 then
+                            found = true
+                        end
+                    end
+                    
+                    if not found then
+                        local folder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
+                        if folder then
+                            for _, v in ipairs(folder:GetChildren()) do
+                                if v:IsA("Model") then
+                                    local vHum = v:FindFirstChildOfClass("Humanoid")
+                                    local vHrp = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                                    if vHum and vHrp and vHum.Health > 0 and (vHrp.Position - hrp.Position).Magnitude < 25 then
+                                        found = true
+                                        break
+                                    end
+                                end
                             end
                         end
                     end
                 end
                 monsterNearby = found
-                task.wait(0.09)
+                task.wait(0.08)
             else
                 monsterNearby = false
-                task.wait(1) 
+                task.wait(0.5)
             end
         end
     end)
 
-    -- === 6. PAUSE FIX ===
+    -- === 6. NETWORK PAUSE FIX ===
     local CoreGui = game:GetService("CoreGui")
-    local AntiGameplayPaused
+    local AntiGameplayPaused = nil
     
     local function destroyNetworkPause()
         pcall(function()
@@ -211,159 +452,307 @@ if Library then
     end)
 
     -- === 7. ANTI AFK ===
-    local xAFKx
-    
-    if xAFKx then
-        xAFKx:Disconnect()
-        xAFKx = nil
-    end
-    
-    xAFKx = game:GetService("Players").LocalPlayer.Idled:Connect(function()
-        local vu = game:GetService("VirtualUser")
-        vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-        task.wait(1)
-        vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    local xAFKx = nil
+    pcall(function()
+        xAFKx = player.Idled:Connect(function()
+            local vu = game:GetService("VirtualUser")
+            vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            task.wait(1)
+            vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        end)
     end)
 
-
     -- === 8. AUTO REJOIN ===
-    if not game:IsLoaded() then
-        game.Loaded:Wait()
-    end
-    
     local currentPlace = game.PlaceId
     local currentServer = game.JobId
-    local TeleportService = game:GetService("TeleportService")
-    local GuiService = game:GetService("GuiService")
-    local Players = game:GetService("Players")
+    local autoReconnectEnabled = true
     
     local function reconnect()
-        local player = Players.LocalPlayer
-        if player then
+        if player and autoReconnectEnabled then
             pcall(function()
-                TeleportService:TeleportToPlaceInstance(currentPlace, currentServer, player)
+                teleportService:TeleportToPlaceInstance(currentPlace, currentServer, player)
             end)
-            
             task.wait(10)
             pcall(function()
-                TeleportService:Teleport(currentPlace, player)
+                teleportService:Teleport(currentPlace, player)
             end)
         end
     end
     
     pcall(function()
-        GuiService.ErrorMessageChanged:Connect(function()
-            local errorCode = GuiService:GetErrorCode()
-            local errorMsg = GuiService:GetErrorMessage()
-            
-            if errorMsg ~= "" then
+        guiService.ErrorMessageChanged:Connect(function()
+            local errorMsg = guiService:GetErrorMessage()
+            if errorMsg and errorMsg ~= "" and autoReconnectEnabled then
                 task.wait(5)
                 reconnect()
             end
         end)
     end)
 
+    -- =====================================================================
+    --                            ATTACKS TAB
+    -- =====================================================================
+    MainTab:Column("left")
 
-    -- === ATTACKS ===
-    MainTab:AddToggle("SpeedHack", function(state)
-        isSpeedHack = state
-        if state then
-            speedConn = runService.Heartbeat:Connect(function()
+    local MoveSec = wrapSection(MainTab:CreateSection({ Name = "Movement & Speeds", Collapsible = true }))
+
+    MoveSec:AddToggle({
+        Name = "SpeedHack",
+        Default = false,
+        Callback = function(state)
+            isSpeedHack = state
+            if state then
+                if speedConn then speedConn:Disconnect() end
+                speedConn = runService.Heartbeat:Connect(function()
+                    local char = player.Character
+                    local hum = char and char:FindFirstChild("Humanoid")
+                    if isSpeedHack and hum then 
+                        hum.WalkSpeed = walkSpeedValue 
+                    end
+                end)
+            else
+                if speedConn then 
+                    speedConn:Disconnect() 
+                    speedConn = nil
+                end
                 local char = player.Character
                 local hum = char and char:FindFirstChild("Humanoid")
-                if isSpeedHack and hum then 
-                    hum.WalkSpeed = walkSpeedValue 
+                if hum then 
+                    hum.WalkSpeed = 16 
                 end
-            end)
-        else
-            if speedConn then 
-                speedConn:Disconnect() 
-                speedConn = nil
-            end
-            local char = player.Character
-            local hum = char and char:FindFirstChild("Humanoid")
-            if hum then 
-                hum.WalkSpeed = 16 
             end
         end
-    end)
+    })
 
+    MoveSec:AddSlider({
+        Name = "Walk Speed",
+        Min = 16,
+        Max = 250,
+        Default = walkSpeedValue,
+        Suffix = " ws",
+        Decimals = 0,
+        Callback = function(val)
+            walkSpeedValue = tonumber(val) or 50
+            if isSpeedHack then
+                local char = player.Character
+                local hum = char and char:FindFirstChild("Humanoid")
+                if hum then hum.WalkSpeed = walkSpeedValue end
+            end
+        end
+    })
 
-    MainTab:AddToggle("Fast General Attack", function(state) states.attack = state end)
+    MoveSec:AddSlider({
+        Name = "CPS Speed",
+        Min = 1,
+        Max = 50,
+        Default = speeds.attack or 20,
+        Suffix = " cps",
+        Decimals = 0,
+        Callback = function(val)
+            speeds.attack = tonumber(val) or 20
+        end
+    })
 
-    MainTab:AddToggle("Fast Skill 1", function(state) 
-        states.skill1 = state 
-        if state then startSkillLoop("skill1", 1) end 
-    end)
-    
-    MainTab:AddToggle("Fast Skill 2", function(state) 
-        states.skill2 = state 
-        if state then startSkillLoop("skill2", 2) end 
-    end)
-    
-    MainTab:AddToggle("Fast Skill 3", function(state) 
-        states.skill3 = state 
-        if state then startSkillLoop("skill3", 3) end 
-    end)
+    MoveSec:AddToggle({
+        Name = "Fast General Attack",
+        Default = false,
+        Callback = function(state)
+            states.attack = state
+        end
+    })
 
-    -- KILL AURA(Broken)
-    MainTab:AddToggle("Kill Aura V67", function(state)
-        killAuraActive = state
-        states.attack = state
-        
-        if killAuraActive then
-            task.spawn(function()
-                local target = nil
-                
-                while killAuraActive do
-                    local char = player.Character
-                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local SkillsSec = wrapSection(MainTab:CreateSection({ Name = "Skills & Infinite Firepower", Collapsible = true }))
+
+    SkillsSec:AddToggle({
+        Name = "No Skill CD / No Lock (Ultra)",
+        Default = false,
+        Callback = function(state)
+            noSkillCd = state
+            if state then
+                _G.Skilling = false
+                Notify("Moro Soul", "No Skill CD & Lock Active!", 2, "Success")
+            end
+        end
+    })
+
+    SkillsSec:AddToggle({
+        Name = "Auto Cast Skills (In Aura)",
+        Default = false,
+        Callback = function(state)
+            autoCastSkills = state
+        end
+    })
+
+    SkillsSec:AddToggle({
+        Name = "Fast Skill 1",
+        Default = false,
+        Callback = function(state)
+            states.skill1 = state
+            if state then startSkillLoop("skill1", 1) end
+        end
+    })
+
+    SkillsSec:AddToggle({
+        Name = "Fast Skill 2",
+        Default = false,
+        Callback = function(state)
+            states.skill2 = state
+            if state then startSkillLoop("skill2", 2) end
+        end
+    })
+
+    SkillsSec:AddToggle({
+        Name = "Fast Skill 3",
+        Default = false,
+        Callback = function(state)
+            states.skill3 = state
+            if state then startSkillLoop("skill3", 3) end
+        end
+    })
+
+    MainTab:Column("right")
+
+    local AuraSec = wrapSection(MainTab:CreateSection({ Name = "Kill Aura V67 (Ultra)", Collapsible = true }))
+
+    AuraSec:AddToggle({
+        Name = "Kill Aura V67 (Ultra)",
+        Default = false,
+        Callback = function(state)
+            killAuraActive = state
+            states.attack = state
+            
+            if killAuraActive then
+                task.spawn(function()
+                    local target = nil
                     
-                    if hrp then
-                        local isAlive = target and target.Parent and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0
+                    while killAuraActive do
+                        local char = player.Character
+                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
                         
-                        if not isAlive then
-                            target = currentTarget
+                        if hrp then
+                            local isAlive = target and target.Parent 
+                                and target:FindFirstChildOfClass("Humanoid") 
+                                and target:FindFirstChildOfClass("Humanoid").Health > 0
                             
-                            if target and target:FindFirstChild("HumanoidRootPart") then
-                                hrp.CFrame = target.HumanoidRootPart.CFrame
-                                hrp.Velocity = Vector3.new(0, 0, 0)
+                            if not isAlive then
+                                target = currentTarget
+                                
+                                if not target or not target.Parent then
+                                    local monsters = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
+                                    if monsters then
+                                        local closestDist = math.huge
+                                        for _, m in ipairs(monsters:GetChildren()) do
+                                            local mHum = m:FindFirstChildOfClass("Humanoid")
+                                            local mHrp = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+                                            if mHum and mHrp and mHum.Health > 0 and mHum.Health >= minHealthLimit then
+                                                local d = (mHrp.Position - hrp.Position).Magnitude
+                                                if d < closestDist then
+                                                    closestDist = d
+                                                    target = m
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                            
+                            if target and target.Parent then
+                                local tHrp = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+                                local tHum = target:FindFirstChildOfClass("Humanoid")
+                                
+                                if tHrp and tHum and tHum.Health > 0 then
+                                    local targetCF = tHrp.CFrame * CFrame.new(0, tpHeight or 2, 2)
+                                    hrp.CFrame = CFrame.lookAt(targetCF.Position, tHrp.Position)
+                                    
+                                    hrp.AssemblyLinearVelocity = Vector3.zero
+                                    hrp.AssemblyAngularVelocity = Vector3.zero
+                                    
+                                    if char:FindFirstChild("LockedEnermy") then
+                                        char.LockedEnermy.Value = target
+                                    end
+                                    
+                                    _G.Attacking = false
+                                    _G.Skilling = false
+                                end
                             end
                         end
+                        task.wait(0.04)
                     end
-                    task.wait(0.09)
-                end
-            end)
-        end
-    end)
-
-    -- CHRISTMAS V2
-    MainTab:AddToggle("Christmas Aura V2", function(state)
-        _G.ChristmasAuraV2 = state
-        if not state then
-            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-            if player.Character and player.Character:FindFirstChild("Humanoid") then
-                workspace.CurrentCamera.CameraSubject = player.Character.Humanoid
+                    
+                    if player.Character and player.Character:FindFirstChild("LockedEnermy") then
+                        player.Character.LockedEnermy.Value = nil
+                    end
+                end)
+                Notify("Moro Soul", "Kill Aura Activated!", 2, "Success")
+            else
+                Notify("Moro Soul", "Kill Aura Disabled", 2, "Info")
             end
-        Library:Notify("System", state and "Christmas Farm V2 Active!" or "Disabled", 2)
         end
-    end)
+    })
+
+    AuraSec:AddToggle({
+        Name = "Priority: Max HP First",
+        Default = false,
+        Callback = function(state)
+            priorityHighHP = state
+        end
+    })
+
+    AuraSec:AddSlider({
+        Name = "Kill Aura TP Height",
+        Min = -5,
+        Max = 15,
+        Default = tpHeight or 2,
+        Suffix = " studs",
+        Decimals = 0,
+        Callback = function(val)
+            tpHeight = tonumber(val) or 2
+        end
+    })
+
+    AuraSec:AddTextbox({
+        Name = "Min HP Filter",
+        Default = tostring(minHealthLimit),
+        Placeholder = "0",
+        Numeric = true,
+        Callback = function(val)
+            minHealthLimit = tonumber(val) or 0
+        end
+    })
+
+    local EventSec = wrapSection(MainTab:CreateSection({ Name = "Event Farms", Collapsible = true }))
+
+    EventSec:AddToggle({
+        Name = "Christmas Aura V2",
+        Default = false,
+        Callback = function(state)
+            _G.ChristmasAuraV2 = state
+            if not state then
+                workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+                if player.Character and player.Character:FindFirstChild("Humanoid") then
+                    workspace.CurrentCamera.CameraSubject = player.Character.Humanoid
+                end
+            end
+            Notify("System", state and "Christmas Farm V2 Active!" or "Disabled", 2, state and "Success" or "Info")
+        end
+    })
 
     _G.ChristmasAuraV2 = false
 
     task.spawn(function()
-        local player = game:GetService("Players").LocalPlayer
         local camera = workspace.CurrentCamera
-        local rs = game:GetService("ReplicatedStorage")
-        local genAttack = rs:WaitForChild("RemoteEvents"):WaitForChild("GeneralAttack")
+        local genAttack = remoteFolder:WaitForChild("GeneralAttack")
         
-        -- Boss Finder
         local function GetBoss()
-            local folder = workspace:FindFirstChild("Enemies") or workspace
-            for _, e in pairs(folder:GetDescendants()) do
-                if e:IsA("Model") and e:FindFirstChild("Humanoid") and e:FindFirstChild("HumanoidRootPart") then
-                    if e.Humanoid.Health > 0 and e.Humanoid.MaxHealth >= 5000000 then
-                        return e
+            local folder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
+            if folder then
+                for _, e in ipairs(folder:GetChildren()) do
+                    if e:IsA("Model") then
+                        local hum = e:FindFirstChildOfClass("Humanoid")
+                        local hrp = e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart
+                        if hum and hrp and hum.Health > 0 and hum.MaxHealth >= 5000000 then
+                            return e
+                        end
                     end
                 end
             end
@@ -393,31 +782,34 @@ if Library then
                     local targetBoss = GetBoss()
                     
                     if targetBoss then
-                        local tHrp = targetBoss:FindFirstChild("HumanoidRootPart")
-                        local tHum = targetBoss:FindFirstChild("Humanoid")
+                        local tHrp = targetBoss:FindFirstChild("HumanoidRootPart") or targetBoss.PrimaryPart
+                        local tHum = targetBoss:FindFirstChildOfClass("Humanoid")
                         if tHrp and tHum then
                             UpdateCam(tHrp.Position)
                             while _G.ChristmasAuraV2 and tHum.Health > 0 and targetBoss.Parent do
                                 hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, 3)
+                                hrp.AssemblyLinearVelocity = Vector3.zero
                                 genAttack:FireServer(4)
-                                task.wait(speeds and 1/speeds.attack)
+                                task.wait(speeds and 1 / (speeds.attack or 20))
                             end
                         end
                     else
-                        -- Фарм Мелочи
-                        local zones = {"\232\141\146\233\135\142", "\230\151\160\231\186\191\229\136\151\232\189\166"}
-                        for _, name in pairs(zones) do
-                            local f = workspace.GhostPos:FindFirstChild(name)
-                            if f then
-                                for _, obj in pairs(f:GetDescendants()) do
-                                    if not _G.ChristmasAuraV2 or GetBoss() then break end
-                                    if obj:IsA("BasePart") and obj.Name ~= "对象038" then
-                                        UpdateCam(obj.Position) 
-                                        
-                                        hrp.CFrame = obj.CFrame
-                                        for k = 1, 6 do
-                                            genAttack:FireServer(4)
-                                            task.wait(speeds and 1/speeds.attack)
+                        local ghostPos = workspace:FindFirstChild("GhostPos")
+                        if ghostPos then
+                            local zones = {"荒野", "无线列车", "主公宅邸", "紫藤山"}
+                            for _, name in ipairs(zones) do
+                                local f = ghostPos:FindFirstChild(name)
+                                if f then
+                                    for _, obj in ipairs(f:GetDescendants()) do
+                                        if not _G.ChristmasAuraV2 or GetBoss() then break end
+                                        if obj:IsA("BasePart") and obj.Name ~= "对象038" then
+                                            UpdateCam(obj.Position) 
+                                            hrp.CFrame = obj.CFrame
+                                            hrp.AssemblyLinearVelocity = Vector3.zero
+                                            for k = 1, 6 do
+                                                genAttack:FireServer(4)
+                                                task.wait(speeds and 1 / (speeds.attack or 20))
+                                            end
                                         end
                                     end
                                 end
@@ -430,10 +822,10 @@ if Library then
         end
     end)
 
-    -- === SPRING AURA ===
-    local TweenService = game:GetService("TweenService")
+    -- SPRING FARM
     local flySpeed = 250
     local isFlying = false
+    local currentTween = nil
 
     local function patrolFly(targetCFrame)
         local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -444,7 +836,7 @@ if Library then
         local duration = distance / flySpeed
         
         local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
-        local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
+        local tween = tweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
         
         tween.Completed:Connect(function()
             task.wait(0.1) 
@@ -455,18 +847,21 @@ if Library then
         return tween
     end
 
-    MainTab:AddToggle("Spring farm", function(state)
-        _G.SpringFarm = state
-        states.attack = state 
-        if state then
-            Library:Notify("Moro Lumina", "Priority Patrol Started", 2)
-        else
-            isFlying = false
-            if currentTween then currentTween:Cancel() end
+    EventSec:AddToggle({
+        Name = "Spring farm",
+        Default = false,
+        Callback = function(state)
+            _G.SpringFarm = state
+            states.attack = state 
+            if state then
+                Notify("Moro Soul", "Priority Patrol Started", 2, "Info")
+            else
+                isFlying = false
+                if currentTween then currentTween:Cancel() end
+            end
         end
-    end)
+    })
 
-    -- 1. Координаты
     local farmPoints = {
         Vector3.new(208, 30, -319),
         Vector3.new(6, 30, -52),
@@ -477,12 +872,10 @@ if Library then
     }
     local currentPointIdx = 1
 
-    -- 2. Основная логика
     task.spawn(function()
         local lastFoundTime = tick()
-        local currentTween = nil
 
-        while task.wait(0.17) do
+        while task.wait(0.15) do
             if _G.SpringFarm then
                 local monsters = workspace:FindFirstChild("Monsters")
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -495,7 +888,6 @@ if Library then
                         continue 
                     end
 
-                    -- ПОИСК
                     for _, monster in ipairs(monsters:GetChildren()) do
                         local tHum = monster:FindFirstChildOfClass("Humanoid")
                         if tHum and tHum.Health > 0 then
@@ -503,7 +895,7 @@ if Library then
                             local isBoss = tHum.MaxHealth >= 5000000
                             
                             if hasHat or isBoss then
-                                local targetPart = monster:FindFirstChild("HumanoidRootPart") or monster:FindFirstChild("Head")
+                                local targetPart = monster:FindFirstChild("HumanoidRootPart") or monster:FindFirstChild("Head") or monster.PrimaryPart
                                 if hasHat and monster.SpringHat:FindFirstChild("Handle") then
                                     targetPart = monster.SpringHat.Handle
                                 end
@@ -519,34 +911,23 @@ if Library then
                     if target then
                         lastFoundTime = tick()
                         local targetCF = target.part.CFrame * CFrame.new(0, tpHeight or 2, 0)
-    
-                        if isGhost then
-                            targetCF = targetCF * CFrame.new(0, -11, 0)
-                        end
-    
                         hrp.CFrame = targetCF
                         
                         while _G.SpringFarm and target.hum.Health > 0 and target.monster.Parent do
-                            hrp.Velocity = Vector3.new(0, 0, 0)
-        
+                            hrp.AssemblyLinearVelocity = Vector3.zero
                             local currentTargetCF = target.part.CFrame
-                            if isGhost then
-                                currentTargetCF = currentTargetCF * CFrame.new(0, -11, 0)
-                            end
-
                             if (hrp.Position - currentTargetCF.Position).Magnitude > 12 then
-                                hrp.CFrame = currentTargetCF
+                                hrp.CFrame = currentTargetCF * CFrame.new(0, tpHeight or 2, 0)
                             end
                             task.wait(0.1)
                         end
                     else
                         if (tick() - lastFoundTime) > 3 then
                             currentPointIdx = currentPointIdx + 1
-                            
                             if currentPointIdx > #farmPoints then 
                                 currentPointIdx = 1 
                                 hrp.CFrame = CFrame.new(farmPoints[currentPointIdx])
-                                Library:Notify("Moro Lumina", "Teleported to Start", 1)
+                                Notify("Moro Soul", "Teleported to Start", 1, "Info")
                                 lastFoundTime = tick()
                             else
                                 currentTween = patrolFly(CFrame.new(farmPoints[currentPointIdx]))
@@ -558,100 +939,128 @@ if Library then
         end
     end)
 
-
-    -- === TRAIN ===
-
-    local vim = game:GetService("VirtualInputManager")
+    -- =====================================================================
+    --                             TRAIN TAB
+    -- =====================================================================
     local autoTrain = false
+    local autoTrainV2 = false
+    _G.TrainSkillNumber = 2
 
+    local function AdvanceTrainLevel()
+        local it = workspace:FindFirstChild("InfinityTrain")
+        if not it or not it.PrimaryPart then return end
+        
+        local trigger = it.PrimaryPart:FindFirstChild("ContinueTrigger")
+        local prompt = trigger and trigger:FindFirstChildWhichIsA("ProximityPrompt")
+        
+        if prompt and fireproximityprompt then
+            fireproximityprompt(prompt)
+            return
+        end
+        
+        if AttackHelper and AttackHelper.GoToNextTrain then
+            pcall(function()
+                AttackHelper.GoToNextTrain(it.PrimaryPart.PlayerSpawnPos.WorldCFrame, it.PrimaryPart.GhostSpawnPos.WorldCFrame)
+            end)
+            return
+        end
+        
+        local nextDoor = it:FindFirstChild("Portal") and it.Portal:FindFirstChild("Next")
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if hrp and nextDoor then
+            hrp.CFrame = nextDoor.CFrame
+            task.wait(0.08)
+            vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+            task.wait(0.1)
+            vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end
+    end
+
+    -- Train Mode V1 (General Attack)
     task.spawn(function()
         while true do
-            task.wait(0.2)
+            task.wait(0.15)
             if autoTrain then
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                if not hrp then continue end
+                local it = workspace:FindFirstChild("InfinityTrain")
+                if not hrp or not it then continue end
 
-                local trainPoint = workspace.InfinityTrain.Train
-                local nextDoor = workspace.InfinityTrain.Portal.Next
-
-                -- 1. Tp to demon
-                hrp.CFrame = trainPoint.CFrame * CFrame.new(0, 2, 0)
-                hrp.Velocity = Vector3.new(0,0,0)
+                local trainPoint = it:FindFirstChild("Train")
+                if trainPoint then
+                    hrp.CFrame = trainPoint.CFrame * CFrame.new(0, 2, 0)
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                end
 
                 local monster = nil
-                while autoTrain and not monster do
-                    for _, v in pairs(workspace.Monsters:GetChildren()) do
-                        if v:IsA("Model") and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then
-                            if (v.PrimaryPart.Position - trainPoint.Position).Magnitude < 50 then
-                                monster = v
-                                break
+                local scanStart = tick()
+                while autoTrain and not monster and (tick() - scanStart < 4) do
+                    local monsters = workspace:FindFirstChild("Monsters")
+                    if monsters and trainPoint then
+                        for _, v in ipairs(monsters:GetChildren()) do
+                            local hum = v:FindFirstChildOfClass("Humanoid")
+                            local part = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                            if hum and part and hum.Health > 0 then
+                                if (part.Position - trainPoint.Position).Magnitude < 60 then
+                                    monster = v
+                                    break
+                                end
                             end
                         end
                     end
                     task.wait(0.1)
                 end
 
-                -- 2. Killing demon
                 if monster and autoTrain then
-                    local mHrp = monster.PrimaryPart
-                    local mHum = monster.Humanoid
+                    local mHrp = monster:FindFirstChild("HumanoidRootPart") or monster.PrimaryPart
+                    local mHum = monster:FindFirstChildOfClass("Humanoid")
                     
-                    while autoTrain and mHum.Health > 0 and monster.Parent do
-                        hrp.CFrame = CFrame.new(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
-                        hrp.Velocity = Vector3.new(0,0,0)
+                    while autoTrain and mHum and mHum.Health > 0 and monster.Parent do
+                        hrp.CFrame = CFrame.lookAt(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
+                        hrp.AssemblyLinearVelocity = Vector3.zero
                         
+                        _G.Attacking = false
                         attackRemote:FireServer(4) 
-                        task.wait(1 / speeds.attack)
+                        task.wait(1 / (speeds.attack or 20))
                     end
-                    task.wait(0.07)
+                    task.wait(0.1)
                 end
 
-                -- 3. Tp ro button
                 if autoTrain then
-                    -- Мгновенно переносимся к двери
-                    hrp.CFrame = nextDoor.CFrame
-                    hrp.Velocity = Vector3.new(0,0,0)
-                    task.wait(0.07) -- Даем серверу "увидеть" нас у двери
-                    
-                    -- Virtual E
-                    vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                    task.wait(0.1)
-                    vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                    
-                    task.wait(0.07)
+                    AdvanceTrainLevel()
+                    task.wait(0.3)
                 end
             end
         end
     end)
 
-    TrainTab:AddToggle("Infinity Train (TP Mode)", function(state)
-        autoTrain = state
-        Library:Notify("Moro Lumina", state and "Auto Train Active" or "Disabled", 2)
-    end)
-
-    local vim = game:GetService("VirtualInputManager")
-    local autoTrainV2 = false
-
+    -- Train Mode V2 (Attack + Selected Skill)
     task.spawn(function()
         while true do
-            task.wait(0.2)
+            task.wait(0.15)
             if autoTrainV2 then
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                if not hrp then continue end
+                local it = workspace:FindFirstChild("InfinityTrain")
+                if not hrp or not it then continue end
 
-                local trainPoint = workspace.InfinityTrain.Train
-                local nextDoor = workspace.InfinityTrain.Portal.Next
-
-                hrp.CFrame = trainPoint.CFrame * CFrame.new(0, 2, 0)
-                hrp.Velocity = Vector3.new(0,0,0)
+                local trainPoint = it:FindFirstChild("Train")
+                if trainPoint then
+                    hrp.CFrame = trainPoint.CFrame * CFrame.new(0, 2, 0)
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                end
 
                 local monster = nil
-                while autoTrainV2 and not monster do
-                    for _, v in pairs(workspace.Monsters:GetChildren()) do
-                        if v:IsA("Model") and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then
-                            if (v.PrimaryPart.Position - trainPoint.Position).Magnitude < 50 then
-                                monster = v
-                                break
+                local scanStart = tick()
+                while autoTrainV2 and not monster and (tick() - scanStart < 4) do
+                    local monsters = workspace:FindFirstChild("Monsters")
+                    if monsters and trainPoint then
+                        for _, v in ipairs(monsters:GetChildren()) do
+                            local hum = v:FindFirstChildOfClass("Humanoid")
+                            local part = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                            if hum and part and hum.Health > 0 then
+                                if (part.Position - trainPoint.Position).Magnitude < 60 then
+                                    monster = v
+                                    break
+                                end
                             end
                         end
                     end
@@ -659,507 +1068,512 @@ if Library then
                 end
 
                 if monster and autoTrainV2 then
-                    local mHrp = monster.PrimaryPart
-                    local mHum = monster.Humanoid
+                    local mHrp = monster:FindFirstChild("HumanoidRootPart") or monster.PrimaryPart
+                    local mHum = monster:FindFirstChildOfClass("Humanoid")
                     
-                    while autoTrainV2 and mHum.Health > 0 and monster.Parent do
-                        hrp.CFrame = CFrame.new(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
-                        hrp.Velocity = Vector3.new(0,0,0)
+                    while autoTrainV2 and mHum and mHum.Health > 0 and monster.Parent do
+                        hrp.CFrame = CFrame.lookAt(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
+                        hrp.AssemblyLinearVelocity = Vector3.zero
                         
+                        _G.Attacking = false
+                        _G.Skilling = false
                         attackRemote:FireServer(4) 
                         skillRemote:FireServer(_G.TrainSkillNumber)
                         
-                        task.wait(1 / speeds.attack)
+                        task.wait(1 / (speeds.attack or 20))
                     end
-                    task.wait(0.05) 
+                    task.wait(0.1)
                 end
 
                 if autoTrainV2 then
-                    hrp.CFrame = nextDoor.CFrame
-                    hrp.Velocity = Vector3.new(0,0,0)
-                    task.wait(0.1) 
-                    
-                    vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                    task.wait(0.1)
-                    vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                    
-                    task.wait(0.1)
+                    AdvanceTrainLevel()
+                    task.wait(0.3)
                 end
             end
         end
     end)
 
-    TrainTab:AddToggle("Infinity Train V2", function(state)
-        autoTrainV2 = state
-        if state then
-            autoTrain = false 
+    TrainTab:Column("left")
+
+    local TrainSec = wrapSection(TrainTab:CreateSection({ Name = "Infinity Train Farming", Collapsible = true }))
+
+    TrainSec:AddToggle({
+        Name = "Infinity Train (TP Mode)",
+        Default = false,
+        Callback = function(state)
+            autoTrain = state
+            if state then autoTrainV2 = false end
+            Notify("Moro Soul", state and "Auto Train Active" or "Disabled", 2, state and "Success" or "Info")
         end
-        Library:Notify("Moro Lumina", state and "Train V2 Active" or "Train V2 Disabled", 2)
-    end)
+    })
 
-
-    -- Skill Changer
-    _G.TrainSkillNumber = 2
-
-    TrainTab:AddDropdown("Train V2 Skill", {"Skill 1", "Skill 2", "Skill 3"}, function(selected)
-        if selected == "Skill 1" then
-            _G.TrainSkillNumber = 1
-        elseif selected == "Skill 2" then
-            _G.TrainSkillNumber = 2
-        elseif selected == "Skill 3" then
-            _G.TrainSkillNumber = 3
+    TrainSec:AddToggle({
+        Name = "Infinity Train V2 (Skills)",
+        Default = false,
+        Callback = function(state)
+            autoTrainV2 = state
+            if state then autoTrain = false end
+            Notify("Moro Soul", state and "Train V2 Active" or "Train V2 Disabled", 2, state and "Success" or "Info")
         end
-        Library:Notify("Moro Lumina", "Train V2 will now use: " .. selected, 2)
-    end)
+    })
 
-
-    TrainTab:AddButton("Teleport to Train Entrance", function()
-        local char = game:GetService("Players").LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local entrance = workspace:FindFirstChild("PromptTriggers") and workspace.PromptTriggers:FindFirstChild("Train_Entrance_1")
-        
-        if hrp and entrance then
-            hrp.CFrame = entrance.CFrame + Vector3.new(0, 3, 0)
-            Library:Notify("Moro Lumina", "Teleported to Train Entrance", 2)
-        else
-            Library:Notify("Error", "Entrance point not found!", 3)
+    TrainSec:AddDropdown({
+        Name = "Train V2 Skill",
+        Options = {"Skill 1", "Skill 2", "Skill 3"},
+        Default = "Skill 2",
+        Callback = function(selected)
+            if selected == "Skill 1" then
+                _G.TrainSkillNumber = 1
+            elseif selected == "Skill 2" then
+                _G.TrainSkillNumber = 2
+            elseif selected == "Skill 3" then
+                _G.TrainSkillNumber = 3
+            end
+            Notify("Moro Soul", "Train V2 using: " .. tostring(selected), 2, "Info")
         end
-    end)
+    })
 
+    TrainTab:Column("right")
 
-    -- === SETTINGS ===
-    SettingsTab:AddButton("FPS Booster (Ultra)", function()
-        local lighting = game:GetService("Lighting")
-        local terrain = workspace:FindFirstChildOfClass("Terrain")
-        
-        if terrain then
-            terrain.WaterWaveSize = 0
-            terrain.WaterWaveSpeed = 0
-            terrain.WaterReflectance = 0
-            terrain.WaterTransparency = 0
-        end
-        
-        lighting.GlobalShadows = false
-        lighting.FogEnd = 9e9
-        lighting.Brightness = 1
-        
-        for _, obj in pairs(lighting:GetChildren()) do
-            if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("SunRaysEffect") or obj:IsA("DepthOfFieldEffect") then
-                obj.Enabled = false
+    local TrainTpSec = wrapSection(TrainTab:CreateSection({ Name = "Train Teleports", Collapsible = true }))
+
+    TrainTpSec:AddButton({
+        Name = "Teleport to Train Entrance 1",
+        Primary = false,
+        Callback = function()
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local entrance = workspace:FindFirstChild("PromptTriggers") and workspace.PromptTriggers:FindFirstChild("Train_Entrance_1")
+            if hrp and entrance then
+                hrp.CFrame = entrance.CFrame + Vector3.new(0, 3, 0)
+                Notify("Moro Soul", "Teleported to Train Entrance 1", 2, "Success")
+            else
+                Notify("Error", "Entrance point not found!", 2, "Error")
             end
         end
-    
-        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-        
-        for _, obj in pairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("Part") then
-                obj.Material = Enum.Material.Plastic
-                obj.Reflectance = 0
-            elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                obj.Transparency = 1
-            elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
-                obj.Enabled = false
-            elseif obj:IsA("Explosion") then
-                obj.Visible = false
+    })
+
+    TrainTpSec:AddButton({
+        Name = "Teleport to Train Entrance 2",
+        Primary = false,
+        Callback = function()
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local entrance = workspace:FindFirstChild("PromptTriggers") and workspace.PromptTriggers:FindFirstChild("Train_Entrance_2")
+            if hrp and entrance then
+                hrp.CFrame = entrance.CFrame + Vector3.new(0, 3, 0)
+                Notify("Moro Soul", "Teleported to Train Entrance 2", 2, "Success")
+            else
+                Notify("Error", "Entrance 2 not found!", 2, "Error")
             end
         end
-        
-        Library:Notify("Moro Lumina", "FPS Has Been Boosted!" , 2)
-    end)
+    })
 
-    SettingsTab:AddToggle("Animation Cancel", function(state) animCancel = state end)
-    SettingsTab:AddToggle("Priority: Max HP First", function(state) priorityHighHP = state end)
-    SettingsTab:AddTextBox("Walk Speed", "50", function(val) 
-        walkSpeedValue = tonumber(val) or 50 
-    end)
-    SettingsTab:AddTextBox("CPS Speed", "20", function(val) speeds.attack = tonumber(val) or 20 end)
-    SettingsTab:AddTextBox("Min HP", "1000000", function(val) minHealthLimit = tonumber(val) or 1000000 end)
-
-    -- === FISHING AND FOOD ===
+    -- =====================================================================
+    --                           FISHING & FOOD TAB
+    -- =====================================================================
     local autoFishing = false
     local fishingArea = "Area_1"
     
+    local fishingAreasList = {"Area_1", "Area_2", "Area_Chris"}
+    pcall(function()
+        local fRoot = workspace:FindFirstChild("Fishing")
+        if fRoot then
+            local foundAreas = {}
+            for _, c in ipairs(fRoot:GetChildren()) do
+                if c:FindFirstChild("FishingPoint") then
+                    table.insert(foundAreas, c.Name)
+                end
+            end
+            if #foundAreas > 0 then
+                table.sort(foundAreas)
+                fishingAreasList = foundAreas
+            end
+        end
+    end)
+
     task.spawn(function()
-        local startRemote = game:GetService("ReplicatedStorage"):WaitForChild("RemoteEvents"):WaitForChild("StartFishing")
-        local pullRemote = game:GetService("ReplicatedStorage"):WaitForChild("RemoteEvents"):WaitForChild("PullFish")
+        local startRemote = remoteFolder:WaitForChild("StartFishing")
+        local pullRemote = remoteFolder:WaitForChild("PullFish")
+        local autoFishRemote = remoteFolder:FindFirstChild("AutoFishing")
         
         while true do
             if autoFishing then
                 local fishingRoot = workspace:FindFirstChild("Fishing")
                 local targetPoint = fishingRoot and fishingRoot:FindFirstChild(fishingArea) and fishingRoot[fishingArea]:FindFirstChild("FishingPoint")
+                local prompt = targetPoint and targetPoint:FindFirstChildWhichIsA("ProximityPrompt")
                 
-                if targetPoint and targetPoint:FindFirstChild("ProximityPrompt") then
-                    startRemote:FireServer(targetPoint.ProximityPrompt)
+                if prompt then
+                    if autoFishRemote then
+                        autoFishRemote:FireServer(prompt)
+                    else
+                        startRemote:FireServer(prompt)
+                    end
                     
                     task.wait(0.1)
                     
-                    for i = 1, 40 do
+                    for i = 1, 30 do
                         if not autoFishing then break end
                         pullRemote:FireServer()
                         task.wait(0.05)
                     end
                 end
             end
-            task.wait(1)
-        end
-    end)
-    
-    -- Элементы управления
-    FishTab:AddToggle("Auto Fishing", function(state)
-        autoFishing = state
-        Library:Notify("Moro Lumina", state and "Auto Fish Active" or "Disabled", 2)
-    end)
-    
-    FishTab:AddTextBox("Fishing Area", "Area_1", function(val)
-        fishingArea = val
-    end)
-    
-    FishTab:AddButton("Teleport to Fishing Point", function()
-        local char = game:GetService("Players").LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local fRoot = workspace:FindFirstChild("Fishing")
-        local fPoint = fRoot and fRoot:FindFirstChild(fishingArea) and fRoot[fishingArea]:FindFirstChild("FishingPoint")
-        
-        if hrp and fPoint then
-            hrp.CFrame = fPoint.CFrame + Vector3.new(0, 3, 0)
-            Library:Notify("Moro Lumina", "Train TP Active", 2)
-        else
-            Library:Notify("Moro Lumina", "Area not found", 2)
+            task.wait(0.5)
         end
     end)
 
-    FishTab:AddButton("Collect All Food", function()
-        task.spawn(function()
-            local vim = game:GetService("VirtualInputManager")
-            local container = workspace:FindFirstChild("FoodMaterialContainer")
-            local player = game:GetService("Players").LocalPlayer
+    FishTab:Column("left")
+
+    local FishSec = wrapSection(FishTab:CreateSection({ Name = "Auto Fishing", Collapsible = true }))
+    
+    FishSec:AddToggle({
+        Name = "Auto Fishing",
+        Default = false,
+        Callback = function(state)
+            autoFishing = state
+            Notify("Moro Soul", state and "Auto Fish Active" or "Disabled", 2, state and "Success" or "Info")
+        end
+    })
+    
+    FishSec:AddDropdown({
+        Name = "Fishing Area",
+        Options = fishingAreasList,
+        Default = fishingAreasList[1] or "Area_1",
+        Callback = function(val)
+            fishingArea = val
+            Notify("Moro Soul", "Fishing Area: " .. tostring(val), 2, "Info")
+        end
+    })
+    
+    FishSec:AddButton({
+        Name = "Teleport to Fishing Point",
+        Primary = false,
+        Callback = function()
             local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local fRoot = workspace:FindFirstChild("Fishing")
+            local fPoint = fRoot and fRoot:FindFirstChild(fishingArea) and fRoot[fishingArea]:FindFirstChild("FishingPoint")
+            
+            if hrp and fPoint then
+                hrp.CFrame = fPoint.CFrame + Vector3.new(0, 3, 0)
+                Notify("Moro Soul", "Teleported to " .. tostring(fishingArea), 2, "Success")
+            else
+                Notify("Moro Soul", "Fishing area point not found", 2, "Warning")
+            end
+        end
+    })
 
-            if hrp and container then
-                local allItems = container:GetDescendants()
-                Library:Notify("Moro Lumina", "Items found: " .. #allItems, 2)
+    FishSec:AddButton({
+        Name = "Cancel Fishing",
+        Primary = false,
+        Callback = function()
+            local cancelRemote = remoteFolder:FindFirstChild("CancelFishing")
+            if cancelRemote then
+                cancelRemote:FireServer()
+                Notify("Moro Soul", "Fishing Cancelled", 2, "Info")
+            end
+        end
+    })
 
-                for _, item in pairs(allItems) do
-                    if item:IsA("BasePart") then
-                        hrp.CFrame = item.CFrame
-                        hrp.Velocity = Vector3.new(0, 0, 0)
-                        
-                        task.wait(0.13)
-                        
-                        -- Virtual E
-                        vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                        task.wait(0.07)
-                        vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                        
-                        task.wait(0.11)
+    FishTab:Column("right")
+
+    local FoodSec = wrapSection(FishTab:CreateSection({ Name = "Food Collector", Collapsible = true }))
+
+    -- FAST & RELIABLE FOOD COLLECTOR (PROXIMITY PROMPTS)
+    FoodSec:AddButton({
+        Name = "Collect All Food (Fast)",
+        Primary = true,
+        Callback = function()
+            task.spawn(function()
+                local container = workspace:FindFirstChild("FoodMaterialContainer")
+                local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+
+                if not hrp or not container then
+                    Notify("Error", "Food container not found", 2, "Error")
+                    return
+                end
+
+                local prompts = {}
+                for _, item in ipairs(container:GetDescendants()) do
+                    if item:IsA("ProximityPrompt") and item.Parent and item.Parent:IsA("BasePart") then
+                        table.insert(prompts, item)
                     end
                 end
-                Library:Notify("Moro Lumina", "Done collecting!", 2)
-            else
-                Library:Notify("Error", "Food folder not found", 3)
-            end
-        end)
-    end)
 
-    -- === UPGRADE TAB ===
+                Notify("Moro Soul", "Collecting " .. #prompts .. " food items...", 2, "Info")
+                local savedCF = hrp.CFrame
 
-    -- 1. CHARACTER TABLE (English Name for Menu = Byte-string for Remote)
-    local heroData = {
-        ["Yushiro & Tamayo"] = "\230\132\136\229\143\178\233\131\142\239\188\134\231\143\160\228\184\150",
-        ["Shinobu Kocho"] = "\232\157\180\232\157\18蝶\229\191\141",
-        ["Tanjiro (Hinokami)"] = "\231\130\173\230\178\187\233\131\142_\231\127\171\228\185\139\231\165\158\231\165\158\229\144\144",
-        ["Rui"] = "\231\180\175",
-        ["Zenitsu Agatsuma"] = "\230\136\145\229\166\187\229\150\132\233\128\184",
-        ["Giyu Tomioka"] = "\229\175\140\229\175\136\228\185\137\229\139\135",
-        ["Kyojuro Rengoku"] = "\231\130\188\231\133\177\230\15杏\229\175\183\233\131\142",
-        ["Nezuko Kamado"] = "\229\188\165\230\178\187\229\173\144",
-        ["Inosuke Hashibira"] = "\228\188\138\228\185\139\229\138\169",
-        ["Akaza"] = "\230\188\154\229\173\150\229\186\167",
-        ["Sakonji Urokodaki"] = "\229\183\166\232\191\145\226\172\161",
-        ["Yahaba"] = "\231\159\162\233\150\181\231\190\189",
-        ["Douma"] = "\231\171\165\233\173\148",
-        ["Yushiro"] = "\230\132\136\229\143\178\233\131\142",
-        ["Susamaru"] = "\230\156\177\231\187\161\228\184\184",
-        ["Murata"] = "\230\157\145\231\148\176",
-        ["Kanao Tsuyuri"] = "\230\160\151\232\138\177\229\144\189\233\166\153\229\165\136\228\185\142",
-        ["Mitsuri Kanroji"] = "\231\148\152\230\156\178\229\175\186\232\156\156\231\147\153",
-        ["Kaigaku"] = "\231\168\187\231\142\137\228\183\130\229\178\179",
-        ["Daki"] = "\229\160\181\22姬\22姬",
-        ["Gyutaro"] = "\229\166\179\229\164\171\229\164\170\233\131\142",
-        ["Tengen Uzui"] = "\229\17宇\232\154\147\229\164\169\229\133\131",
-        ["Iguro Obanai"] = "\228\188\138\233\187\145\229\176\143\232\138\173\229\134\133",
-        ["Muichiro Tokito"] = "\230\151\182\233\128\143\230\151\160\228\184\128\233\131\142",
-        ["Sanemi Shinazugawa"] = "\228\184\141\230\173\187\229\183\157\229\174\158\229\188\165",
-        ["Gyomei Himejima"] = "\230\130\178\230\184\163\229\173\172\232\161\140\229\13冥",
-        ["Tanjiro (Water)"] = "\231\130\173\230\178\187\233\131\142_\230\176\180",
-        ["Zenitsu (Entertainment District)"] = "\230\136\145\229\166\187\229\150\132\233\128\184_\230\184\184\230\131\173\231\175\135",
-        ["Tanjiro (Entertainment District)"] = "\231\130\173\230\178\187\233\131\142_\230\184\184\230\131\173\231\175\135",
-        ["Inosuke (Entertainment District)"] = "\228\188\138\228\185\139\229\138\16助_\230\184\184\230\131\173\231\175\135",
-        ["Nezuko (Berserk)"] = "\229\188\165\230\178\187\229\173\144_\231\170\156\229\140\150",
-        ["Enmu"] = "\233\173\135\230\162\166",
-        ["Genya Shinazugawa"] = "\228\184\141\230\173\187\229\183\157\231\142\132\229\188\165",
-        ["Hinatsuru"] = "\233\155\142\233\185\164",
-        ["Zohakuten"] = "\229\133\156\231\143\128\229\164\169",
-        ["Tanjiro (Swordsmith Village)"] = "\231\130\173\230\178\187\233\131\142_\233\148\187\229\136\128\230\157\145\231\175\135"
-    }
+                for _, prompt in ipairs(prompts) do
+                    if prompt.Parent and prompt.Parent:IsA("BasePart") then
+                        hrp.CFrame = prompt.Parent.CFrame
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                        
+                        if fireproximityprompt then
+                            fireproximityprompt(prompt)
+                        else
+                            vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                            task.wait(0.04)
+                            vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                        end
+                        task.wait(0.05)
+                    end
+                end
 
-    local heroNames = {}
-    for name, _ in pairs(heroData) do table.insert(heroNames, name) end
-    table.sort(heroNames)
+                hrp.CFrame = savedCF
+                Notify("Moro Soul", "Collected all food items!", 2, "Success")
+            end)
+        end
+    })
 
+    -- =====================================================================
+    --                            UPGRADE TAB
+    -- =====================================================================
     _G.BuyCrystalsAmount = 10
     _G.UseCrystalsAmount = 10
-    _G.SelectedHeroPath = heroData["Iguro Obanai"]
+    _G.SelectedCrystalTier = "经验水晶3"
+    _G.SelectedHeroPath = heroData["Iguro Obanai"] or "伊黑小芭内"
 
-    UpgradeTab:AddToggle("Auto Buy Crystals", function(state)
-        _G.AutoBuyCrystals = state
-        if state then
-            task.spawn(function()
-                while _G.AutoBuyCrystals do
-                    local args = {"\232\180\173\228\185\176\231\187\143\233\170\140\230\176\180\230\153\182", "\231\187\143\233\170\140\230\176\180\230\153\1823", _G.BuyCrystalsAmount}
-                    game:GetService("ReplicatedStorage"):WaitForChild("Packages"):WaitForChild("EventBus"):WaitForChild("EventProvider"):WaitForChild("default_RemoteEvent"):FireServer(unpack(args))
-                    task.wait(0.5)
-                end
-            end)
+    local crystalTiers = {
+        ["Tier 1 - Small (10k Souls)"] = "经验水晶1",
+        ["Tier 2 - Medium (100k Souls)"] = "经验水晶2",
+        ["Tier 3 - Large (10M Souls)"] = "经验水晶3"
+    }
+
+    UpgradeTab:Column("left")
+
+    local CrystalSec = wrapSection(UpgradeTab:CreateSection({ Name = "Experience Crystals", Collapsible = true }))
+
+    CrystalSec:AddDropdown({
+        Name = "Crystal Tier",
+        Options = {"Tier 1 - Small (10k Souls)", "Tier 2 - Medium (100k Souls)", "Tier 3 - Large (10M Souls)"},
+        Default = "Tier 3 - Large (10M Souls)",
+        Callback = function(val)
+            _G.SelectedCrystalTier = crystalTiers[val] or "经验水晶3"
+            Notify("Moro Soul", "Selected: " .. tostring(val), 2, "Info")
         end
-    end)
+    })
 
-    UpgradeTab:AddButton("Buy crystals (one-time)", function()
-        local args = {
-            "\232\180\173\228\185\176\231\187\143\233\170\140\230\176\180\230\153\182", 
-            "\231\187\143\233\170\140\230\176\180\230\153\1823", 
-            _G.BuyCrystalsAmount
-        }
-        game:GetService("ReplicatedStorage"):WaitForChild("Packages"):WaitForChild("EventBus"):WaitForChild("EventProvider"):WaitForChild("default_RemoteEvent"):FireServer(unpack(args))
-    end)
-
-    -- BUY SECTION
-    UpgradeTab:AddTextBox("Buy Amount", "Enter count...", function(val)
-        local num = tonumber(val)
-        if num then _G.BuyCrystalsAmount = num end
-    end)
-
-    UpgradeTab:AddToggle("Auto Upgrade Hero", function(state)
-        _G.AutoUpgradeHero = state
-        if state then
-            task.spawn(function()
-                while _G.AutoUpgradeHero do
-                    local args = {
-                        "/\229\141\161\231\137\140\231\179\187\231\187\159/\229\141\161\231\137\140\229\141\135\231\186\167/\229\162\158\229\138\160\231\187\143\233\170\140?\229\164\154\230\172\161\232\180\173\228\185\176",
-                        _G.UseCrystalsAmount,
-                        "/\229\141\161\231\137\140\231\179\187\231\187\159/\229\141\161\231\137\140\232\131\140\229\140\133/" .. _G.SelectedHeroPath,
-                        "/\233\129\147\229\133\183/\231\187\143\233\170\140\230\176\180\230\153\1823"
-                    }
-                    pcall(function()
-                        game:GetService("ReplicatedStorage"):WaitForChild("WuKong"):WaitForChild("RemoteActionFunction"):InvokeServer(unpack(args))
-                    end)
-                    task.wait(1)
-                end
-            end)
+    CrystalSec:AddTextbox({
+        Name = "Buy Amount",
+        Default = "10",
+        Placeholder = "10",
+        Numeric = true,
+        Callback = function(val)
+            local num = tonumber(val)
+            if num and num > 0 then _G.BuyCrystalsAmount = num end
         end
-    end)
+    })
 
-    UpgradeTab:AddButton("Upgrade (One-time)", function()
-        local args = {
-            "/\229\141\161\231\137\140\231\179\187\231\187\159/\229\141\161\231\137\140\229\141\135\231\186\167/\229\162\158\229\138\160\231\187\143\233\170\140?\229\164\154\230\172\161\232\180\173\228\185\176",
-            _G.UseCrystalsAmount,
-            "/\229\141\161\231\137\140\231\179\187\231\187\159/\229\141\161\231\137\140\232\131\140\229\140\133/" .. _G.SelectedHeroPath,
-            "/\233\129\147\229\133\183/\231\187\143\233\170\140\230\176\180\230\153\1823"
-        }
-        pcall(function()
-            game:GetService("ReplicatedStorage"):WaitForChild("WuKong"):WaitForChild("RemoteActionFunction"):InvokeServer(unpack(args))
-        end)
-    end)
+    CrystalSec:AddButton({
+        Name = "Buy Crystals (One-Time)",
+        Primary = false,
+        Callback = function()
+            local tier = _G.SelectedCrystalTier or "经验水晶3"
+            if EventBus and EventBus.FireServer then
+                EventBus.FireServer("购买经验水晶", tier, _G.BuyCrystalsAmount)
+            else
+                local args = {"购买经验水晶", tier, _G.BuyCrystalsAmount}
+                pcall(function()
+                    rs.Packages.EventBus.EventProvider.default_RemoteEvent:FireServer(unpack(args))
+                end)
+            end
+            Notify("Moro Soul", "Bought " .. _G.BuyCrystalsAmount .. " crystals", 2, "Success")
+        end
+    })
 
-    -- UPGRADE SECTION
-    UpgradeTab:AddTextBox("Upgrade Amount", "Enter count...", function(val)
-        local num = tonumber(val)
-        if num then _G.UseCrystalsAmount = num end
-    end)
+    CrystalSec:AddToggle({
+        Name = "Auto Buy Crystals",
+        Default = false,
+        Callback = function(state)
+            _G.AutoBuyCrystals = state
+            if state then
+                task.spawn(function()
+                    while _G.AutoBuyCrystals do
+                        local tier = _G.SelectedCrystalTier or "经验水晶3"
+                        if EventBus and EventBus.FireServer then
+                            EventBus.FireServer("购买经验水晶", tier, _G.BuyCrystalsAmount)
+                        else
+                            local args = {"购买经验水晶", tier, _G.BuyCrystalsAmount}
+                            pcall(function()
+                                rs.Packages.EventBus.EventProvider.default_RemoteEvent:FireServer(unpack(args))
+                            end)
+                        end
+                        task.wait(0.5)
+                    end
+                end)
+            end
+        end
+    })
 
-    UpgradeTab:AddDropdown("Select Character", heroNames, function(val)
-        _G.SelectedHeroPath = heroData[val]
-        Library:Notify("Moro Lumina", "Selected: " .. val, 2)
-    end)
+    UpgradeTab:Column("right")
 
+    local HeroSec = wrapSection(UpgradeTab:CreateSection({ Name = "Hero Upgrade", Collapsible = true }))
 
-    -- === EXPLOITS TAB ===
-    local Players = game:GetService("Players")
-    local RunService = game:GetService("RunService")
-    local TweenService = game:GetService("TweenService")
+    HeroSec:AddDropdown({
+        Name = "Select Character",
+        Options = heroNames,
+        Default = heroNames[1] or "Iguro Obanai",
+        Callback = function(val)
+            _G.SelectedHeroPath = heroData[val]
+            Notify("Moro Soul", "Selected Hero: " .. tostring(val), 2, "Info")
+        end
+    })
 
-    local player = Players.LocalPlayer
+    HeroSec:AddTextbox({
+        Name = "Upgrade Amount",
+        Default = "10",
+        Placeholder = "10",
+        Numeric = true,
+        Callback = function(val)
+            local num = tonumber(val)
+            if num and num > 0 then _G.UseCrystalsAmount = num end
+        end
+    })
+
+    HeroSec:AddButton({
+        Name = "Upgrade Hero (One-Time)",
+        Primary = true,
+        Callback = function()
+            local tier = _G.SelectedCrystalTier or "经验水晶3"
+            local heroPath = _G.SelectedHeroPath or "伊黑小芭内"
+            local args = {
+                "/卡牌系统/卡牌升级/增加经验?多次购买",
+                _G.UseCrystalsAmount,
+                "/卡牌系统/卡牌背包/" .. heroPath,
+                "/道具/" .. tier
+            }
+            pcall(function()
+                rs.WuKong.RemoteActionFunction:InvokeServer(unpack(args))
+            end)
+            Notify("Moro Soul", "Hero upgrade executed", 2, "Success")
+        end
+    })
+
+    HeroSec:AddToggle({
+        Name = "Auto Upgrade Hero",
+        Default = false,
+        Callback = function(state)
+            _G.AutoUpgradeHero = state
+            if state then
+                task.spawn(function()
+                    while _G.AutoUpgradeHero do
+                        local tier = _G.SelectedCrystalTier or "经验水晶3"
+                        local heroPath = _G.SelectedHeroPath or "伊黑小芭内"
+                        local args = {
+                            "/卡牌系统/卡牌升级/增加经验?多次购买",
+                            _G.UseCrystalsAmount,
+                            "/卡牌系统/卡牌背包/" .. heroPath,
+                            "/道具/" .. tier
+                        }
+                        pcall(function()
+                            rs.WuKong.RemoteActionFunction:InvokeServer(unpack(args))
+                        end)
+                        task.wait(0.8)
+                    end
+                end)
+            end
+        end
+    })
+
+    -- =====================================================================
+    --                           EXPLOITS TAB
+    -- =====================================================================
     local Camera = workspace.CurrentCamera
-
     local isGhost = false
     local ghostConn = nil
     local fakeCamPart = nil
     local ghostPlatform = nil
     local ghostBall = nil
 
+    ExploitsTab:Column("left")
 
-    ExploitsTab:AddToggle("Ghost", function(state)
-        isGhost = state
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChild("Humanoid")
-        
-        if isGhost and hrp then
-            -- 1. Platform
-            ghostPlatform = Instance.new("Part")
-            ghostPlatform.Name = "GhostSafePlatform"
-            ghostPlatform.Size = Vector3.new(10, 1, 10)
-            ghostPlatform.Anchored = true
-            ghostPlatform.CanCollide = true
-            ghostPlatform.Transparency = 1 
-            ghostPlatform.Parent = workspace
+    local GhostSec = wrapSection(ExploitsTab:CreateSection({ Name = "Ghost Mode", Collapsible = true }))
 
-            fakeCamPart = Instance.new("Part")
-            fakeCamPart.Name = "GhostCamAnchor"
-            fakeCamPart.Transparency = 1
-            fakeCamPart.CanCollide = false
-            fakeCamPart.Anchored = true
-            fakeCamPart.Parent = workspace
+    GhostSec:AddToggle({
+        Name = "Ghost",
+        Default = false,
+        Callback = function(state)
+            isGhost = state
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hum = char and char:FindFirstChild("Humanoid")
             
-            Camera.CameraSubject = fakeCamPart
-            -- 2. Ball
-            ghostBall = Instance.new("Part")
-            ghostBall.Name = "GhostVisualBall"
-            ghostBall.Shape = Enum.PartType.Ball
-            ghostBall.Size = Vector3.new(1.2, 1.2, 1.2)
-            ghostBall.Color = Color3.fromRGB(0, 255, 255)
-            ghostBall.Material = Enum.Material.Neon
-            ghostBall.Transparency = 0.3
-            ghostBall.CanCollide = false
-            ghostBall.Anchored = true
-            ghostBall.Parent = workspace
+            if isGhost and hrp then
+                ghostPlatform = Instance.new("Part")
+                ghostPlatform.Name = "GhostSafePlatform"
+                ghostPlatform.Size = Vector3.new(10, 1, 10)
+                ghostPlatform.Anchored = true
+                ghostPlatform.CanCollide = true
+                ghostPlatform.Transparency = 1 
+                ghostPlatform.Parent = workspace
 
-            local light = Instance.new("PointLight")
-            light.Color = ghostBall.Color
-            light.Range = 10
-            light.Brightness = 2
-            light.Parent = ghostBall
+                fakeCamPart = Instance.new("Part")
+                fakeCamPart.Name = "GhostCamAnchor"
+                fakeCamPart.Transparency = 1
+                fakeCamPart.CanCollide = false
+                fakeCamPart.Anchored = true
+                fakeCamPart.Parent = workspace
+                
+                Camera.CameraSubject = fakeCamPart
 
-            
-            ghostConn = RunService.Heartbeat:Connect(function()
-                if not isGhost or not hrp.Parent then return end
-                
-                local realCF = hrp.CFrame
-                
-                fakeCamPart.CFrame = realCF
-                if ghostBall then
-                    ghostBall.CFrame = realCF * CFrame.new(0, 3.5, 0)
-                end
+                ghostBall = Instance.new("Part")
+                ghostBall.Name = "GhostVisualBall"
+                ghostBall.Shape = Enum.PartType.Ball
+                ghostBall.Size = Vector3.new(1.2, 1.2, 1.2)
+                ghostBall.Color = Color3.fromRGB(0, 255, 255)
+                ghostBall.Material = Enum.Material.Neon
+                ghostBall.Transparency = 0.3
+                ghostBall.CanCollide = false
+                ghostBall.Anchored = true
+                ghostBall.Parent = workspace
 
-                -- Move true body and platform
-                local followPos = realCF * CFrame.new(0, -10, 0)
-                hrp.CFrame = followPos
+                local light = Instance.new("PointLight")
+                light.Color = ghostBall.Color
+                light.Range = 10
+                light.Brightness = 2
+                light.Parent = ghostBall
                 
-                ghostPlatform.CFrame = followPos * CFrame.new(0, -3, 0)
-                
-                RunService.RenderStepped:Wait()
-                
-                hrp.CFrame = realCF
-            end)
-        else
-            isGhost = false
-            if ghostConn then ghostConn:Disconnect() end
-            if hum then Camera.CameraSubject = hum end
-            if fakeCamPart then fakeCamPart:Destroy() end
-            if ghostBall then ghostBall:Destroy() ghostBall = nil end
+                ghostConn = runService.Heartbeat:Connect(function()
+                    if not isGhost or not hrp.Parent then return end
+                    
+                    local realCF = hrp.CFrame
+                    fakeCamPart.CFrame = realCF
+                    if ghostBall then
+                        ghostBall.CFrame = realCF * CFrame.new(0, 3.5, 0)
+                    end
 
-            
-            if ghostPlatform then 
-                ghostPlatform:Destroy() 
-                ghostPlatform = nil
-            end
-            
-            if hrp then
-                hrp.Velocity = Vector3.new(0,0,0)
+                    local followPos = realCF * CFrame.new(0, -10, 0)
+                    hrp.CFrame = followPos
+                    ghostPlatform.CFrame = followPos * CFrame.new(0, -3, 0)
+                    
+                    runService.RenderStepped:Wait()
+                    hrp.CFrame = realCF
+                end)
+            else
+                isGhost = false
+                if ghostConn then ghostConn:Disconnect() end
+                if hum then Camera.CameraSubject = hum end
+                if fakeCamPart then fakeCamPart:Destroy() end
+                if ghostBall then ghostBall:Destroy() ghostBall = nil end
+                if ghostPlatform then ghostPlatform:Destroy() ghostPlatform = nil end
+                if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
             end
         end
-    end)
+    })
 
     local autoCrowdTpConn = false
     local lastWaypoint = Vector3.new(438, 35, 1014)
 
-    ExploitsTab:AddToggle("Auto TP to Crowd", function(state)
-        autoCrowdTpConn = state
-        
-        if state then
-            task.spawn(function()
-                while autoCrowdTpConn do
-                    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        local playersList = Players:GetPlayers()
-                        local bestTargetPos = nil
-                        local maxNearby = -1
-                        local minDistanceToWaypoint = math.huge
-
-                        -- Crowd finding
-                        for _, p in pairs(playersList) do
-                            if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                                local currentPos = p.Character.HumanoidRootPart.Position
-                                local nearbyCount = 0
-
-                                for _, otherP in pairs(playersList) do
-                                    if otherP.Character and otherP.Character:FindFirstChild("HumanoidRootPart") then
-                                        local dist = (currentPos - otherP.Character.HumanoidRootPart.Position).Magnitude
-                                        if dist < 20 then
-                                            nearbyCount = nearbyCount + 1
-                                        end
-                                    end
-                                end
-
-                                local distToLastPoint = (currentPos - lastWaypoint).Magnitude
-
-                                if nearbyCount > maxNearby or (nearbyCount == maxNearby and distToLastPoint < minDistanceToWaypoint) then
-                                    maxNearby = nearbyCount
-                                    minDistanceToWaypoint = distToLastPoint
-                                    bestTargetPos = p.Character.HumanoidRootPart.CFrame
-                                end
-                            end
-                        end
-
-                        -- Tp
-                        if bestTargetPos then
-                            local tpDestination = bestTargetPos
-                            
-                            if isGhost and fakeCamPart then
-                                hrp.CFrame = tpDestination
-                                fakeCamPart.CFrame = tpDestination
-                                
-                                if ghostPlatform then
-                                    ghostPlatform.CFrame = tpDestination * CFrame.new(0, -13, 0)
-                                end
-                            else
-                                hrp.CFrame = tpDestination
-                            end
-                        end
-                    end
-                    task.wait(10)
-                end
-            end)
-        end
-    end)
-
-
-    ExploitsTab:AddButton("TP to Crowd (Once)", function()
-        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-
-        local playersList = Players:GetPlayers()
+    local function GetBestCrowdPos()
+        local playersList = players:GetPlayers()
         local bestTargetPos = nil
         local maxNearby = -1
         local minDistanceToWaypoint = math.huge
-        local lastWaypoint = Vector3.new(438, 35, 1014)
 
-        for _, p in pairs(playersList) do
+        for _, p in ipairs(playersList) do
             if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
                 local currentPos = p.Character.HumanoidRootPart.Position
                 local nearbyCount = 0
 
-                for _, otherP in pairs(playersList) do
+                for _, otherP in ipairs(playersList) do
                     if otherP.Character and otherP.Character:FindFirstChild("HumanoidRootPart") then
                         local dist = (currentPos - otherP.Character.HumanoidRootPart.Position).Magnitude
                         if dist < 20 then
@@ -1169,7 +1583,6 @@ if Library then
                 end
 
                 local distToLastPoint = (currentPos - lastWaypoint).Magnitude
-
                 if nearbyCount > maxNearby or (nearbyCount == maxNearby and distToLastPoint < minDistanceToWaypoint) then
                     maxNearby = nearbyCount
                     minDistanceToWaypoint = distToLastPoint
@@ -1177,213 +1590,1030 @@ if Library then
                 end
             end
         end
+        return bestTargetPos, maxNearby
+    end
 
-        if bestTargetPos then
-            local tpDestination = bestTargetPos
-            
-            if isGhost and fakeCamPart then
-                hrp.CFrame = tpDestination
-                fakeCamPart.CFrame = tpDestination
-                
-                if ghostPlatform then
-                    ghostPlatform.CFrame = tpDestination * CFrame.new(0, -13, 0)
-                end
-                Library:Notify("Moro Tools", "Ghost TP to Crowd (" .. maxNearby .. " players)", 2)
-            else
-                hrp.CFrame = tpDestination
-                Library:Notify("Moro Lumina", "TP to Crowd (" .. maxNearby .. " players)", 2)
+    ExploitsTab:Column("right")
+
+    local CrowdSec = wrapSection(ExploitsTab:CreateSection({ Name = "Crowd Teleport", Collapsible = true }))
+
+    CrowdSec:AddToggle({
+        Name = "Auto TP to Crowd",
+        Default = false,
+        Callback = function(state)
+            autoCrowdTpConn = state
+            if state then
+                task.spawn(function()
+                    while autoCrowdTpConn do
+                        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            local bestTargetPos, _ = GetBestCrowdPos()
+                            if bestTargetPos then
+                                if isGhost and fakeCamPart then
+                                    hrp.CFrame = bestTargetPos
+                                    fakeCamPart.CFrame = bestTargetPos
+                                    if ghostPlatform then
+                                        ghostPlatform.CFrame = bestTargetPos * CFrame.new(0, -13, 0)
+                                    end
+                                else
+                                    hrp.CFrame = bestTargetPos
+                                end
+                            end
+                        end
+                        task.wait(10)
+                    end
+                end)
             end
-        else
-            Library:Notify("Moro Lumina", "No crowd found", 2)
         end
-    end)
+    })
 
+    CrowdSec:AddButton({
+        Name = "TP to Crowd (Once)",
+        Primary = false,
+        Callback = function()
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
 
-    -- 1. IDs
+            local bestTargetPos, maxNearby = GetBestCrowdPos()
+            if bestTargetPos then
+                if isGhost and fakeCamPart then
+                    hrp.CFrame = bestTargetPos
+                    fakeCamPart.CFrame = bestTargetPos
+                    if ghostPlatform then
+                        ghostPlatform.CFrame = bestTargetPos * CFrame.new(0, -13, 0)
+                    end
+                    Notify("Moro Soul", "Ghost TP to Crowd (" .. maxNearby .. " players)", 2, "Success")
+                else
+                    hrp.CFrame = bestTargetPos
+                    Notify("Moro Soul", "TP to Crowd (" .. maxNearby .. " players)", 2, "Success")
+                end
+            else
+                Notify("Moro Soul", "No crowd found", 2, "Warning")
+            end
+        end
+    })
 
+    -- =====================================================================
+    --                           DISPATCH TAB
+    -- =====================================================================
     local selectedRole1 = nil
     local selectedRole2 = nil
     local selectedRole3 = nil
 
-    local dispatchRoles = {
-        ["Nezuko"] = 1,
-        ["Inosuke"] = 2,
-        ["Tanjirou[Water]"] = 3,
-        ["Rui"] = 4,
-        ["Zenitsu"] = 5,
-        ["Tanjirou[HinokamiKagura]"] = 6,
-        ["Shinobu"] = 7,
-        ["Giyu"] = 8,
-        ["Rengoku"] = 9,
-        ["Akaza"] = 10,
-        ["Susamaru"] = 11,
-        ["Yahaba"] = 12,
-        ["Yushirou"] = 13,
-        ["Enmu"] = 14,
-        ["Urokodaki"] = 15,
-        ["Tsuyuri Kanawo"] = 16,
-        ["Kanroji Mitsuri"] = 17,
-        ["Kaigaku"] = 18,
-        ["Daki"] = 19,
-        ["Gyuutarou"] = 20,
-        ["Uzui Tengen"] = 21,
-        ["Iguro Obanai"] = 22,
-        ["Tokitou Muichirou"] = 23,
-        ["Shinazugawa Sanemi"] = 24,
-        ["Himejima Kyoumei"] = 25,
-        ["Douma"] = 26,
-        ["Tanjiro[Yoshiwara]"] = 27,
-        ["Zenitsu[Yoshiwara]"] = 28,
-        ["Inosuke[Yoshiwara]"] = 29,
-        ["Nezuko[Demonic]"] = 30,
-        ["Murata"] = 31,
-        ["Shinazugawa Genya"] = 32,
-        ["Hinatsuru"] = 33,
-        ["Zohakuten"] = 34,
-        ["Tanjirou[Swordsmith]"] = 35
-    }
+    DispatchTab:Column("left")
 
-    local roleNames = {}
-    for name, _ in pairs(dispatchRoles) do table.insert(roleNames, name) end
-    table.sort(roleNames)
+    local RoleSec = wrapSection(DispatchTab:CreateSection({ Name = "Select Roles", Collapsible = true }))
 
-    -- === DROPDOWNS ===
-    DispatchTab:AddDropdown("Select Role 1", roleNames, function(val)
-        selectedRole1 = dispatchRoles[val]
-    end)
-
-    DispatchTab:AddDropdown("Select Role 2", roleNames, function(val)
-        selectedRole2 = dispatchRoles[val]
-    end)
-
-    DispatchTab:AddDropdown("Select Role 3", roleNames, function(val)
-        selectedRole3 = dispatchRoles[val]
-    end)
-
-    -- === SENDING  ===
-    DispatchTab:AddButton("Send Selected to Dispatch", function()
-        local toSend = {}
-        if selectedRole1 then table.insert(toSend, selectedRole1) end
-        if selectedRole2 then table.insert(toSend, selectedRole2) end
-        if selectedRole3 then table.insert(toSend, selectedRole3) end
-
-        if #toSend == 0 then
-            Library:Notify("Moro Lumina", "Select at least one role!", 3)
-            return
+    RoleSec:AddDropdown({
+        Name = "Select Role 1",
+        Options = roleNames,
+        Default = roleNames[1] or "",
+        Callback = function(val)
+            selectedRole1 = dispatchRoles[val]
         end
+    })
 
-        task.spawn(function()
-            for _, roleId in ipairs(toSend) do
-                local args = { roleId }
-                game:GetService("ReplicatedStorage"):WaitForChild("RemoteEvents"):WaitForChild("Dispatch"):FireServer(unpack(args))
-                
-                task.wait(0.1) 
+    RoleSec:AddDropdown({
+        Name = "Select Role 2",
+        Options = roleNames,
+        Default = roleNames[2] or "",
+        Callback = function(val)
+            selectedRole2 = dispatchRoles[val]
+        end
+    })
+
+    RoleSec:AddDropdown({
+        Name = "Select Role 3",
+        Options = roleNames,
+        Default = roleNames[3] or "",
+        Callback = function(val)
+            selectedRole3 = dispatchRoles[val]
+        end
+    })
+
+    local ManualDispatchSec = wrapSection(DispatchTab:CreateSection({ Name = "Manual Dispatch Actions", Collapsible = true }))
+
+    ManualDispatchSec:AddButton({
+        Name = "Send Selected to Dispatch",
+        Primary = true,
+        Callback = function()
+            local toSend = {}
+            if selectedRole1 then table.insert(toSend, selectedRole1) end
+            if selectedRole2 then table.insert(toSend, selectedRole2) end
+            if selectedRole3 then table.insert(toSend, selectedRole3) end
+
+            if #toSend == 0 then
+                Notify("Moro Soul", "Select at least one role!", 2, "Warning")
+                return
             end
-            Library:Notify("Moro Lumina", "Sent " .. #toSend .. " roles to dispatch!", 2)
-        end)
-    end)
 
-    -- === CLAIM REWARDS ===
-    DispatchTab:AddButton("Claim Rewards", function()
-        local idsToClaim = {}
-        if selectedRole1 then table.insert(idsToClaim, selectedRole1) end
-        if selectedRole2 then table.insert(idsToClaim, selectedRole2) end
-        if selectedRole3 then table.insert(idsToClaim, selectedRole3) end
-
-        if #idsToClaim > 0 then
-            local args = {
-                "ClaimDispatchReward",
-                idsToClaim 
-            }
-            game:GetService("ReplicatedStorage"):WaitForChild("Packages"):WaitForChild("EventBus"):WaitForChild("EventProvider"):WaitForChild("default_RemoteEvent"):FireServer(unpack(args))
-            Library:Notify("Moro Lumina", "Claimed rewards for " .. #idsToClaim .. " roles!", 2)
-        else
-            Library:Notify("Moro Lumina", "Select roles to claim!", 3)
+            task.spawn(function()
+                for _, roleId in ipairs(toSend) do
+                    remoteFolder.Dispatch:FireServer(roleId)
+                    task.wait(0.15) 
+                end
+                Notify("Moro Soul", "Sent " .. #toSend .. " roles to dispatch!", 2, "Success")
+            end)
         end
-    end)
+    })
 
-    -- === CANCEL DISPATCH ===
-    DispatchTab:AddButton("Cancel Dispatch", function()
-        local toCancel = {}
-        if selectedRole1 then table.insert(toCancel, selectedRole1) end
-        if selectedRole2 then table.insert(toCancel, selectedRole2) end
-        if selectedRole3 then table.insert(toCancel, selectedRole3) end
+    ManualDispatchSec:AddButton({
+        Name = "Claim Rewards",
+        Primary = false,
+        Callback = function()
+            local idsToClaim = {}
+            if selectedRole1 then table.insert(idsToClaim, selectedRole1) end
+            if selectedRole2 then table.insert(idsToClaim, selectedRole2) end
+            if selectedRole3 then table.insert(idsToClaim, selectedRole3) end
 
-        if #toCancel == 0 then
-            Library:Notify("Moro Lumina", "No roles selected to cancel!", 3)
-            return
-        end
-
-        task.spawn(function()
-            for _, roleId in ipairs(toCancel) do
-                local args = { roleId }
-                game:GetService("ReplicatedStorage"):WaitForChild("RemoteEvents"):WaitForChild("CancelDispatch"):FireServer(unpack(args))
-                task.wait(0.1)
+            if #idsToClaim > 0 then
+                if EventBus and EventBus.FireServer then
+                    EventBus.FireServer("ClaimDispatchReward", idsToClaim)
+                else
+                    rs.Packages.EventBus.EventProvider.default_RemoteEvent:FireServer("ClaimDispatchReward", idsToClaim)
+                end
+                Notify("Moro Soul", "Claimed rewards for " .. #idsToClaim .. " roles!", 2, "Success")
+            else
+                Notify("Moro Soul", "Select roles to claim!", 2, "Warning")
             end
-            Library:Notify("Moro Lumina", "Cancelled dispatch for selected roles!", 2)
-        end)
-    end)
+        end
+    })
+
+    ManualDispatchSec:AddButton({
+        Name = "Cancel Dispatch",
+        Primary = false,
+        Callback = function()
+            local toCancel = {}
+            if selectedRole1 then table.insert(toCancel, selectedRole1) end
+            if selectedRole2 then table.insert(toCancel, selectedRole2) end
+            if selectedRole3 then table.insert(toCancel, selectedRole3) end
+
+            if #toCancel == 0 then
+                Notify("Moro Soul", "No roles selected to cancel!", 2, "Warning")
+                return
+            end
+
+            task.spawn(function()
+                for _, roleId in ipairs(toCancel) do
+                    remoteFolder.CancelDispatch:FireServer(roleId)
+                    task.wait(0.1)
+                end
+                Notify("Moro Soul", "Cancelled dispatch for selected roles!", 2, "Info")
+            end)
+        end
+    })
+
+    DispatchTab:Column("right")
+
+    local AutoDispatchSec = wrapSection(DispatchTab:CreateSection({ Name = "Automated Dispatch", Collapsible = true }))
 
     local autoDispatchConn = false
 
-    DispatchTab:AddToggle("Auto Dispatch", function(state)
-        autoDispatchConn = state
-        
-        if state then
+    AutoDispatchSec:AddToggle({
+        Name = "Auto Dispatch",
+        Default = false,
+        Callback = function(state)
+            autoDispatchConn = state
+            
+            if state then
+                task.spawn(function()
+                    while autoDispatchConn do
+                        local roles = {}
+                        if selectedRole1 then table.insert(roles, selectedRole1) end
+                        if selectedRole2 then table.insert(roles, selectedRole2) end
+                        if selectedRole3 then table.insert(roles, selectedRole3) end
+                        
+                        if #roles == 0 then
+                            Notify("Moro Soul", "AutoDispatch: No roles selected!", 2, "Warning")
+                            autoDispatchConn = false
+                            break
+                        end
+
+                        for _, roleId in ipairs(roles) do
+                            if not autoDispatchConn then break end
+                            remoteFolder.Dispatch:FireServer(roleId)
+                            task.wait(0.2)
+                        end
+                        
+                        Notify("Moro Soul", "AutoDispatch: Sent roles. Monitoring timers...", 2, "Info")
+
+                        local dispatchDuration = 1802
+                        pcall(function()
+                            dispatchDuration = rs.Configs.GlobalConfigs.DispatchTime.Value + 2
+                        end)
+
+                        for i = 1, dispatchDuration do
+                            if not autoDispatchConn then break end
+                            task.wait(1)
+                        end
+
+                        if not autoDispatchConn then break end
+
+                        if EventBus and EventBus.FireServer then
+                            EventBus.FireServer("ClaimDispatchReward", roles)
+                        else
+                            rs.Packages.EventBus.EventProvider.default_RemoteEvent:FireServer("ClaimDispatchReward", roles)
+                        end
+                        
+                        Notify("Moro Soul", "AutoDispatch: Rewards claimed! Restarting...", 2, "Success")
+                        task.wait(3)
+                    end
+                end)
+            else
+                Notify("Moro Soul", "Auto Dispatch Disabled", 2, "Info")
+            end
+        end
+    })
+
+    AutoDispatchSec:AddButton({
+        Name = "Claim All Ready Dispatches",
+        Primary = false,
+        Callback = function()
+            local pd = rs:FindFirstChild("PlayerData") and rs.PlayerData:FindFirstChild(player.Name)
+            local dInfo = pd and pd:FindFirstChild("DispatchInfo")
+            local readyList = {}
+            
+            local dispatchTime = 1800
+            pcall(function()
+                dispatchTime = rs.Configs.GlobalConfigs.DispatchTime.Value
+            end)
+            
+            if dInfo then
+                for _, child in ipairs(dInfo:GetChildren()) do
+                    if child.Value >= dispatchTime then
+                        table.insert(readyList, tonumber(child.Name))
+                    end
+                end
+            end
+            
+            if #readyList > 0 then
+                if EventBus and EventBus.FireServer then
+                    EventBus.FireServer("ClaimDispatchReward", readyList)
+                else
+                    rs.Packages.EventBus.EventProvider.default_RemoteEvent:FireServer("ClaimDispatchReward", readyList)
+                end
+                Notify("Moro Soul", "Claimed " .. #readyList .. " ready dispatches!", 2, "Success")
+            else
+                Notify("Moro Soul", "No dispatches ready to claim yet", 2, "Info")
+            end
+        end
+    })
+
+    -- =====================================================================
+    --                           REWARDS & QUESTS TAB
+    -- =====================================================================
+    local promoCodes = {
+        "demon", "demonsoul", "demonsoul300k", "thanks3000likes", "Welcome",
+        "1000likes", "demon150k", "demon100k", "demon50k", "demon20k", "demon10k",
+        "10klikes", "5000likes", "2000likes", "3000likes", "100kmembers",
+        "200kmembers", "300kmembers", "400kmembers", "500kmembers", "600kmembers",
+        "700kmembers", "800kmembers", "1Mmembers", "ADouma", "dakigo", "gyutarogo",
+        "tengen", "shinobu", "kamado", "zenitsu", "inosuke", "kyojuro", "akaza",
+        "rui", "demon500k", "demon600k", "demon700k", "demon800k", "demon1m"
+    }
+
+    RewardsTab:Column("left")
+
+    local PromoSec = wrapSection(RewardsTab:CreateSection({ Name = "Promo Codes", Collapsible = true }))
+
+    PromoSec:AddButton({
+        Name = "Redeem All Promo Codes",
+        Primary = true,
+        Callback = function()
             task.spawn(function()
-                while autoDispatchConn do
-                    local roles = {}
-                    if selectedRole1 then table.insert(roles, selectedRole1) end
-                    if selectedRole2 then table.insert(roles, selectedRole2) end
-                    if selectedRole3 then table.insert(roles, selectedRole3) end
-                    
-                    if #roles == 0 then
-                        Library:Notify("Moro Lumina", "AutoDispatch: No roles selected!", 3)
-                        autoDispatchConn = false
-                        break
+                Notify("Moro Soul", "Redeeming all codes...", 2, "Info")
+                local redeemed = 0
+                for _, code in ipairs(promoCodes) do
+                    pcall(function()
+                        remoteFolder.Code:FireServer(code)
+                    end)
+                    redeemed = redeemed + 1
+                    task.wait(0.35)
+                end
+                Notify("Moro Soul", "Finished! Sent " .. redeemed .. " codes.", 3, "Success")
+            end)
+        end
+    })
+
+    local customCodeText = ""
+    PromoSec:AddTextbox({
+        Name = "Custom Code",
+        Default = "",
+        Placeholder = "Enter promo code...",
+        Callback = function(val)
+            customCodeText = val
+        end
+    })
+
+    PromoSec:AddButton({
+        Name = "Redeem Custom Code",
+        Primary = false,
+        Callback = function()
+            if customCodeText and #customCodeText > 0 then
+                pcall(function()
+                    remoteFolder.Code:FireServer(customCodeText)
+                end)
+                Notify("Moro Soul", "Redeemed code: " .. customCodeText, 2, "Success")
+            else
+                Notify("Moro Soul", "Enter a code first!", 2, "Warning")
+            end
+        end
+    })
+
+    local RouletteSec = wrapSection(RewardsTab:CreateSection({ Name = "Daily Roulette", Collapsible = true }))
+
+    local function spinRoulette()
+        local pd = rs:FindFirstChild("PlayerData") and rs.PlayerData:FindFirstChild(player.Name)
+        local lastTime = pd and pd:FindFirstChild("LastRouletteTime") and pd.LastRouletteTime.Value or 0
+        local elapsed = os.time() - lastTime
+        if elapsed >= 86400 then
+            pcall(function()
+                remoteFolder.Roulette:FireServer()
+            end)
+            Notify("Moro Soul", "Daily Roulette Spun!", 3, "Success")
+            return true
+        else
+            local remaining = 86400 - elapsed
+            local h = math.floor(remaining / 3600)
+            local m = math.floor((remaining % 3600) / 60)
+            Notify("Moro Soul", string.format("Roulette CD: %02d h %02d min", h, m), 3, "Info")
+            return false
+        end
+    end
+
+    RouletteSec:AddButton({
+        Name = "Spin Daily Roulette",
+        Primary = false,
+        Callback = function()
+            spinRoulette()
+        end
+    })
+
+    RouletteSec:AddToggle({
+        Name = "Auto Daily Roulette",
+        Default = false,
+        Callback = function(state)
+            autoRoulette = state
+            if state then
+                task.spawn(function()
+                    while autoRoulette do
+                        spinRoulette()
+                        task.wait(60)
                     end
+                end)
+            end
+        end
+    })
 
-                    -- 1. Sending
-                    for _, roleId in ipairs(roles) do
-                        if not autoDispatchConn then break end
-                        game:GetService("ReplicatedStorage"):WaitForChild("RemoteEvents"):WaitForChild("Dispatch"):FireServer(roleId)
-                        task.wait(0.3)
+    RewardsTab:Column("right")
+
+    local ChestsSec = wrapSection(RewardsTab:CreateSection({ Name = "World Chests & Drops", Collapsible = true }))
+
+    local function safeFirePrompt(obj)
+        if not obj then return false end
+        local pp = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pp then
+            if fireproximityprompt then
+                fireproximityprompt(pp, 0)
+                return true
+            else
+                local char = player.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp and obj:IsA("PVInstance") then
+                    hrp.CFrame = obj:GetPivot()
+                    task.wait(0.1)
+                    vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                    task.wait(0.2)
+                    vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    ChestsSec:AddButton({
+        Name = "Collect ALL Rewards & Chests",
+        Primary = true,
+        Callback = function()
+            task.spawn(function()
+                local char = player.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                local savedCF = hrp and hrp.CFrame
+                local pt = workspace:FindFirstChild("PromptTriggers")
+                if not pt then return end
+                
+                local items = {"TrainChest_1", "TrainChest_2", "MysteryBoxTouch", "GroupRewardTouch"}
+                local collected = 0
+                for _, name in ipairs(items) do
+                    local target = pt:FindFirstChild(name)
+                    if target and target:IsA("PVInstance") and hrp then
+                        hrp.CFrame = target:GetPivot() + Vector3.new(0, 1, 0)
+                        task.wait(0.15)
+                        if safeFirePrompt(target) then
+                            collected = collected + 1
+                        end
+                        task.wait(0.2)
                     end
-                    
-                    Library:Notify("Moro Lumina", "AutoDispatch: Roles sent. Waiting 30 min...", 2)
+                end
+                if savedCF and hrp then
+                    hrp.CFrame = savedCF
+                end
+                Notify("Moro Soul", "Collected " .. collected .. " rewards & returned!", 3, "Success")
+            end)
+        end
+    })
 
-                    -- 2. Waiting
-                    local waitTime = 1802
-                    for i = 1, waitTime do
-                        if not autoDispatchConn then break end
-                        task.wait(1)
+    ChestsSec:AddButton({
+        Name = "Collect Train Chests (1 & 2)",
+        Primary = false,
+        Callback = function()
+            local pt = workspace:FindFirstChild("PromptTriggers")
+            if pt then
+                local c1 = pt:FindFirstChild("TrainChest_1")
+                local c2 = pt:FindFirstChild("TrainChest_2")
+                local count = 0
+                if safeFirePrompt(c1) then count = count + 1 end
+                task.wait(0.2)
+                if safeFirePrompt(c2) then count = count + 1 end
+                Notify("Moro Soul", "Collected " .. count .. " Train Chests", 2, "Success")
+            end
+        end
+    })
+
+    ChestsSec:AddButton({
+        Name = "Collect Mystery Box",
+        Primary = false,
+        Callback = function()
+            local pt = workspace:FindFirstChild("PromptTriggers")
+            local mb = pt and pt:FindFirstChild("MysteryBoxTouch")
+            if safeFirePrompt(mb) then
+                Notify("Moro Soul", "Collected Mystery Box!", 2, "Success")
+            else
+                Notify("Moro Soul", "Mystery Box not found!", 2, "Warning")
+            end
+        end
+    })
+
+    ChestsSec:AddButton({
+        Name = "Claim Group Reward",
+        Primary = false,
+        Callback = function()
+            local pt = workspace:FindFirstChild("PromptTriggers")
+            local gr = pt and pt:FindFirstChild("GroupRewardTouch")
+            if safeFirePrompt(gr) then
+                Notify("Moro Soul", "Claimed Group Reward!", 2, "Success")
+            else
+                Notify("Moro Soul", "Group Reward not found!", 2, "Warning")
+            end
+        end
+    })
+
+    local MissionSec = wrapSection(RewardsTab:CreateSection({ Name = "Missions & Attendance", Collapsible = true }))
+
+    local function claimDailyAttendance()
+        local WuKong = nil
+        pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+        if WuKong then
+            local success = pcall(function()
+                WuKong:ExecuteAction("/活动/每日登录奖励/领取每日登录奖励?购买", "__null__", "__null__")
+            end)
+            if success then
+                Notify("Moro Soul", "Daily Attendance Claimed!", 3, "Success")
+                return true
+            end
+        end
+        return false
+    end
+
+    local function claimReadyMissions()
+        local WuKong = nil
+        pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+        if not WuKong then return 0 end
+        
+        local claimed = 0
+        pcall(function()
+            local subitems = WuKong:ExecuteQuery("/任务/日常任务分组?已激活子项")
+            if subitems then
+                for _, group in pairs(subitems) do
+                    local children = WuKong:ExecuteQuery(("/任务/日常任务分组/%*?已激活子项"):format(group))
+                    if children then
+                        for _, id in pairs(children) do
+                            local path = ("/任务/日常任务分组/%*/%*"):format(group, id)
+                            local config = WuKong:ExecuteQuery(path .. "?获取元素配置")
+                            local progress = WuKong:ExecuteQuery(path .. "?获取监听事件计数")
+                            if config and config.Tags and progress then
+                                local maxProgress = config.Tags[3] - 0
+                                if progress >= maxProgress then
+                                    local validate = WuKong:ExecuteValidate(path .. "?购买验证", "__null__", "__null__")
+                                    if validate and not validate:getHasError() then
+                                        pcall(function()
+                                            WuKong:ExecuteAction(path .. "?购买")
+                                            claimed = claimed + 1
+                                        end)
+                                        task.wait(0.2)
+                                    end
+                                end
+                            end
+                        end
                     end
+                end
+            end
+        end)
+        return claimed
+    end
 
-                    if not autoDispatchConn then break end
+    MissionSec:AddButton({
+        Name = "Claim Daily Attendance (7-Day)",
+        Primary = false,
+        Callback = function()
+            if not claimDailyAttendance() then
+                Notify("Moro Soul", "Attendance already claimed or not ready", 2, "Info")
+            end
+        end
+    })
 
-                    -- 3. Claiming
-                    local claimArgs = {
-                        "ClaimDispatchReward",
-                        roles
-                    }
-                    game:GetService("ReplicatedStorage"):WaitForChild("Packages"):WaitForChild("EventBus"):WaitForChild("EventProvider"):WaitForChild("default_RemoteEvent"):FireServer(unpack(claimArgs))
-                    
-                    Library:Notify("Moro Lumina", "AutoDispatch: Rewards claimed!", 2)
-
-                    -- 4. Pause
-                    task.wait(2)
-                    
-                    if not autoDispatchConn then break end
-                    Library:Notify("Moro Lumina", "AutoDispatch: Restarting cycle...", 2)
+    MissionSec:AddButton({
+        Name = "Claim Ready Daily Missions",
+        Primary = false,
+        Callback = function()
+            task.spawn(function()
+                local c = claimReadyMissions()
+                if c > 0 then
+                    Notify("Moro Soul", "Claimed " .. c .. " daily missions!", 3, "Success")
+                else
+                    Notify("Moro Soul", "No missions ready to claim", 2, "Info")
                 end
             end)
-        else
-            Library:Notify("Moro Lumina", "Auto Dispatch Disabled", 2)
         end
-    end)
+    })
 
+    MissionSec:AddToggle({
+        Name = "Auto Claim Missions",
+        Default = false,
+        Callback = function(state)
+            autoMissions = state
+            if state then
+                task.spawn(function()
+                    while autoMissions do
+                        claimDailyAttendance()
+                        claimReadyMissions()
+                        task.wait(30)
+                    end
+                end)
+            end
+        end
+    })
 
-    Library:Notify("Moro Lumina", "The script is executed!", 2)
+    -- =====================================================================
+    --                           EXPLOITS TAB
+    -- =====================================================================
+    ExploitsTab:Column("left")
 
+    -- 1. World & Wall Exploits
+    local WallSec = wrapSection(ExploitsTab:CreateSection({ Name = "World & Wall Exploits", Collapsible = true }))
+
+    local bypassWallsActive = false
+    local wallConn = nil
+
+    local function applyWallBypass()
+        local walls = workspace:FindFirstChild("LockedAreaWalls")
+        if walls then
+            for _, model in ipairs(walls:GetChildren()) do
+                for _, part in ipairs(model:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                        part.Transparency = 0.7
+                    end
+                end
+            end
+        end
+    end
+
+    WallSec:AddToggle({
+        Name = "Bypass Locked Walls",
+        Default = false,
+        Callback = function(state)
+            bypassWallsActive = state
+            if state then
+                applyWallBypass()
+                if wallConn then wallConn:Disconnect() end
+                wallConn = runService.Heartbeat:Connect(function()
+                    if bypassWallsActive then
+                        applyWallBypass()
+                    end
+                end)
+                Notify("Moro Soul", "Locked Walls Bypassed! All Areas Accessible", 2, "Success")
+            else
+                if wallConn then
+                    wallConn:Disconnect()
+                    wallConn = nil
+                end
+                local walls = workspace:FindFirstChild("LockedAreaWalls")
+                if walls then
+                    for _, model in ipairs(walls:GetChildren()) do
+                        for _, part in ipairs(model:GetDescendants()) do
+                            if part:IsA("BasePart") then
+                                part.CanCollide = true
+                                part.Transparency = 0
+                            end
+                        end
+                    end
+                end
+                Notify("Moro Soul", "Locked Walls Restored", 2, "Info")
+            end
+        end
+    })
+
+    local noClipActive = false
+    local noClipConn = nil
+
+    WallSec:AddToggle({
+        Name = "No-Clip (Ghost Mode)",
+        Default = false,
+        Callback = function(state)
+            noClipActive = state
+            if state then
+                if noClipConn then noClipConn:Disconnect() end
+                noClipConn = runService.Stepped:Connect(function()
+                    local char = player.Character
+                    if char and noClipActive then
+                        for _, part in ipairs(char:GetDescendants()) do
+                            if part:IsA("BasePart") and part.CanCollide then
+                                part.CanCollide = false
+                            end
+                        end
+                    end
+                end)
+                Notify("Moro Soul", "No-Clip Activated!", 2, "Success")
+            else
+                if noClipConn then
+                    noClipConn:Disconnect()
+                    noClipConn = nil
+                end
+                Notify("Moro Soul", "No-Clip Disabled", 2, "Info")
+            end
+        end
+    })
+
+    local infJumpActive = false
+    local infJumpConn = nil
+
+    WallSec:AddToggle({
+        Name = "Infinite Jump",
+        Default = false,
+        Callback = function(state)
+            infJumpActive = state
+            if state then
+                if infJumpConn then infJumpConn:Disconnect() end
+                infJumpConn = uis.JumpRequest:Connect(function()
+                    local char = player.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if hum and infJumpActive then
+                        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                    end
+                end)
+                Notify("Moro Soul", "Infinite Jump Enabled", 2, "Success")
+            else
+                if infJumpConn then
+                    infJumpConn:Disconnect()
+                    infJumpConn = nil
+                end
+                Notify("Moro Soul", "Infinite Jump Disabled", 2, "Info")
+            end
+        end
+    })
+
+    local customJumpPower = 50
+    WallSec:AddSlider({
+        Name = "Jump Power",
+        Min = 50,
+        Max = 250,
+        Default = 50,
+        Suffix = " jp",
+        Decimals = 0,
+        Callback = function(val)
+            customJumpPower = tonumber(val) or 50
+            local char = player.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.UseJumpPower = true
+                hum.JumpPower = customJumpPower
+            end
+        end
+    })
+
+    -- 2. World Area Teleporter
+    local TeleportSec = wrapSection(ExploitsTab:CreateSection({ Name = "World Teleporter (Remote)", Collapsible = true }))
+
+    local areaOptions = {
+        "Wilderness",
+        "Ubuyashiki Residence",
+        "Farmland",
+        "Train Station",
+        "Wisteria Peak",
+        "Wisteria Village"
+    }
+    local selectedWorldArea = areaOptions[1]
+
+    TeleportSec:AddDropdown({
+        Name = "Select World Area",
+        Options = areaOptions,
+        Default = areaOptions[1],
+        Callback = function(val)
+            selectedWorldArea = val
+        end
+    })
+
+    TeleportSec:AddButton({
+        Name = "Teleport to World (Instant)",
+        Primary = true,
+        Callback = function()
+            pcall(function()
+                if remoteFolder:FindFirstChild("UnlockTeleport") then
+                    remoteFolder.UnlockTeleport:FireServer()
+                end
+                if remoteFolder:FindFirstChild("AreaTeleport") then
+                    remoteFolder.AreaTeleport:FireServer(selectedWorldArea)
+                    Notify("Moro Soul", "Teleporting to " .. tostring(selectedWorldArea) .. "...", 2, "Success")
+                else
+                    Notify("Moro Soul", "AreaTeleport remote not found!", 2, "Error")
+                end
+            end)
+        end
+    })
+
+    TeleportSec:AddButton({
+        Name = "Unlock All World Teleports",
+        Primary = false,
+        Callback = function()
+            local unRemote = remoteFolder:FindFirstChild("UnlockTeleport")
+            if unRemote then
+                unRemote:FireServer()
+                Notify("Moro Soul", "UnlockTeleport request sent to server!", 2, "Success")
+            else
+                Notify("Moro Soul", "UnlockTeleport not found", 2, "Warning")
+            end
+        end
+    })
+
+    TeleportSec:AddButton({
+        Name = "Teleport to Boss Area",
+        Primary = false,
+        Callback = function()
+            if remoteFolder:FindFirstChild("ToBossArea") then
+                remoteFolder.ToBossArea:FireServer()
+                Notify("Moro Soul", "Teleporting to Boss Area...", 2, "Success")
+            end
+        end
+    })
+
+    TeleportSec:AddButton({
+        Name = "Teleport to Mugen Train",
+        Primary = false,
+        Callback = function()
+            if remoteFolder:FindFirstChild("ToMugenTrain") then
+                remoteFolder.ToMugenTrain:FireServer()
+                Notify("Moro Soul", "Teleporting to Mugen Train...", 2, "Success")
+            end
+        end
+    })
+
+    TeleportSec:AddButton({
+        Name = "Teleport to Blood Moon",
+        Primary = false,
+        Callback = function()
+            if remoteFolder:FindFirstChild("ToBloodMoon") then
+                remoteFolder.ToBloodMoon:FireServer()
+                Notify("Moro Soul", "Teleporting to Blood Moon...", 2, "Success")
+            end
+        end
+    })
+
+    ExploitsTab:Column("right")
+
+    -- 3. GamePass & VIP Exploits
+    local PassSec = wrapSection(ExploitsTab:CreateSection({ Name = "GamePass & VIP Perks", Collapsible = true }))
+
+    local autoSpoofPasses = false
+    local passSpoofConn = nil
+
+    local function applyGamePassSpoof()
+        local pd = rs:FindFirstChild("PlayerData") and rs.PlayerData:FindFirstChild(player.Name)
+        if not pd then return end
+        
+        local passes = {
+            "GamePass_Speed",
+            "GamePass_FastDrawRole1",
+            "GamePass_FastDrawRole2",
+            "GamePass_DoubleSoul",
+            "GamePass_DoubleExp",
+            "GamePass_Magnet",
+            "GamePass_Luck1",
+            "GamePass_Luck2",
+            "GamePass_Luck3",
+            "GamePass_AutoAttack",
+            "GamePass_Dispatch1",
+            "GamePass_Dispatch2",
+            "GamePass_Dispatch3",
+            "GamePass_UnlockHelper1",
+            "GamePass_UnlockHelper2",
+            "GamePass_Vip"
+        }
+        for _, passName in ipairs(passes) do
+            local val = pd:FindFirstChild(passName)
+            if val and val:IsA("BoolValue") then
+                val.Value = true
+            end
+        end
+        
+        pcall(function()
+            local toolMod = require(rs.Modules.Tool)
+            if toolMod and toolMod.SetMoveSpeed then
+                toolMod.SetMoveSpeed(player)
+            end
+        end)
+    end
+
+    PassSec:AddButton({
+        Name = "Unlock All GamePass Perks (Client)",
+        Primary = true,
+        Callback = function()
+            applyGamePassSpoof()
+            Notify("Moro Soul", "All Client GamePasses & VIP Unlocked!", 3, "Success")
+        end
+    })
+
+    PassSec:AddToggle({
+        Name = "Keep GamePasses Active (Persistent)",
+        Default = false,
+        Callback = function(state)
+            autoSpoofPasses = state
+            if state then
+                applyGamePassSpoof()
+                if passSpoofConn then passSpoofConn:Disconnect() end
+                passSpoofConn = runService.Heartbeat:Connect(function()
+                    if autoSpoofPasses then
+                        applyGamePassSpoof()
+                    end
+                end)
+                Notify("Moro Soul", "GamePass Lock Activated", 2, "Success")
+            else
+                if passSpoofConn then
+                    passSpoofConn:Disconnect()
+                    passSpoofConn = nil
+                end
+                Notify("Moro Soul", "GamePass Lock Disabled", 2, "Info")
+            end
+        end
+    })
+
+    -- 4. Remote Summoner & Season Rewards
+    local GachaSec = wrapSection(ExploitsTab:CreateSection({ Name = "Remote Gacha & Rewards", Collapsible = true }))
+
+    GachaSec:AddButton({
+        Name = "Summon Character (1x)",
+        Primary = false,
+        Callback = function()
+            local drawRemote = remoteFolder:FindFirstChild("DrawRole")
+            if drawRemote then
+                drawRemote:FireServer(false)
+                Notify("Moro Soul", "Remote Draw Executed!", 2, "Success")
+            else
+                Notify("Moro Soul", "DrawRole remote not found", 2, "Error")
+            end
+        end
+    })
+
+    local autoGacha = false
+    GachaSec:AddToggle({
+        Name = "Auto Remote Summon",
+        Default = false,
+        Callback = function(state)
+            autoGacha = state
+            if state then
+                task.spawn(function()
+                    local drawRemote = remoteFolder:FindFirstChild("DrawRole")
+                    if not drawRemote then return end
+                    while autoGacha do
+                        drawRemote:FireServer(true)
+                        task.wait(1.5)
+                    end
+                end)
+                Notify("Moro Soul", "Auto Remote Summon Active!", 2, "Success")
+            else
+                Notify("Moro Soul", "Auto Remote Summon Disabled", 2, "Info")
+            end
+        end
+    })
+
+    GachaSec:AddButton({
+        Name = "Claim Season Reward",
+        Primary = false,
+        Callback = function()
+            local sr = remoteFolder:FindFirstChild("ReceiveSeasonReward")
+            if sr then
+                sr:FireServer()
+                Notify("Moro Soul", "Claimed Season Reward!", 2, "Success")
+            end
+        end
+    })
+
+    GachaSec:AddButton({
+        Name = "Claim Season Top 3 Reward",
+        Primary = false,
+        Callback = function()
+            local s3 = remoteFolder:FindFirstChild("ReceiveSeasonTop3Reward")
+            if s3 then
+                s3:FireServer()
+                Notify("Moro Soul", "Claimed Season Top 3 Reward!", 2, "Success")
+            end
+        end
+    })
+
+    -- 5. Visual Exploits
+    local VisualSec = wrapSection(ExploitsTab:CreateSection({ Name = "Visual Exploits", Collapsible = true }))
+
+    VisualSec:AddButton({
+        Name = "Full Bright / Night Vision",
+        Primary = false,
+        Callback = function()
+            lighting.Ambient = Color3.fromRGB(255, 255, 255)
+            lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+            lighting.Brightness = 2
+            lighting.ClockTime = 14
+            lighting.FogEnd = 1e5
+            lighting.GlobalShadows = false
+            Notify("Moro Soul", "Full Bright Activated!", 2, "Success")
+        end
+    })
+
+    -- =====================================================================
+    --                           SETTINGS TAB (Custom Extras)
+    -- =====================================================================
+    SettingsTab:Column("right")
+
+    local GameOptSec = wrapSection(SettingsTab:CreateSection({ Name = "Game Optimizations", Collapsible = true }))
+
+    GameOptSec:AddButton({
+        Name = "FPS Booster (Ultra)",
+        Primary = true,
+        Callback = function()
+            local terrain = workspace:FindFirstChildOfClass("Terrain")
+            if terrain then
+                terrain.WaterWaveSize = 0
+                terrain.WaterWaveSpeed = 0
+                terrain.WaterReflectance = 0
+                terrain.WaterTransparency = 0
+            end
+            
+            lighting.GlobalShadows = false
+            lighting.FogEnd = 9e9
+            lighting.Brightness = 1
+            
+            for _, obj in ipairs(lighting:GetChildren()) do
+                if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") 
+                or obj:IsA("SunRaysEffect") or obj:IsA("DepthOfFieldEffect") then
+                    obj.Enabled = false
+                end
+            end
+        
+            pcall(function()
+                settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+            end)
+            
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") then
+                    obj.Material = Enum.Material.Plastic
+                    obj.Reflectance = 0
+                elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                    obj.Transparency = 1
+                elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+                    obj.Enabled = false
+                elseif obj:IsA("Explosion") then
+                    obj.Visible = false
+                end
+            end
+            
+            Notify("Moro Soul", "FPS Has Been Boosted!", 2, "Success")
+        end
+    })
+
+    GameOptSec:AddToggle({
+        Name = "Animation Cancel",
+        Default = false,
+        Callback = function(state)
+            animCancel = state
+        end
+    })
+
+    GameOptSec:AddToggle({
+        Name = "Auto Reconnect",
+        Default = true,
+        Callback = function(state)
+            autoReconnectEnabled = state
+        end
+    })
+
+    Notify("Moro Soul", "Script Loaded Successfully (Lumina UI)!", 3, "Success")
 end
-
