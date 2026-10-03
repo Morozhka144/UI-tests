@@ -624,6 +624,7 @@ if Library then
             if killAuraActive then
                 task.spawn(function()
                     local target = nil
+                    local lastTarget = nil
                     
                     while killAuraActive do
                         local char = player.Character
@@ -661,22 +662,31 @@ if Library then
                                 local tHum = target:FindFirstChildOfClass("Humanoid")
                                 
                                 if tHrp and tHum and tHum.Health > 0 then
-                                    local targetCF = tHrp.CFrame * CFrame.new(0, tpHeight or 2, 2)
-                                    hrp.CFrame = CFrame.lookAt(targetCF.Position, tHrp.Position)
+                                    local currentDist = (hrp.Position - tHrp.Position).Magnitude
+                                    if target ~= lastTarget or currentDist > 12 then
+                                        lastTarget = target
+                                        local targetCF = tHrp.CFrame * CFrame.new(0, tpHeight or 2, 2)
+                                        hrp.CFrame = CFrame.lookAt(targetCF.Position, tHrp.Position)
+                                        hrp.AssemblyLinearVelocity = Vector3.zero
+                                        hrp.AssemblyAngularVelocity = Vector3.zero
+                                    end
                                     
-                                    hrp.AssemblyLinearVelocity = Vector3.zero
-                                    hrp.AssemblyAngularVelocity = Vector3.zero
-                                    
-                                    if char:FindFirstChild("LockedEnermy") then
+                                    if char:FindFirstChild("LockedEnermy") and char.LockedEnermy.Value ~= target then
                                         char.LockedEnermy.Value = target
                                     end
                                     
                                     _G.Attacking = false
                                     _G.Skilling = false
+                                else
+                                    target = nil
+                                    lastTarget = nil
                                 end
+                            else
+                                target = nil
+                                lastTarget = nil
                             end
                         end
-                        task.wait(0.04)
+                        task.wait(0.08)
                     end
                     
                     if player.Character and player.Character:FindFirstChild("LockedEnermy") then
@@ -786,9 +796,14 @@ if Library then
                         local tHum = targetBoss:FindFirstChildOfClass("Humanoid")
                         if tHrp and tHum then
                             UpdateCam(tHrp.Position)
+                            hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, 3)
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            
                             while _G.ChristmasAuraV2 and tHum.Health > 0 and targetBoss.Parent do
-                                hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, 3)
-                                hrp.AssemblyLinearVelocity = Vector3.zero
+                                if (hrp.Position - tHrp.Position).Magnitude > 12 then
+                                    hrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, 3)
+                                    hrp.AssemblyLinearVelocity = Vector3.zero
+                                end
                                 genAttack:FireServer(4)
                                 task.wait(speeds and 1 / (speeds.attack or 20))
                             end
@@ -986,7 +1001,7 @@ if Library then
                 if not hrp or not it then continue end
 
                 local trainPoint = it:FindFirstChild("Train")
-                if trainPoint then
+                if trainPoint and (hrp.Position - trainPoint.Position).Magnitude > 10 then
                     hrp.CFrame = trainPoint.CFrame * CFrame.new(0, 2, 0)
                     hrp.AssemblyLinearVelocity = Vector3.zero
                 end
@@ -1014,9 +1029,16 @@ if Library then
                     local mHrp = monster:FindFirstChild("HumanoidRootPart") or monster.PrimaryPart
                     local mHum = monster:FindFirstChildOfClass("Humanoid")
                     
-                    while autoTrain and mHum and mHum.Health > 0 and monster.Parent do
+                    if mHrp and hrp then
                         hrp.CFrame = CFrame.lookAt(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
                         hrp.AssemblyLinearVelocity = Vector3.zero
+                    end
+                    
+                    while autoTrain and mHum and mHum.Health > 0 and monster.Parent do
+                        if mHrp and hrp and (hrp.Position - mHrp.Position).Magnitude > 12 then
+                            hrp.CFrame = CFrame.lookAt(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                        end
                         
                         _G.Attacking = false
                         attackRemote:FireServer(4) 
@@ -1043,7 +1065,7 @@ if Library then
                 if not hrp or not it then continue end
 
                 local trainPoint = it:FindFirstChild("Train")
-                if trainPoint then
+                if trainPoint and (hrp.Position - trainPoint.Position).Magnitude > 10 then
                     hrp.CFrame = trainPoint.CFrame * CFrame.new(0, 2, 0)
                     hrp.AssemblyLinearVelocity = Vector3.zero
                 end
@@ -1071,9 +1093,16 @@ if Library then
                     local mHrp = monster:FindFirstChild("HumanoidRootPart") or monster.PrimaryPart
                     local mHum = monster:FindFirstChildOfClass("Humanoid")
                     
-                    while autoTrainV2 and mHum and mHum.Health > 0 and monster.Parent do
+                    if mHrp and hrp then
                         hrp.CFrame = CFrame.lookAt(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
                         hrp.AssemblyLinearVelocity = Vector3.zero
+                    end
+                    
+                    while autoTrainV2 and mHum and mHum.Health > 0 and monster.Parent do
+                        if mHrp and hrp and (hrp.Position - mHrp.Position).Magnitude > 12 then
+                            hrp.CFrame = CFrame.lookAt(mHrp.Position + Vector3.new(0, 0, 3), mHrp.Position)
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                        end
                         
                         _G.Attacking = false
                         _G.Skilling = false
