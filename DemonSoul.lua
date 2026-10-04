@@ -1304,11 +1304,73 @@ if Library then
 
     FishTab:Column("right")
 
-    local FoodSec = wrapSection(FishTab:CreateSection({ Name = "Food Collector", Collapsible = true }))
+    -- =====================================================================
+    --                         FOOD & BUFF SUBSYSTEM
+    -- =====================================================================
+    local PTTM = nil
+    pcall(function() PTTM = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager")) end)
 
-    -- FAST & RELIABLE FOOD COLLECTOR (PROXIMITY PROMPTS)
-    FoodSec:AddButton({
-        Name = "Collect All Food (Fast)",
+    local MathManager = nil
+    pcall(function() MathManager = require(rs:WaitForChild("Packages"):WaitForChild("MathManager")) end)
+
+    local constPT = nil
+    pcall(function() constPT = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"):WaitForChild("const")) end)
+
+    local WuKongDataProvider = nil
+    pcall(function() WuKongDataProvider = require(rs:WaitForChild("Packages"):WaitForChild("WuKongDataProvider")) end)
+
+    local FoodVendor = nil
+    pcall(function() FoodVendor = require(rs:WaitForChild("UI"):WaitForChild("FoodCook"):WaitForChild("Model"):WaitForChild("Vendor")) end)
+
+    local foodInfoList = {
+        { id = "食物22", craftId = "食物合成22", name = "Tuna Sashimi", buff = "+50% Skill Dmg" },
+        { id = "食物20", craftId = "食物合成20", name = "Koi Sashimi", buff = "+50% Crit Rate" },
+        { id = "食物21", craftId = "食物合成21", name = "Salmon Sashimi", buff = "+50% Double Atk" },
+        { id = "食物26", craftId = "食物合成26", name = "Pumpkin Pie", buff = "+30% Triple, +15% Dbl" },
+        { id = "食物15", craftId = "食物合成15", name = "Steamed Tilapia", buff = "+15% Boss Dmg" },
+        { id = "食物24", craftId = "食物合成24", name = "Green Salad", buff = "+100% Move Speed" },
+        { id = "食物27", craftId = nil,            name = "Halloween Candy", buff = "+100% Drops" },
+        { id = "食物28", craftId = nil,            name = "Gingerbread Man", buff = "+100% Drops" },
+        { id = "食物16", craftId = "食物合成16", name = "Steamed Snapper", buff = "+60% Atk, +15% Dbl" },
+        { id = "食物17", craftId = "食物合成17", name = "Cod Sushi", buff = "+15% Atk, +15% Crit" },
+        { id = "食物18", craftId = "食物合成18", name = "Sea Bass Sushi", buff = "+15% Atk, +35% Shield" },
+        { id = "食物19", craftId = "食物合成19", name = "Unagi Sushi", buff = "+15% Atk, +15% Dbl" },
+        { id = "食物25", craftId = "食物合成25", name = "Fried Rice", buff = "+15% Atk, +40% Energy" },
+        { id = "食物6",  craftId = "食物合成6",  name = "Roasted Snakehead", buff = "+15% Atk Ratio" },
+        { id = "食物12", craftId = "食物合成12", name = "Black Fish Soup", buff = "+15% Atk Ratio" },
+        { id = "食物11", craftId = "食物合成11", name = "Fugu Soup", buff = "+60% Attack Dmg" },
+        { id = "食物5",  craftId = "食物合成5",  name = "Roasted River Fish", buff = "+60% Attack Dmg" },
+        { id = "食物1",  craftId = "食物合成1",  name = "Roasted Grass Carp", buff = "+15% Skill3" },
+        { id = "食物7",  craftId = "食物合成7",  name = "Katsuobu Soup", buff = "+15% Skill3" },
+        { id = "食物2",  craftId = "食物合成2",  name = "Roasted Basa Fish", buff = "+40% Energy" },
+        { id = "食物8",  craftId = "食物合成8",  name = "Basa Fish Soup", buff = "+40% Energy" },
+        { id = "食物14", craftId = "食物合成14", name = "Steamed Mackerel", buff = "+40% Energy, +15% Skill3" },
+        { id = "食物3",  craftId = "食物合成3",  name = "Roasted Mandarin Fish", buff = "+35% Shield" },
+        { id = "食物9",  craftId = "食物合成9",  name = "Mandarin Fish Soup", buff = "+35% Shield" },
+        { id = "食物13", craftId = "食物合成13", name = "Steamed Flounder", buff = "+35% Shield" },
+        { id = "食物4",  craftId = "食物合成4",  name = "Roast Carp", buff = "+50% Move Speed" },
+        { id = "食物10", craftId = "食物合成10", name = "Carp Soup", buff = "+50% Move Speed" },
+        { id = "食物23", craftId = "食物合成23", name = "Jam", buff = "+50% Move Speed" }
+    }
+
+    local foodDropdownNames = {}
+    local foodMap = {}
+    for _, item in ipairs(foodInfoList) do
+        local label = item.name .. " (" .. item.buff .. ")"
+        table.insert(foodDropdownNames, label)
+        foodMap[label] = item
+    end
+
+    local selectedFoodItem = foodInfoList[1]
+    local cookAmount = 10
+    local autoEatBestFoods = false
+
+    -- === SECTION 1: FOOD CRAFTING & GRANTING ===
+    local FoodCraftSec = wrapSection(FishTab:CreateSection({ Name = "Food Crafting & Granting", Collapsible = true }))
+
+    -- Fast map gatherer
+    FoodCraftSec:AddButton({
+        Name = "Collect All Ingredients (Fast)",
         Primary = true,
         Callback = function()
             task.spawn(function()
@@ -1327,7 +1389,7 @@ if Library then
                     end
                 end
 
-                Notify("Moro Soul", "Collecting " .. #prompts .. " food items...", 2, "Info")
+                Notify("Moro Soul", "Collecting " .. #prompts .. " food ingredients...", 2, "Info")
                 local savedCF = hrp.CFrame
 
                 for _, prompt in ipairs(prompts) do
@@ -1347,10 +1409,412 @@ if Library then
                 end
 
                 hrp.CFrame = savedCF
-                Notify("Moro Soul", "Collected all food items!", 2, "Success")
+                Notify("Moro Soul", "Collected all map food items!", 2, "Success")
             end)
         end
     })
+
+    FoodCraftSec:AddDropdown({
+        Name = "Select Food",
+        Options = foodDropdownNames,
+        Default = foodDropdownNames[1],
+        Callback = function(val)
+            if foodMap[val] then
+                selectedFoodItem = foodMap[val]
+            end
+        end
+    })
+
+    FoodCraftSec:AddSlider({
+        Name = "Cook / Craft Amount",
+        Min = 1,
+        Max = 100,
+        Default = 10,
+        Suffix = " pcs",
+        Decimals = 0,
+        Callback = function(val)
+            cookAmount = tonumber(val) or 10
+        end
+    })
+
+    FoodCraftSec:AddButton({
+        Name = "Cook Selected Food",
+        Primary = false,
+        Callback = function()
+            task.spawn(function()
+                if not WuKong then
+                    pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+                end
+                if not WuKong then
+                    Notify("Moro Soul", "WuKong system unavailable", 2, "Error")
+                    return
+                end
+
+                local item = selectedFoodItem
+                if not item or not item.craftId then
+                    Notify("Moro Soul", "Selected food has no recipe", 2, "Warning")
+                    return
+                end
+
+                local amt = cookAmount or 1
+                local actionPath = ("/食物系统/食物合成/%s?多次购买"):format(item.craftId)
+                local res = nil
+                if amt > 1 then
+                    res = WuKong:ExecuteAction(actionPath, amt)
+                else
+                    res = WuKong:ExecuteAction(("/食物系统/食物合成/%s?购买"):format(item.craftId))
+                end
+
+                local curCount = 0
+                pcall(function()
+                    curCount = WuKong:ExecuteQuery(("/食物系统/食物背包/%s?获取元素数量"):format(item.id)) or 0
+                end)
+
+                if res and (not res.HasError or res.Receive) then
+                    Notify("Moro Soul", ("Crafted %s! Total: %d"):format(item.name, curCount), 2.5, "Success")
+                else
+                    Notify("Moro Soul", "Failed to cook. Missing ingredients?", 2.5, "Warning")
+                end
+            end)
+        end
+    })
+
+    FoodCraftSec:AddButton({
+        Name = "Auto-Cook All Available (1-Click)",
+        Primary = false,
+        Callback = function()
+            task.spawn(function()
+                if not WuKong then
+                    pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+                end
+                if not FoodVendor then
+                    pcall(function() FoodVendor = require(rs:WaitForChild("UI"):WaitForChild("FoodCook"):WaitForChild("Model"):WaitForChild("Vendor")) end)
+                end
+                if not WuKong or not FoodVendor then
+                    Notify("Moro Soul", "Cooking subsystem unavailable", 2, "Error")
+                    return
+                end
+
+                Notify("Moro Soul", "Scanning recipes & cooking...", 2, "Info")
+                local cookedCount = 0
+                local totalItems = 0
+
+                for i = 1, 26 do
+                    local craftId = "食物合成" .. i
+                    local canCook = FoodVendor:CanCookFood(craftId)
+                    if canCook then
+                        local maxPossible = 999
+                        local ings = FoodVendor:GetIngredientsInfo(craftId)
+                        for _, ing in ipairs(ings) do
+                            local owned = FoodVendor:GetIngredientCnt(ing.Id) or 0
+                            local possible = math.floor(owned / (ing.Count or 1))
+                            if possible < maxPossible then maxPossible = possible end
+                        end
+
+                        if maxPossible > 0 then
+                            local act = nil
+                            if maxPossible > 1 then
+                                act = WuKong:ExecuteAction(("/食物系统/食物合成/%s?多次购买"):format(craftId), maxPossible)
+                            else
+                                act = WuKong:ExecuteAction(("/食物系统/食物合成/%s?购买"):format(craftId))
+                            end
+                            cookedCount = cookedCount + 1
+                            totalItems = totalItems + maxPossible
+                        end
+                    end
+                end
+
+                if totalItems > 0 then
+                    Notify("Moro Soul", ("Cooked %d items across %d recipes!"):format(totalItems, cookedCount), 3, "Success")
+                else
+                    Notify("Moro Soul", "No recipes can be cooked. Gather ingredients first!", 3, "Warning")
+                end
+            end)
+        end
+    })
+
+    FoodCraftSec:AddButton({
+        Name = "Buy Shop Foods (13-16) for Gold",
+        Primary = false,
+        Callback = function()
+            task.spawn(function()
+                if not WuKong then
+                    pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+                end
+                if not WuKong then return end
+
+                local buyIds = { "购买食物13", "购买食物14", "购买食物15", "购买食物16" }
+                local bought = 0
+                for _, bId in ipairs(buyIds) do
+                    local res = WuKong:ExecuteAction(("/食物系统/食物购买/%s?购买"):format(bId))
+                    if res and not res.HasError then
+                        bought = bought + 1
+                    end
+                    task.wait(0.05)
+                end
+                Notify("Moro Soul", ("Bought shop foods (%d/4)"):format(bought), 2, "Success")
+            end)
+        end
+    })
+
+    FoodCraftSec:AddButton({
+        Name = "Eat Selected Food",
+        Primary = false,
+        Callback = function()
+            task.spawn(function()
+                if not WuKong then
+                    pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+                end
+                local item = selectedFoodItem
+                if not item or not WuKong then return end
+
+                local cnt = WuKong:ExecuteQuery(("/食物系统/食物背包/%s?获取元素数量"):format(item.id)) or 0
+                if cnt <= 0 then
+                    Notify("Moro Soul", ("You don't have any %s"):format(item.name), 2, "Warning")
+                    return
+                end
+
+                local res = WuKong:ExecuteAction(("/食物系统/使用食物/使用%s?购买"):format(item.id))
+                if res and not res.HasError then
+                    Notify("Moro Soul", ("Ate %s! Buff active."):format(item.name), 2, "Success")
+                else
+                    Notify("Moro Soul", "Cannot eat now (Full or error)", 2, "Warning")
+                end
+            end)
+        end
+    })
+
+    FoodCraftSec:AddToggle({
+        Name = "Auto-Eat Best Combat Foods",
+        Default = false,
+        Callback = function(state)
+            autoEatBestFoods = state
+            if state then
+                Notify("Moro Soul", "Auto-Eat Top Combat Foods Active", 2, "Success")
+            end
+        end
+    })
+
+    -- Auto-eat loop for top 3 foods: 食物22 (Tuna), 食物20 (Koi), 食物15 (Tilapia)
+    task.spawn(function()
+        local bestFoods = { "食物22", "食物20", "食物15" }
+        while task.wait(3) do
+            if autoEatBestFoods and WuKong then
+                for _, fId in ipairs(bestFoods) do
+                    local isAct = false
+                    pcall(function()
+                        isAct = WuKong:ExecuteQuery(("/食物系统/食物背包/%s?查询激活状态"):format(fId))
+                    end)
+                    if not isAct then
+                        local cnt = 0
+                        pcall(function()
+                            cnt = WuKong:ExecuteQuery(("/食物系统/食物背包/%s?获取元素数量"):format(fId)) or 0
+                        end)
+                        if cnt > 0 then
+                            pcall(function()
+                                WuKong:ExecuteAction(("/食物系统/使用食物/使用%s?购买"):format(fId))
+                            end)
+                            task.wait(0.2)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- === SECTION 2: FOOD BUFF BOOSTER & MULTIPLIER ===
+    local FoodBuffSec = wrapSection(FishTab:CreateSection({ Name = "Food Buff Booster (Stats Hack)", Collapsible = true }))
+
+    local foodBoostEnabled = false
+    local foodMultiplier = 5
+    local foodBoostMode = "God Mode (All 28 Foods Combined)"
+    local originalFoodHandler = nil
+
+    local boostModes = {
+        "God Mode (All 28 Foods Combined)",
+        "DPS Focus (Attack + Crit + Boss)",
+        "Farming Focus (Soul/Talent Drops + Speed)",
+        "Active Eaten Foods Only"
+    }
+
+    local function getCustomFoodPT(mode, mult)
+        if not MathManager or not constPT then return nil end
+        local customPt = MathManager.GetEmptyPropertyTribe()
+        customPt:SetWriteable(true)
+
+        if mode == "God Mode (All 28 Foods Combined)" then
+            for i = 1, 28 do
+                local foodId = "食物" .. i
+                local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, foodId, nil, nil, nil, nil)
+                if pt and pt.__properties then
+                    for pName, pVal in pairs(pt.__properties) do
+                        customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
+                    end
+                end
+            end
+        elseif mode == "DPS Focus (Attack + Crit + Boss)" then
+            local dpsProps = {
+                AttackRatio = true, AttackDamageAddition = true,
+                CriticalPercent = true, CriticalAddition = true,
+                DoubleAttackPercent = true, TripleAttackPercent = true,
+                BossDamageAddition = true, ShieldDamageAddition = true,
+                SkillDamageAddition = true, Skill3Addition = true,
+            }
+            for i = 1, 28 do
+                local foodId = "食物" .. i
+                local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, foodId, nil, nil, nil, nil)
+                if pt and pt.__properties then
+                    for pName, pVal in pairs(pt.__properties) do
+                        if dpsProps[pName] then
+                            customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
+                        end
+                    end
+                end
+            end
+        elseif mode == "Farming Focus (Soul/Talent Drops + Speed)" then
+            local farmProps = {
+                GoldDropAddition = true, SoulDropAddition = true,
+                TalentDropAddition = true, MoveSpeedRatio = true,
+                EnergyAdditionRatio = true,
+            }
+            for i = 1, 28 do
+                local foodId = "食物" .. i
+                local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, foodId, nil, nil, nil, nil)
+                if pt and pt.__properties then
+                    for pName, pVal in pairs(pt.__properties) do
+                        if farmProps[pName] then
+                            customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
+                        end
+                    end
+                end
+            end
+        elseif mode == "Active Eaten Foods Only" then
+            local activeFoods = {}
+            if WuKongDataProvider then
+                pcall(function() activeFoods = WuKongDataProvider.GetActivedFoods(player.UserId) end)
+            end
+            if activeFoods and next(activeFoods) then
+                for _, fId in pairs(activeFoods) do
+                    local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, fId, nil, nil, nil, nil)
+                    if pt and pt.__properties then
+                        for pName, pVal in pairs(pt.__properties) do
+                            customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
+                        end
+                    end
+                end
+            end
+        end
+
+        return customPt
+    end
+
+    local function applyFoodBoost()
+        if not PTTM then
+            pcall(function() PTTM = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager")) end)
+        end
+        if not PTTM then return end
+
+        local userTree = PTTM.GetUserTree(player.UserId)
+        if not userTree or not userTree.Foods then return end
+
+        if not originalFoodHandler and userTree.Foods.Handler then
+            originalFoodHandler = userTree.Foods.Handler
+        end
+
+        if foodBoostEnabled then
+            local pt = getCustomFoodPT(foodBoostMode, foodMultiplier)
+            if pt then
+                userTree.Foods:ResetHandler(function()
+                    return pt
+                end)
+                userTree.Foods:SetDirty(true)
+                pcall(function() userTree.Foods:Sum() end)
+                pcall(function()
+                    local bt = PTTM.GetBattleUserTree(player.UserId)
+                    if bt then bt:Sum() end
+                end)
+            end
+        else
+            if originalFoodHandler then
+                userTree.Foods:ResetHandler(originalFoodHandler)
+            else
+                userTree.Foods:ResetHandler(function()
+                    local v1 = WuKongDataProvider and WuKongDataProvider.GetActivedFoods(player.UserId) or {}
+                    local v2 = MathManager.GetEmptyPropertyTribe()
+                    if v1 and next(v1) then
+                        for _, v in pairs(v1) do
+                            v2 = v2 + MathManager.GetConfigPropertyTribe(constPT.Regions.Food, v, nil, nil, nil, nil)
+                        end
+                    end
+                    return v2
+                end)
+            end
+            userTree.Foods:SetDirty(true)
+            pcall(function() userTree.Foods:Sum() end)
+        end
+    end
+
+    FoodBuffSec:AddToggle({
+        Name = "Enable Food Buff Boost",
+        Default = false,
+        Callback = function(state)
+            foodBoostEnabled = state
+            applyFoodBoost()
+            if state then
+                Notify("Moro Soul", ("Food Buff Boost ON (%dx)"):format(foodMultiplier), 2, "Success")
+            else
+                Notify("Moro Soul", "Food Buff Boost Disabled", 2, "Info")
+            end
+        end
+    })
+
+    FoodBuffSec:AddSlider({
+        Name = "Buff Multiplier",
+        Min = 1,
+        Max = 50,
+        Default = 5,
+        Suffix = "x",
+        Decimals = 0,
+        Callback = function(val)
+            foodMultiplier = tonumber(val) or 5
+            if foodBoostEnabled then
+                applyFoodBoost()
+            end
+        end
+    })
+
+    FoodBuffSec:AddDropdown({
+        Name = "Boost Mode",
+        Options = boostModes,
+        Default = boostModes[1],
+        Callback = function(val)
+            foodBoostMode = val
+            if foodBoostEnabled then
+                applyFoodBoost()
+                Notify("Moro Soul", "Preset: " .. tostring(val), 2, "Info")
+            end
+        end
+    })
+
+    FoodBuffSec:AddButton({
+        Name = "Apply / Refresh Buffs Now",
+        Primary = false,
+        Callback = function()
+            applyFoodBoost()
+            Notify("Moro Soul", "Food Buffs Refreshed & Active!", 2, "Success")
+        end
+    })
+
+    -- Persistent Watcher to ensure food boost stays active through hero swaps / resets
+    task.spawn(function()
+        while task.wait(2) do
+            if foodBoostEnabled then
+                pcall(function()
+                    applyFoodBoost()
+                end)
+            end
+        end
+    end)
 
     -- =====================================================================
     --                            UPGRADE TAB
