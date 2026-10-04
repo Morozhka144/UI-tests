@@ -36,6 +36,15 @@ end
 local Library = SafeLoad()
 
 if Library then
+    -- Cleanup previous session if script is re-executed
+    if _G.__MoroSoulCleanup then
+        pcall(_G.__MoroSoulCleanup)
+    end
+    local scriptActive = true
+    _G.__MoroSoulCleanup = function()
+        scriptActive = false
+    end
+
     local rs = game:GetService("ReplicatedStorage")
     local players = game:GetService("Players")
     local player = players.LocalPlayer
@@ -78,6 +87,30 @@ if Library then
     local walkSpeedValue = 50
     local speedConn = nil
     local currentTarget = nil
+
+    -- Heartbeat Movement Safety Guard: Never allow WalkSpeed or JumpPower to explode
+    local moveGuardConn = nil
+    moveGuardConn = runService.Heartbeat:Connect(function()
+        if not scriptActive then
+            if moveGuardConn then moveGuardConn:Disconnect() end
+            return
+        end
+        local char = player.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        if hum then
+            if not isSpeedHack then
+                if hum.WalkSpeed > 45 then
+                    hum.WalkSpeed = 16
+                end
+            end
+            if hum.JumpPower > 55 then
+                hum.JumpPower = 50
+            end
+            if hum.JumpHeight > 8 then
+                hum.JumpHeight = 7.2
+            end
+        end
+    end)
     
     -- Dynamic Hero Data from RoleConfig
     local heroData = {}
@@ -321,18 +354,71 @@ if Library then
         end
     end)
 
+    local function findClosestAttackTarget(maxDist)
+        local monstersFolder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not monstersFolder or not hrp then return nil end
+        local bestDist = maxDist or 17
+        local chosen = nil
+        for _, obj in ipairs(monstersFolder:GetChildren()) do
+            local eHum = obj:FindFirstChildOfClass("Humanoid")
+            local eHrp = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+            if eHum and eHrp and eHum.Health > 0 and eHum.Health >= minHealthLimit then
+                local dist = (eHrp.Position - hrp.Position).Magnitude
+                if dist <= bestDist then
+                    bestDist = dist
+                    chosen = obj
+                end
+            end
+        end
+        return chosen
+    end
+
     -- === 3. FAST ATTACK ===
+    local attackIndex = 1
     task.spawn(function()
-        while true do
+        while scriptActive do
             if states.attack then
                 if monsterNearby or killAuraActive then
                     _G.Attacking = false
                     _G.AttackAnim = nil
+                    pcall(function()
+                        if getrenv and getrenv()._G then
+                            getrenv()._G.Attacking = false
+                        end
+                        if player and player.PlayerScripts and player.PlayerScripts:FindFirstChild("Attacking") then
+                            player.PlayerScripts.Attacking.Value = false
+                        end
+                    end)
                     
-                    attackRemote:FireServer(4)
+                    local char = player.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    local target = nil
+                    
+                    if currentTarget and currentTarget.Parent and currentTarget:FindFirstChildOfClass("Humanoid") and currentTarget:FindFirstChildOfClass("Humanoid").Health > 0 and hrp then
+                        local tPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget.PrimaryPart
+                        if tPart and (tPart.Position - hrp.Position).Magnitude <= 17 then
+                            target = currentTarget
+                        end
+                    end
+                    
+                    if not target then
+                        target = findClosestAttackTarget(17)
+                    end
+                    
+                    if target then
+                        if char and char:FindFirstChild("LockedEnermy") then
+                            char.LockedEnermy.Value = target
+                        end
+                        attackRemote:FireServer(attackIndex)
+                        attackIndex = (attackIndex % 4) + 1
+                    elseif killAuraActive then
+                        attackRemote:FireServer(attackIndex)
+                        attackIndex = (attackIndex % 4) + 1
+                    end
                     
                     if animCancel then
-                        local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+                        local hum = char and char:FindFirstChild("Humanoid")
                         if hum then
                             for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
                                 if track.Name:find("Attack") then
@@ -348,6 +434,28 @@ if Library then
                 end
             else
                 task.wait(0.3)
+            end
+        end
+    end)
+
+    -- Hook getrenv()._G.Attack so manual UI button clicks auto-lock nearest enemy
+    pcall(function()
+        if getrenv and getrenv()._G then
+            local renv = getrenv()
+            local origRenvAttack = renv._G.Attack
+            if typeof(origRenvAttack) == "function" and not renv._G.__moroAttackHooked then
+                renv._G.__moroAttackHooked = true
+                renv._G.Attack = function(...)
+                    local char = player.Character
+                    local target = char and char:FindFirstChild("LockedEnermy") and char.LockedEnermy.Value
+                    if not target or not target.Parent or not target:FindFirstChildOfClass("Humanoid") or target:FindFirstChildOfClass("Humanoid").Health <= 0 then
+                        target = findClosestAttackTarget(17)
+                        if target and char and char:FindFirstChild("LockedEnermy") then
+                            char.LockedEnermy.Value = target
+                        end
+                    end
+                    return origRenvAttack(...)
+                end
             end
         end
     end)
@@ -391,7 +499,7 @@ if Library then
                 if hrp then
                     if currentTarget and currentTarget.Parent and currentTarget:FindFirstChildOfClass("Humanoid") and currentTarget:FindFirstChildOfClass("Humanoid").Health > 0 then
                         local tPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget.PrimaryPart
-                        if tPart and (tPart.Position - hrp.Position).Magnitude < 30 then
+                        if tPart and (tPart.Position - hrp.Position).Magnitude <= 17 then
                             found = true
                         end
                     end
@@ -403,7 +511,7 @@ if Library then
                                 if v:IsA("Model") then
                                     local vHum = v:FindFirstChildOfClass("Humanoid")
                                     local vHrp = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
-                                    if vHum and vHrp and vHum.Health > 0 and (vHrp.Position - hrp.Position).Magnitude < 25 then
+                                    if vHum and vHrp and vHum.Health > 0 and (vHrp.Position - hrp.Position).Magnitude <= 17 then
                                         found = true
                                         break
                                     end
@@ -1622,199 +1730,7 @@ if Library then
         end
     end)
 
-    -- === SECTION 2: FOOD BUFF BOOSTER & MULTIPLIER ===
-    local FoodBuffSec = wrapSection(FishTab:CreateSection({ Name = "Food Buff Booster (Stats Hack)", Collapsible = true }))
 
-    local foodBoostEnabled = false
-    local foodMultiplier = 5
-    local foodBoostMode = "God Mode (All 28 Foods Combined)"
-    local originalFoodHandler = nil
-
-    local boostModes = {
-        "God Mode (All 28 Foods Combined)",
-        "DPS Focus (Attack + Crit + Boss)",
-        "Farming Focus (Soul/Talent Drops + Speed)",
-        "Active Eaten Foods Only"
-    }
-
-    local function getCustomFoodPT(mode, mult)
-        if not MathManager or not constPT then return nil end
-        local customPt = MathManager.GetEmptyPropertyTribe()
-        customPt:SetWriteable(true)
-
-        if mode == "God Mode (All 28 Foods Combined)" then
-            for i = 1, 28 do
-                local foodId = "食物" .. i
-                local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, foodId, nil, nil, nil, nil)
-                if pt and pt.__properties then
-                    for pName, pVal in pairs(pt.__properties) do
-                        customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
-                    end
-                end
-            end
-        elseif mode == "DPS Focus (Attack + Crit + Boss)" then
-            local dpsProps = {
-                AttackRatio = true, AttackDamageAddition = true,
-                CriticalPercent = true, CriticalAddition = true,
-                DoubleAttackPercent = true, TripleAttackPercent = true,
-                BossDamageAddition = true, ShieldDamageAddition = true,
-                SkillDamageAddition = true, Skill3Addition = true,
-            }
-            for i = 1, 28 do
-                local foodId = "食物" .. i
-                local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, foodId, nil, nil, nil, nil)
-                if pt and pt.__properties then
-                    for pName, pVal in pairs(pt.__properties) do
-                        if dpsProps[pName] then
-                            customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
-                        end
-                    end
-                end
-            end
-        elseif mode == "Farming Focus (Soul/Talent Drops + Speed)" then
-            local farmProps = {
-                GoldDropAddition = true, SoulDropAddition = true,
-                TalentDropAddition = true, MoveSpeedRatio = true,
-                EnergyAdditionRatio = true,
-            }
-            for i = 1, 28 do
-                local foodId = "食物" .. i
-                local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, foodId, nil, nil, nil, nil)
-                if pt and pt.__properties then
-                    for pName, pVal in pairs(pt.__properties) do
-                        if farmProps[pName] then
-                            customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
-                        end
-                    end
-                end
-            end
-        elseif mode == "Active Eaten Foods Only" then
-            local activeFoods = {}
-            if WuKongDataProvider then
-                pcall(function() activeFoods = WuKongDataProvider.GetActivedFoods(player.UserId) end)
-            end
-            if activeFoods and next(activeFoods) then
-                for _, fId in pairs(activeFoods) do
-                    local pt = MathManager.GetConfigPropertyTribe(constPT.Regions.Food, fId, nil, nil, nil, nil)
-                    if pt and pt.__properties then
-                        for pName, pVal in pairs(pt.__properties) do
-                            customPt.__properties[pName] = (customPt.__properties[pName] or 0) + (pVal * mult)
-                        end
-                    end
-                end
-            end
-        end
-
-        return customPt
-    end
-
-    local function applyFoodBoost()
-        if not PTTM then
-            pcall(function() PTTM = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager")) end)
-        end
-        if not PTTM then return end
-
-        local userTree = PTTM.GetUserTree(player.UserId)
-        if not userTree or not userTree.Foods then return end
-
-        if not originalFoodHandler and userTree.Foods.Handler then
-            originalFoodHandler = userTree.Foods.Handler
-        end
-
-        if foodBoostEnabled then
-            local pt = getCustomFoodPT(foodBoostMode, foodMultiplier)
-            if pt then
-                userTree.Foods:ResetHandler(function()
-                    return pt
-                end)
-                userTree.Foods:SetDirty(true)
-                pcall(function() userTree.Foods:Sum() end)
-                pcall(function()
-                    local bt = PTTM.GetBattleUserTree(player.UserId)
-                    if bt then bt:Sum() end
-                end)
-            end
-        else
-            if originalFoodHandler then
-                userTree.Foods:ResetHandler(originalFoodHandler)
-            else
-                userTree.Foods:ResetHandler(function()
-                    local v1 = WuKongDataProvider and WuKongDataProvider.GetActivedFoods(player.UserId) or {}
-                    local v2 = MathManager.GetEmptyPropertyTribe()
-                    if v1 and next(v1) then
-                        for _, v in pairs(v1) do
-                            v2 = v2 + MathManager.GetConfigPropertyTribe(constPT.Regions.Food, v, nil, nil, nil, nil)
-                        end
-                    end
-                    return v2
-                end)
-            end
-            userTree.Foods:SetDirty(true)
-            pcall(function() userTree.Foods:Sum() end)
-        end
-    end
-
-    FoodBuffSec:AddToggle({
-        Name = "Enable Food Buff Boost",
-        Default = false,
-        Callback = function(state)
-            foodBoostEnabled = state
-            applyFoodBoost()
-            if state then
-                Notify("Moro Soul", ("Food Buff Boost ON (%dx)"):format(foodMultiplier), 2, "Success")
-            else
-                Notify("Moro Soul", "Food Buff Boost Disabled", 2, "Info")
-            end
-        end
-    })
-
-    FoodBuffSec:AddSlider({
-        Name = "Buff Multiplier",
-        Min = 1,
-        Max = 50,
-        Default = 5,
-        Suffix = "x",
-        Decimals = 0,
-        Callback = function(val)
-            foodMultiplier = tonumber(val) or 5
-            if foodBoostEnabled then
-                applyFoodBoost()
-            end
-        end
-    })
-
-    FoodBuffSec:AddDropdown({
-        Name = "Boost Mode",
-        Options = boostModes,
-        Default = boostModes[1],
-        Callback = function(val)
-            foodBoostMode = val
-            if foodBoostEnabled then
-                applyFoodBoost()
-                Notify("Moro Soul", "Preset: " .. tostring(val), 2, "Info")
-            end
-        end
-    })
-
-    FoodBuffSec:AddButton({
-        Name = "Apply / Refresh Buffs Now",
-        Primary = false,
-        Callback = function()
-            applyFoodBoost()
-            Notify("Moro Soul", "Food Buffs Refreshed & Active!", 2, "Success")
-        end
-    })
-
-    -- Persistent Watcher to ensure food boost stays active through hero swaps / resets
-    task.spawn(function()
-        while task.wait(2) do
-            if foodBoostEnabled then
-                pcall(function()
-                    applyFoodBoost()
-                end)
-            end
-        end
-    end)
 
     -- =====================================================================
     --                            UPGRADE TAB
