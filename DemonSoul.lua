@@ -1366,6 +1366,247 @@ if Library then
         ["Tier 3 - Large (10M Souls)"] = "经验水晶3"
     }
 
+    -- === WUKONG TALENTS & ATTRIBUTES SUBSYSTEM ===
+    local WuKong = nil
+    pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+
+    local WuKongHelper = nil
+    pcall(function() WuKongHelper = require(rs:WaitForChild("WuKong"):WaitForChild("WuKongHelper")) end)
+
+    local RerollM = nil
+    pcall(function() RerollM = require(rs:WaitForChild("UI"):WaitForChild("Role"):WaitForChild("Model"):WaitForChild("Reroll")) end)
+
+    local TalentConfig = nil
+    pcall(function() TalentConfig = require(rs:WaitForChild("Configs"):WaitForChild("TalentConfig")) end)
+
+    local heroTalentsMap = {}
+    if TalentConfig then
+        for _, entry in pairs(TalentConfig) do
+            if type(entry) == "table" and entry.Role and entry.Talent then
+                local roleId = entry.Role.RoleId
+                local tList = {}
+                for _, t in ipairs(entry.Talent) do
+                    table.insert(tList, {
+                        id = t.TalentId,
+                        name = t.TalentName or t.TalentId,
+                        desc = t.Description or ""
+                    })
+                end
+                heroTalentsMap[roleId] = tList
+            end
+        end
+    end
+
+    local function GetTalentsForHero(roleInternalName)
+        if heroTalentsMap[roleInternalName] and #heroTalentsMap[roleInternalName] > 0 then
+            return heroTalentsMap[roleInternalName]
+        end
+        return {
+            { id = roleInternalName .. "_1", name = "Talent 1" },
+            { id = roleInternalName .. "_2", name = "Talent 2" },
+            { id = roleInternalName .. "_3", name = "Talent 3" },
+            { id = roleInternalName .. "_4", name = "Talent 4" }
+        }
+    end
+
+    local attrOptions = {
+        "Critical Damage",
+        "Critical Chance",
+        "Attack",
+        "Attack Speed",
+        "Boss Damage Boost",
+        "Double Attack",
+        "Triple Attack",
+        "Normal Attack Damage",
+        "Skill1 Damage",
+        "Skill2 Damage",
+        "Skill3 Damage",
+        "Shield Damage",
+        "Move Speed",
+        "Energy Addition",
+        "[Leader] Critical Damage",
+        "[Leader] Critical Chance",
+        "[Leader] Attack",
+        "[Leader] Attack Speed",
+        "[Leader] Boss Damage Boost",
+        "[Leader] Double Attack",
+        "[Leader] Triple Attack",
+        "[Leader] Normal Attack Damage",
+        "[Leader] Skill1 Damage",
+        "[Leader] Skill2 Damage",
+        "[Leader] Skill3 Damage",
+        "[Leader] Shield Damage",
+        "[Leader] Move Speed",
+        "[Leader] Energy Addition"
+    }
+
+    local attrNameToId = {
+        ["Critical Chance"] = 1,
+        ["Critical Damage"] = 2,
+        ["Attack"] = 3,
+        ["Attack Speed"] = 4,
+        ["Energy Addition"] = 5,
+        ["Move Speed"] = 6,
+        ["Normal Attack Damage"] = 7,
+        ["Skill1 Damage"] = 8,
+        ["Skill2 Damage"] = 9,
+        ["Skill3 Damage"] = 10,
+        ["Double Attack"] = 11,
+        ["Triple Attack"] = 12,
+        ["Shield Damage"] = 13,
+        ["Boss Damage Boost"] = 14,
+        ["[Leader] Critical Chance"] = 15,
+        ["[Leader] Critical Damage"] = 16,
+        ["[Leader] Attack"] = 17,
+        ["[Leader] Attack Speed"] = 18,
+        ["[Leader] Energy Addition"] = 19,
+        ["[Leader] Move Speed"] = 20,
+        ["[Leader] Normal Attack Damage"] = 21,
+        ["[Leader] Skill1 Damage"] = 22,
+        ["[Leader] Skill2 Damage"] = 23,
+        ["[Leader] Skill3 Damage"] = 24,
+        ["[Leader] Double Attack"] = 25,
+        ["[Leader] Triple Attack"] = 26,
+        ["[Leader] Shield Damage"] = 27,
+        ["[Leader] Boss Damage Boost"] = 28
+    }
+
+    local attrIdToName = {}
+    for name, id in pairs(attrNameToId) do
+        attrIdToName[id] = name
+    end
+
+    local rankMinLevel = {
+        ["S (81-100)"] = 81,
+        ["A+ (61-100)"] = 61,
+        ["B+ (41-100)"] = 41,
+        ["C+ (21-100)"] = 21,
+        ["Any (1-100)"] = 1
+    }
+
+    local function GetRankFromLevel(lvl)
+        lvl = tonumber(lvl) or 0
+        if lvl > 80 then return "S"
+        elseif lvl > 60 then return "A"
+        elseif lvl > 40 then return "B"
+        elseif lvl > 20 then return "C"
+        else return "D" end
+    end
+
+    -- Hook GetTalentSlotsCount for 3 slots bypass
+    local originalGetSlotsCount = nil
+    local function ApplySlotCountBypass(enable)
+        pcall(function()
+            if not RerollM then return end
+            local mt = getmetatable(RerollM)
+            local ups = debug.getupvalues(mt.__index)
+            local classTable = ups and ups[1]
+            if not classTable then return end
+            if enable then
+                if not originalGetSlotsCount then
+                    originalGetSlotsCount = classTable.GetTalentSlotsCount
+                end
+                classTable.GetTalentSlotsCount = function(a1, a2, a3)
+                    return 3
+                end
+            else
+                if originalGetSlotsCount then
+                    classTable.GetTalentSlotsCount = originalGetSlotsCount
+                end
+            end
+        end)
+    end
+    ApplySlotCountBypass(true)
+
+    local initialHeroName = heroNames[1] or "Sakonji Urokodaki"
+    local initialHeroPath = heroData[initialHeroName] or "左近次"
+    local initialTalents = GetTalentsForHero(initialHeroPath)
+    local initialTalent = initialTalents[1] or { id = initialHeroPath .. "_1", name = "Talent 1" }
+
+    _G.RerollHeroName = initialHeroName
+    _G.RerollHeroPath = initialHeroPath
+    _G.RerollTalentId = initialTalent.id
+    _G.RerollTalentName = initialTalent.name
+    _G.TargetBonusStat = "Critical Damage"
+    _G.TargetMinRank = "S (81-100)"
+    _G.AutoLockMatching = true
+    _G.AutoRerollActive = false
+    _G.RerollDelay = 0.25
+
+    _G.InjectSlot1Stat = "Critical Damage"
+    _G.InjectSlot1Level = 100
+    _G.InjectSlot2Stat = "Attack"
+    _G.InjectSlot2Level = 100
+    _G.InjectSlot3Stat = "Boss Damage Boost"
+    _G.InjectSlot3Level = 100
+    _G.BypassSlotUnlock = true
+
+    local rerollTalentDrop = nil
+    local injectTalentDrop = nil
+    local rerollHeroDrop = nil
+    local injectHeroDrop = nil
+    local injectTargetLabel = nil
+
+    local function GetTalentDisplayList(roleInternal)
+        local tList = GetTalentsForHero(roleInternal)
+        local displayList = {}
+        for _, t in ipairs(tList) do
+            table.insert(displayList, t.name)
+        end
+        return displayList, tList
+    end
+
+    local function SyncHeroSelection(heroName, sourceSec)
+        _G.RerollHeroName = heroName
+        _G.RerollHeroPath = heroData[heroName] or heroName
+        local newNames, newTalents = GetTalentDisplayList(_G.RerollHeroPath)
+        if newTalents[1] then
+            _G.RerollTalentId = newTalents[1].id
+            _G.RerollTalentName = newTalents[1].name
+        end
+
+        if sourceSec ~= "reroll" and rerollHeroDrop and rerollHeroDrop.Set then
+            rerollHeroDrop.Set(heroName)
+        end
+        if sourceSec ~= "inject" and injectHeroDrop and injectHeroDrop.Set then
+            injectHeroDrop.Set(heroName)
+        end
+
+        if rerollTalentDrop and rerollTalentDrop.Refresh then
+            rerollTalentDrop.Refresh(newNames)
+        end
+        if injectTalentDrop and injectTalentDrop.Refresh then
+            injectTalentDrop.Refresh(newNames)
+        end
+        if injectTargetLabel and injectTargetLabel.Set then
+            injectTargetLabel.Set("Target: " .. _G.RerollHeroName .. " -> " .. tostring(_G.RerollTalentName))
+        end
+    end
+
+    local function SyncTalentSelection(talentName, sourceSec)
+        local _, talents = GetTalentDisplayList(_G.RerollHeroPath)
+        for _, t in ipairs(talents) do
+            if t.name == talentName then
+                _G.RerollTalentId = t.id
+                _G.RerollTalentName = t.name
+                break
+            end
+        end
+
+        if sourceSec ~= "reroll" and rerollTalentDrop and rerollTalentDrop.Set then
+            rerollTalentDrop.Set(talentName)
+        end
+        if sourceSec ~= "inject" and injectTalentDrop and injectTalentDrop.Set then
+            injectTalentDrop.Set(talentName)
+        end
+        if injectTargetLabel and injectTargetLabel.Set then
+            injectTargetLabel.Set("Target: " .. _G.RerollHeroName .. " -> " .. tostring(_G.RerollTalentName))
+        end
+    end
+
+    -- =====================================================================
+    --                           COLUMN LEFT
+    -- =====================================================================
     UpgradeTab:Column("left")
 
     local CrystalSec = wrapSection(UpgradeTab:CreateSection({ Name = "Experience Crystals", Collapsible = true }))
@@ -1432,6 +1673,211 @@ if Library then
         end
     })
 
+    -- TALENT AUTO-REROLL SECTION
+    local TalentRerollSec = wrapSection(UpgradeTab:CreateSection({ Name = "Talent Auto-Reroll", Collapsible = true }))
+
+    local initialDisplayList = GetTalentDisplayList(_G.RerollHeroPath)
+
+    rerollHeroDrop = TalentRerollSec:AddDropdown({
+        Name = "Select Character",
+        Options = heroNames,
+        Default = _G.RerollHeroName,
+        Callback = function(val)
+            SyncHeroSelection(val, "reroll")
+            Notify("Moro Soul", "Selected Character: " .. tostring(val), 2, "Info")
+        end
+    })
+
+    rerollTalentDrop = TalentRerollSec:AddDropdown({
+        Name = "Select Talent",
+        Options = initialDisplayList,
+        Default = initialDisplayList[1] or "Talent 1",
+        Callback = function(val)
+            SyncTalentSelection(val, "reroll")
+            Notify("Moro Soul", "Selected Talent: " .. tostring(val), 2, "Info")
+        end
+    })
+
+    TalentRerollSec:AddDropdown({
+        Name = "Target Bonus Stat",
+        Options = {
+            "Any Stat (Rank Only)",
+            "Critical Damage",
+            "Critical Chance",
+            "Attack",
+            "Attack Speed",
+            "Boss Damage Boost",
+            "Double Attack",
+            "Triple Attack",
+            "Normal Attack Damage",
+            "Skill1 Damage",
+            "Skill2 Damage",
+            "Skill3 Damage",
+            "Shield Damage",
+            "Move Speed",
+            "Energy Addition",
+            "[Leader] Critical Damage",
+            "[Leader] Critical Chance",
+            "[Leader] Attack",
+            "[Leader] Attack Speed",
+            "[Leader] Boss Damage Boost"
+        },
+        Default = "Critical Damage",
+        Callback = function(val)
+            _G.TargetBonusStat = val
+            Notify("Moro Soul", "Target Stat: " .. tostring(val), 2, "Info")
+        end
+    })
+
+    TalentRerollSec:AddDropdown({
+        Name = "Target Min Rank",
+        Options = {"S (81-100)", "A+ (61-100)", "B+ (41-100)", "C+ (21-100)", "Any (1-100)"},
+        Default = "S (81-100)",
+        Callback = function(val)
+            _G.TargetMinRank = val
+            Notify("Moro Soul", "Min Rank: " .. tostring(val), 2, "Info")
+        end
+    })
+
+    TalentRerollSec:AddToggle({
+        Name = "Auto-Lock Matched Slots",
+        Default = true,
+        Callback = function(state)
+            _G.AutoLockMatching = state
+        end
+    })
+
+    TalentRerollSec:AddSlider({
+        Name = "Reroll Delay (Sec)",
+        Min = 0.1,
+        Max = 1.0,
+        Default = 0.25,
+        Decimals = 2,
+        Callback = function(val)
+            _G.RerollDelay = val
+        end
+    })
+
+    local autoRerollToggleRef = nil
+    local function DoesSlotMatch(attrData, targetStatName, minLevel)
+        if not attrData or not attrData.Id or not attrData.Level then
+            return false
+        end
+        if attrData.Level < minLevel then
+            return false
+        end
+        if targetStatName == "Any Stat (Rank Only)" then
+            return true
+        end
+        local targetId = attrNameToId[targetStatName]
+        return attrData.Id == targetId
+    end
+
+    local function ExecuteRerollStep(heroPath, talentId)
+        local totalSlots = 3
+        if RerollM and RerollM.GetTalentSlotsCount then
+            totalSlots = RerollM:GetTalentSlotsCount(heroPath, talentId)
+        end
+        if totalSlots <= 0 then totalSlots = 3 end
+
+        local currentAttrs = {}
+        if RerollM and RerollM.GetTalentAttr then
+            currentAttrs = RerollM:GetTalentAttr(heroPath, talentId) or {}
+        end
+
+        local minReqLevel = rankMinLevel[_G.TargetMinRank] or 81
+        local lockedSlots = {}
+        local matchedCount = 0
+
+        for i = 1, totalSlots do
+            local slotKey = "Attr" .. i
+            local slotData = currentAttrs[slotKey]
+            if slotData and slotData.Id and slotData.Level then
+                if DoesSlotMatch(slotData, _G.TargetBonusStat, minReqLevel) then
+                    matchedCount = matchedCount + 1
+                    if _G.AutoLockMatching then
+                        table.insert(lockedSlots, slotKey)
+                    end
+                end
+            end
+        end
+
+        if matchedCount >= totalSlots then
+            return true, "Target bonuses achieved on all slots!", lockedSlots
+        end
+
+        if RerollM and RerollM.CanReroll then
+            local can = RerollM:CanReroll(heroPath, talentId, lockedSlots)
+            if not can then
+                return false, "Not enough talent resources to reroll!", lockedSlots
+            end
+        end
+
+        local ok = pcall(function()
+            if RerollM and RerollM.Rerollattribute then
+                RerollM:Rerollattribute(heroPath, talentId, lockedSlots)
+            else
+                local args = {
+                    "/天赋系统/副词条随机/副词条随机商人?购买",
+                    ("/天赋系统/天赋持有者/%s/%s"):format(heroPath, talentId),
+                    "__null__",
+                    (#lockedSlots > 0) and lockedSlots or "__null__"
+                }
+                rs.WuKong.RemoteActionFunction:InvokeServer(unpack(args))
+            end
+        end)
+
+        return nil, ok and "Rerolled successfully" or "Error during reroll", lockedSlots
+    end
+
+    autoRerollToggleRef = TalentRerollSec:AddToggle({
+        Name = "Auto Reroll (Server-Legit)",
+        Default = false,
+        Callback = function(state)
+            _G.AutoRerollActive = state
+            if state then
+                task.spawn(function()
+                    Notify("Moro Soul", "Auto Reroll Started for " .. tostring(_G.RerollHeroName), 2, "Info")
+                    while _G.AutoRerollActive do
+                        local heroPath = _G.RerollHeroPath or "左近次"
+                        local talentId = _G.RerollTalentId or "左近次_1"
+                        local isDone, msg, locked = ExecuteRerollStep(heroPath, talentId)
+                        if isDone == true then
+                            _G.AutoRerollActive = false
+                            if autoRerollToggleRef and autoRerollToggleRef.Set then
+                                autoRerollToggleRef.Set(false)
+                            end
+                            Notify("Moro Soul", msg, 4, "Success")
+                            break
+                        elseif isDone == false then
+                            _G.AutoRerollActive = false
+                            if autoRerollToggleRef and autoRerollToggleRef.Set then
+                                autoRerollToggleRef.Set(false)
+                            end
+                            Notify("Moro Soul", msg, 4, "Warning")
+                            break
+                        end
+                        task.wait(_G.RerollDelay or 0.25)
+                    end
+                end)
+            end
+        end
+    })
+
+    TalentRerollSec:AddButton({
+        Name = "Reroll Once",
+        Primary = false,
+        Callback = function()
+            local heroPath = _G.RerollHeroPath or "左近次"
+            local talentId = _G.RerollTalentId or "左近次_1"
+            local isDone, msg = ExecuteRerollStep(heroPath, talentId)
+            Notify("Moro Soul", msg or "Rerolled once", 2, isDone and "Success" or "Info")
+        end
+    })
+
+    -- =====================================================================
+    --                           COLUMN RIGHT
+    -- =====================================================================
     UpgradeTab:Column("right")
 
     local HeroSec = wrapSection(UpgradeTab:CreateSection({ Name = "Hero Upgrade", Collapsible = true }))
@@ -1499,6 +1945,167 @@ if Library then
                     end
                 end)
             end
+        end
+    })
+
+    -- TALENT BONUS EDITOR & INJECTION SECTION ("Запись бонусов в игру")
+    local TalentInjectSec = wrapSection(UpgradeTab:CreateSection({ Name = "Talent Bonus Injection", Collapsible = true }))
+
+    injectHeroDrop = TalentInjectSec:AddDropdown({
+        Name = "Select Character",
+        Options = heroNames,
+        Default = _G.RerollHeroName,
+        Callback = function(val)
+            SyncHeroSelection(val, "inject")
+            Notify("Moro Soul", "Selected Character: " .. tostring(val), 2, "Info")
+        end
+    })
+
+    injectTalentDrop = TalentInjectSec:AddDropdown({
+        Name = "Select Talent",
+        Options = initialDisplayList,
+        Default = initialDisplayList[1] or "Talent 1",
+        Callback = function(val)
+            SyncTalentSelection(val, "inject")
+            Notify("Moro Soul", "Selected Talent: " .. tostring(val), 2, "Info")
+        end
+    })
+
+    injectTargetLabel = TalentInjectSec:AddLabel("Target: " .. _G.RerollHeroName .. " -> " .. tostring(_G.RerollTalentName))
+
+    TalentInjectSec:AddDropdown({
+        Name = "Slot 1 Bonus",
+        Options = attrOptions,
+        Default = "Critical Damage",
+        Callback = function(val)
+            _G.InjectSlot1Stat = val
+        end
+    })
+
+    TalentInjectSec:AddSlider({
+        Name = "Slot 1 Level (S = 81-100)",
+        Min = 1,
+        Max = 100,
+        Default = 100,
+        Callback = function(val)
+            _G.InjectSlot1Level = math.floor(val)
+        end
+    })
+
+    TalentInjectSec:AddDropdown({
+        Name = "Slot 2 Bonus",
+        Options = attrOptions,
+        Default = "Attack",
+        Callback = function(val)
+            _G.InjectSlot2Stat = val
+        end
+    })
+
+    TalentInjectSec:AddSlider({
+        Name = "Slot 2 Level (S = 81-100)",
+        Min = 1,
+        Max = 100,
+        Default = 100,
+        Callback = function(val)
+            _G.InjectSlot2Level = math.floor(val)
+        end
+    })
+
+    TalentInjectSec:AddDropdown({
+        Name = "Slot 3 Bonus",
+        Options = attrOptions,
+        Default = "Boss Damage Boost",
+        Callback = function(val)
+            _G.InjectSlot3Stat = val
+        end
+    })
+
+    TalentInjectSec:AddSlider({
+        Name = "Slot 3 Level (S = 81-100)",
+        Min = 1,
+        Max = 100,
+        Default = 100,
+        Callback = function(val)
+            _G.InjectSlot3Level = math.floor(val)
+        end
+    })
+
+    TalentInjectSec:AddToggle({
+        Name = "Unlock All 3 Slots (Client Bypass)",
+        Default = true,
+        Callback = function(state)
+            _G.BypassSlotUnlock = state
+            ApplySlotCountBypass(state)
+            Notify("Moro Soul", "3 Slots Bypass: " .. (state and "Enabled" or "Disabled"), 2, "Info")
+        end
+    })
+
+    TalentInjectSec:AddButton({
+        Name = "Write / Inject Bonuses to Game",
+        Primary = true,
+        Callback = function()
+            local heroPath = _G.RerollHeroPath or "左近次"
+            local talentId = _G.RerollTalentId or "左近次_1"
+
+            if _G.BypassSlotUnlock then
+                ApplySlotCountBypass(true)
+            end
+
+            local s1Id = attrNameToId[_G.InjectSlot1Stat] or 2
+            local s1Lv = _G.InjectSlot1Level or 100
+            local s2Id = attrNameToId[_G.InjectSlot2Stat] or 3
+            local s2Lv = _G.InjectSlot2Level or 100
+            local s3Id = attrNameToId[_G.InjectSlot3Stat] or 14
+            local s3Lv = _G.InjectSlot3Level or 100
+
+            local okWk, child = false, nil
+            pcall(function()
+                if WuKong and WuKong.TryGetChild then
+                    okWk, child = WuKong:TryGetChild(("/天赋系统/天赋持有者/%s/%s"):format(heroPath, talentId))
+                end
+            end)
+
+            if okWk and child and WuKongHelper then
+                WuKongHelper.SetPluginValue(child, "Attr1Id", s1Id)
+                WuKongHelper.SetPluginValue(child, "Attr1Level", s1Lv)
+                WuKongHelper.SetPluginValue(child, "Attr2Id", s2Id)
+                WuKongHelper.SetPluginValue(child, "Attr2Level", s2Lv)
+                WuKongHelper.SetPluginValue(child, "Attr3Id", s3Id)
+                WuKongHelper.SetPluginValue(child, "Attr3Level", s3Lv)
+
+                Notify("Moro Soul", "Bonuses injected: 3x Lv" .. s1Lv .. " (" .. _G.InjectSlot1Stat .. ", " .. _G.InjectSlot2Stat .. ", " .. _G.InjectSlot3Stat .. ")", 3, "Success")
+            else
+                Notify("Moro Soul", "Failed to access talent container: " .. tostring(talentId), 3, "Error")
+            end
+        end
+    })
+
+    TalentInjectSec:AddButton({
+        Name = "Read Current Bonuses",
+        Primary = false,
+        Callback = function()
+            local heroPath = _G.RerollHeroPath or "左近次"
+            local talentId = _G.RerollTalentId or "左近次_1"
+            local currentAttrs = {}
+            if RerollM and RerollM.GetTalentAttr then
+                currentAttrs = RerollM:GetTalentAttr(heroPath, talentId) or {}
+            end
+
+            local lines = {}
+            for i = 1, 3 do
+                local slotKey = "Attr" .. i
+                local d = currentAttrs[slotKey]
+                if d and d.Id and d.Level then
+                    local name = attrIdToName[d.Id] or ("ID " .. tostring(d.Id))
+                    local rank = GetRankFromLevel(d.Level)
+                    table.insert(lines, slotKey .. ": " .. name .. " Lv" .. d.Level .. " (" .. rank .. ")")
+                else
+                    table.insert(lines, slotKey .. ": [Empty]")
+                end
+            end
+
+            local summary = table.concat(lines, " | ")
+            Notify("Current Bonuses", summary, 4, "Info")
         end
     })
 
