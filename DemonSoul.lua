@@ -76,8 +76,6 @@ if Library then
     local killAuraActive = false
     local priorityHighHP = false 
     local animCancel = false
-    local noSkillCd = false
-    local autoCastSkills = false
     local autoRoulette = false
     local autoMissions = false
     local monsterNearby = false
@@ -280,42 +278,16 @@ if Library then
         end
     end)
 
-    -- Hook DebugOptions to enable "无限火力" (Infinite Firepower mode) on client
-    pcall(function()
-        local DebugOptions = require(rs:WaitForChild("Packages"):WaitForChild("DebugOptions"))
-        local oldIsEnable = DebugOptions.IsEnable
-        DebugOptions.IsEnable = function(opt)
-            if noSkillCd and opt == "无限火力" then
-                return true
-            end
-            return oldIsEnable(opt)
-        end
-    end)
-
-    -- === 2. ANIMATION CANCEL & NO SKILL LOCK ===
+    -- === 2. ANIMATION CANCEL (Attacks Only) ===
     task.spawn(function()
-        while true do
-            if noSkillCd or animCancel then
+        while scriptActive do
+            if animCancel then
                 local char = player.Character
                 local hum = char and char:FindFirstChild("Humanoid")
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                
-                if noSkillCd then
-                    _G.Skilling = false
-                    if hrp then
-                        local p = hrp:FindFirstChild("SkillAlignPosition")
-                        local o = hrp:FindFirstChild("SkillAlignOrientation")
-                        if p and p.Enabled then p.Enabled = false end
-                        if o and o.Enabled then o.Enabled = false end
-                    end
-                end
-
                 if hum then
                     for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
                         local name = track.Name:lower()
-                        if noSkillCd and name:find("skill") then
-                            track:Stop(0)
-                        elseif animCancel and name:find("attack") then
+                        if name:find("attack") then
                             track:Stop(0)
                         end
                     end
@@ -325,105 +297,18 @@ if Library then
         end
     end)
 
-    -- === AUTO CAST SKILLS IN AURA ===
-    task.spawn(function()
-        while true do
-            if autoCastSkills and (monsterNearby or killAuraActive) then
-                local energy = player.LeaderEnergy and player.LeaderEnergy.Value or 0
-                _G.Skilling = false
-                _G.Attacking = false
-                
-                -- Priority: Skill 3 (costs 40) > Skill 2 (costs 25) > Skill 1 (costs 15)
-                if energy >= 40 then
-                    skillRemote:FireServer(3)
-                    task.wait(0.1)
-                    _G.Skilling = false
-                elseif energy >= 25 then
-                    skillRemote:FireServer(2)
-                    task.wait(0.1)
-                    _G.Skilling = false
-                elseif energy >= 15 then
-                    skillRemote:FireServer(1)
-                    task.wait(0.1)
-                    _G.Skilling = false
-                end
-                task.wait(0.15)
-            else
-                task.wait(0.4)
-            end
-        end
-    end)
-
-    local function findClosestAttackTarget(maxDist)
-        local monstersFolder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
-        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        if not monstersFolder or not hrp then return nil end
-        local bestDist = maxDist or 17
-        local chosen = nil
-        for _, obj in ipairs(monstersFolder:GetChildren()) do
-            local eHum = obj:FindFirstChildOfClass("Humanoid")
-            local eHrp = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
-            if eHum and eHrp and eHum.Health > 0 and eHum.Health >= minHealthLimit then
-                local dist = (eHrp.Position - hrp.Position).Magnitude
-                if dist <= bestDist then
-                    bestDist = dist
-                    chosen = obj
-                end
-            end
-        end
-        return chosen
-    end
-
     -- === 3. FAST ATTACK ===
-    local attackIndex = 1
     task.spawn(function()
         while scriptActive do
             if states.attack then
                 if monsterNearby or killAuraActive then
-                    _G.Attacking = false
-                    _G.AttackAnim = nil
-                    pcall(function()
-                        if getrenv and getrenv()._G then
-                            getrenv()._G.Attacking = false
-                        end
-                        if player and player.PlayerScripts and player.PlayerScripts:FindFirstChild("Attacking") then
-                            player.PlayerScripts.Attacking.Value = false
-                        end
-                    end)
-                    
-                    local char = player.Character
-                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                    local target = nil
-                    
-                    if currentTarget and currentTarget.Parent and currentTarget:FindFirstChildOfClass("Humanoid") and currentTarget:FindFirstChildOfClass("Humanoid").Health > 0 and hrp then
-                        local tPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget.PrimaryPart
-                        if tPart and (tPart.Position - hrp.Position).Magnitude <= 17 then
-                            target = currentTarget
-                        end
-                    end
-                    
-                    if not target then
-                        target = findClosestAttackTarget(17)
-                    end
-                    
-                    if target then
-                        if char and char:FindFirstChild("LockedEnermy") then
-                            char.LockedEnermy.Value = target
-                        end
-                        attackRemote:FireServer(attackIndex)
-                        attackIndex = (attackIndex % 4) + 1
-                    elseif killAuraActive then
-                        attackRemote:FireServer(attackIndex)
-                        attackIndex = (attackIndex % 4) + 1
-                    end
+                    attackRemote:FireServer(4)
                     
                     if animCancel then
-                        local hum = char and char:FindFirstChild("Humanoid")
+                        local hum = player.Character and player.Character:FindFirstChild("Humanoid")
                         if hum then
                             for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-                                if track.Name:find("Attack") then
-                                    track:Stop(0)
-                                end
+                                track:Stop(0)
                             end
                         end
                     end
@@ -433,29 +318,7 @@ if Library then
                     task.wait(0.1)
                 end
             else
-                task.wait(0.3)
-            end
-        end
-    end)
-
-    -- Hook getrenv()._G.Attack so manual UI button clicks auto-lock nearest enemy
-    pcall(function()
-        if getrenv and getrenv()._G then
-            local renv = getrenv()
-            local origRenvAttack = renv._G.Attack
-            if typeof(origRenvAttack) == "function" and not renv._G.__moroAttackHooked then
-                renv._G.__moroAttackHooked = true
-                renv._G.Attack = function(...)
-                    local char = player.Character
-                    local target = char and char:FindFirstChild("LockedEnermy") and char.LockedEnermy.Value
-                    if not target or not target.Parent or not target:FindFirstChildOfClass("Humanoid") or target:FindFirstChildOfClass("Humanoid").Health <= 0 then
-                        target = findClosestAttackTarget(17)
-                        if target and char and char:FindFirstChild("LockedEnermy") then
-                            char.LockedEnermy.Value = target
-                        end
-                    end
-                    return origRenvAttack(...)
-                end
+                task.wait(0.5)
             end
         end
     end)
@@ -463,26 +326,30 @@ if Library then
     -- === 4. FAST SKILLS ===
     local function startSkillLoop(stateKey, skillNum)
         task.spawn(function()
-            while states[stateKey] do
+            while states[stateKey] and scriptActive do
                 if monsterNearby or killAuraActive then
+                    -- 1. СБРОС СОСТОЯНИЯ ИГРЫ (Освобождаем персонажа для нового действия)
                     _G.Skilling = false
-                    _G.Attacking = false
                     _G.AttackAnim = nil
                 
+                    -- 2. СБРОС АНИМАЦИИ (Прерываем текущий каст на клиенте)
                     local char = player.Character
                     local hum = char and char:FindFirstChild("Humanoid")
                     if hum then
                         for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-                            if track.Name:find("Attack") or track.Name:find("Skill") then
+                            if track.Name:find("Attack") or track.Name:find("Skill") or track.Name:find("SkillAttack") then
                                 track:Stop(0)
                             end
                         end
                     end
                 
+                    -- 3. ОТПРАВКА СКИЛЛА
                     skillRemote:FireServer(skillNum)
-                    task.wait(1 / (speeds.attack or 20))
+                
+                    -- Пауза между кастами (регулируется через ползунок CPS в настройках)
+                    task.wait(1 / (speeds.attack or 20)) 
                 else
-                    task.wait(0.2)
+                    task.wait(0.3)
                 end
             end
         end)
@@ -490,32 +357,21 @@ if Library then
 
     -- === 5. MONSTER NEARBY CHECK ===
     task.spawn(function()
-        while true do
+        while scriptActive do
             if states.attack or states.skill1 or states.skill2 or states.skill3 or killAuraActive then
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 local found = false
                 
                 if hrp then
-                    if currentTarget and currentTarget.Parent and currentTarget:FindFirstChildOfClass("Humanoid") and currentTarget:FindFirstChildOfClass("Humanoid").Health > 0 then
-                        local tPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget.PrimaryPart
-                        if tPart and (tPart.Position - hrp.Position).Magnitude <= 17 then
-                            found = true
-                        end
-                    end
-                    
-                    if not found then
-                        local folder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
-                        if folder then
-                            for _, v in ipairs(folder:GetChildren()) do
-                                if v:IsA("Model") then
-                                    local vHum = v:FindFirstChildOfClass("Humanoid")
-                                    local vHrp = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
-                                    if vHum and vHrp and vHum.Health > 0 and (vHrp.Position - hrp.Position).Magnitude <= 17 then
-                                        found = true
-                                        break
-                                    end
-                                end
+                    local folder = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies") or workspace
+                    for _, v in pairs(folder:GetChildren()) do
+                        if v:IsA("Model") and v ~= char and v.Name ~= player.Name then
+                            local vHum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
+                            local vHrp = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                            if vHum and vHrp and vHum.Health > 0 and (vHrp.Position - hrp.Position).Magnitude < 17 then
+                                found = true
+                                break 
                             end
                         end
                     end
@@ -524,7 +380,7 @@ if Library then
                 task.wait(0.08)
             else
                 monsterNearby = false
-                task.wait(0.5)
+                task.wait(0.5) 
             end
         end
     end)
@@ -669,27 +525,7 @@ if Library then
         end
     })
 
-    local SkillsSec = wrapSection(MainTab:CreateSection({ Name = "Skills & Infinite Firepower", Collapsible = true }))
-
-    SkillsSec:AddToggle({
-        Name = "No Skill CD / No Lock (Ultra)",
-        Default = false,
-        Callback = function(state)
-            noSkillCd = state
-            if state then
-                _G.Skilling = false
-                Notify("Moro Soul", "No Skill CD & Lock Active!", 2, "Success")
-            end
-        end
-    })
-
-    SkillsSec:AddToggle({
-        Name = "Auto Cast Skills (In Aura)",
-        Default = false,
-        Callback = function(state)
-            autoCastSkills = state
-        end
-    })
+    local SkillsSec = wrapSection(MainTab:CreateSection({ Name = "Fast Skills", Collapsible = true }))
 
     SkillsSec:AddToggle({
         Name = "Fast Skill 1",
