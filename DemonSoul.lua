@@ -57,6 +57,14 @@ if Library then
     if _G.__MoroSoulCleanup then
         pcall(_G.__MoroSoulCleanup)
     end
+    pcall(function()
+        local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
+        for _, c in ipairs(parentGui:GetChildren()) do
+            if c.Name == "MoroLumina" then
+                pcall(function() c:Destroy() end)
+            end
+        end
+    end)
     local scriptActive = true
     local cleanupHandlers = {}
     _G.__MoroSoulCleanup = function()
@@ -376,7 +384,98 @@ if Library then
         end
     end)
 
-    -- === 4. FAST SKILLS ===
+    -- === 4. INSTANT SKILL CAST (NO WINDUP) & FAST SKILLS ===
+    local instantSkillCastEnabled = true
+
+    local function initInstantSkillCast()
+        local AnimationPlayer = nil
+        local SkillController = nil
+        pcall(function()
+            AnimationPlayer = require(rs:WaitForChild("RoleController"):WaitForChild("AnimationPlayer"))
+            SkillController = require(rs:WaitForChild("RoleController"):WaitForChild("SkillController"))
+        end)
+
+        local origApPlayAnimation = nil
+        local origScPlay = nil
+        local canAttackConn = nil
+
+        if AnimationPlayer and not origApPlayAnimation then
+            origApPlayAnimation = AnimationPlayer.playAnimation
+            AnimationPlayer.playAnimation = function(a1, a2)
+                local track = origApPlayAnimation(a1, a2)
+                if track and instantSkillCastEnabled then
+                    pcall(function()
+                        track:AdjustSpeed(3.0)
+                    end)
+                end
+                return track
+            end
+        end
+
+        if SkillController and not origScPlay then
+            origScPlay = SkillController.play
+            SkillController.play = function(a1, a2)
+                if instantSkillCastEnabled then
+                    task.delay(0.15, function()
+                        _G.Skilling = false
+                        local char = player.Character
+                        if char then
+                            local ca = char:FindFirstChild("CanAttack")
+                            if ca then ca.Value = true end
+                            if char.PrimaryPart then
+                                local p = char.PrimaryPart:FindFirstChild("SkillAlignPosition")
+                                local o = char.PrimaryPart:FindFirstChild("SkillAlignOrientation")
+                                if p then p.Enabled = false end
+                                if o then o.Enabled = false end
+                            end
+                        end
+                    end)
+                end
+                return origScPlay(a1, a2)
+            end
+        end
+
+        local function hookCharCanAttack(char)
+            if canAttackConn then
+                pcall(function() canAttackConn:Disconnect() end)
+                canAttackConn = nil
+            end
+            local ca = char and char:FindFirstChild("CanAttack")
+            if ca then
+                canAttackConn = ca.Changed:Connect(function(val)
+                    if not val and instantSkillCastEnabled then
+                        task.delay(0.18, function()
+                            if instantSkillCastEnabled and ca.Parent then
+                                ca.Value = true
+                            end
+                        end)
+                    end
+                end)
+            end
+        end
+
+        if player.Character then
+            hookCharCanAttack(player.Character)
+        end
+        player.CharacterAdded:Connect(function(newChar)
+            task.wait(0.5)
+            hookCharCanAttack(newChar)
+        end)
+
+        table.insert(cleanupHandlers, function()
+            if origApPlayAnimation and AnimationPlayer then
+                AnimationPlayer.playAnimation = origApPlayAnimation
+            end
+            if origScPlay and SkillController then
+                SkillController.play = origScPlay
+            end
+            if canAttackConn then
+                pcall(function() canAttackConn:Disconnect() end)
+            end
+        end)
+    end
+    initInstantSkillCast()
+
     local activeSkillLoops = {}
     local function startSkillLoop(stateKey, skillNum)
         if activeSkillLoops[stateKey] then return end
@@ -388,9 +487,20 @@ if Library then
                         -- 1. СБРОС СОСТОЯНИЯ ИГРЫ (Освобождаем персонажа для нового действия)
                         _G.Skilling = false
                         _G.AttackAnim = nil
+
+                        local char = player.Character
+                        if char then
+                            local ca = char:FindFirstChild("CanAttack")
+                            if ca then ca.Value = true end
+                            if char.PrimaryPart then
+                                local p = char.PrimaryPart:FindFirstChild("SkillAlignPosition")
+                                local o = char.PrimaryPart:FindFirstChild("SkillAlignOrientation")
+                                if p then p.Enabled = false end
+                                if o then o.Enabled = false end
+                            end
+                        end
                     
                         -- 2. СБРОС АНИМАЦИИ (Прерываем текущий каст на клиенте)
-                        local char = player.Character
                         local hum = char and char:FindFirstChildOfClass("Humanoid")
                         if hum and hum.Health > 0 then
                             local animator = hum:FindFirstChildOfClass("Animator")
@@ -596,6 +706,14 @@ if Library then
     })
 
     local SkillsSec = wrapSection(MainTab:CreateSection({ Name = "Fast Skills", Collapsible = true }))
+
+    SkillsSec:AddToggle({
+        Name = "Instant Cast (No Windup)",
+        Default = true,
+        Callback = function(state)
+            instantSkillCastEnabled = state
+        end
+    })
 
     SkillsSec:AddToggle({
         Name = "Fast Skill 1",
@@ -4110,19 +4228,17 @@ if Library then
     -- =====================================================================
     --                           MISC TAB (Custom Overdrive Boosts)
     -- =====================================================================
-    do
+    local function initMiscTab()
         MiscTab:Column("left")
 
         local MiscCombatSec = wrapSection(MiscTab:CreateSection({ Name = "Combat & Speed Overdrive", Collapsible = true }))
 
         local miscState = {
-            active = false,
+            active = true,
             attackSpeed = 300,
             moveSpeed = 50,
             drawSpeed = 500,
             fishPower = 100,
-            luck = 100,
-            soulDrop = 200,
             doubleAttack = true,
             tripleAttack = true,
             charConn = nil,
@@ -4131,9 +4247,6 @@ if Library then
 
         local origUcpHooks = {
             GetFinalExpDeskAcceleration = nil,
-            GetLuck = nil,
-            GetLuckAddition = nil,
-            GetFinalSoulDropAddition = nil
         }
 
         local function applyMiscOverdrive(enable)
@@ -4157,43 +4270,11 @@ if Library then
                         end
                     end
 
-                    if not origUcpHooks.GetLuck and UserCalculatorPropertys.GetLuck then
-                        origUcpHooks.GetLuck = UserCalculatorPropertys.GetLuck
-                        UserCalculatorPropertys.GetLuck = function(...)
-                            if miscState.active then
-                                return (miscState.luck / 100)
-                            end
-                            return origUcpHooks.GetLuck(...)
-                        end
-                    end
-
-                    if not origUcpHooks.GetLuckAddition and UserCalculatorPropertys.GetLuckAddition then
-                        origUcpHooks.GetLuckAddition = UserCalculatorPropertys.GetLuckAddition
-                        UserCalculatorPropertys.GetLuckAddition = function(...)
-                            if miscState.active then
-                                return (miscState.luck / 100) * 1.5
-                            end
-                            return origUcpHooks.GetLuckAddition(...)
-                        end
-                    end
-
-                    if not origUcpHooks.GetFinalSoulDropAddition and UserCalculatorPropertys.GetFinalSoulDropAddition then
-                        origUcpHooks.GetFinalSoulDropAddition = UserCalculatorPropertys.GetFinalSoulDropAddition
-                        UserCalculatorPropertys.GetFinalSoulDropAddition = function(...)
-                            if miscState.active then
-                                return (miscState.soulDrop / 100)
-                            end
-                            return origUcpHooks.GetFinalSoulDropAddition(...)
-                        end
-                    end
-
                     local customTribe = PropertyTribe.new({
                         AttackSpeedAddition = miscState.attackSpeed / 100,
                         ExpDestSpeedAddition = miscState.drawSpeed / 100,
                         MoveSpeedRatio = miscState.moveSpeed / 100,
                         FishPowerAddition = miscState.fishPower / 100,
-                        LuckAddition = miscState.luck / 100,
-                        SoulDropAddition = miscState.soulDrop / 100,
                         DoubleAttackPercent = miscState.doubleAttack and 1 or 0,
                         TripleAttackPercent = miscState.tripleAttack and 1 or 0,
                     })
@@ -4229,8 +4310,6 @@ if Library then
                                                 ExpDestSpeedAddition = miscState.drawSpeed / 100,
                                                 MoveSpeedRatio = miscState.moveSpeed / 100,
                                                 FishPowerAddition = miscState.fishPower / 100,
-                                                LuckAddition = miscState.luck / 100,
-                                                SoulDropAddition = miscState.soulDrop / 100,
                                                 DoubleAttackPercent = miscState.doubleAttack and 1 or 0,
                                                 TripleAttackPercent = miscState.tripleAttack and 1 or 0,
                                             })
@@ -4251,6 +4330,7 @@ if Library then
                     end
                 else
                     miscState.loopActive = false
+
                     if Cheat then
                         Cheat.disableCheat(player.UserId)
                     end
@@ -4258,18 +4338,6 @@ if Library then
                     if origUcpHooks.GetFinalExpDeskAcceleration and UserCalculatorPropertys.GetFinalExpDeskAcceleration then
                         UserCalculatorPropertys.GetFinalExpDeskAcceleration = origUcpHooks.GetFinalExpDeskAcceleration
                         origUcpHooks.GetFinalExpDeskAcceleration = nil
-                    end
-                    if origUcpHooks.GetLuck and UserCalculatorPropertys.GetLuck then
-                        UserCalculatorPropertys.GetLuck = origUcpHooks.GetLuck
-                        origUcpHooks.GetLuck = nil
-                    end
-                    if origUcpHooks.GetLuckAddition and UserCalculatorPropertys.GetLuckAddition then
-                        UserCalculatorPropertys.GetLuckAddition = origUcpHooks.GetLuckAddition
-                        origUcpHooks.GetLuckAddition = nil
-                    end
-                    if origUcpHooks.GetFinalSoulDropAddition and UserCalculatorPropertys.GetFinalSoulDropAddition then
-                        UserCalculatorPropertys.GetFinalSoulDropAddition = origUcpHooks.GetFinalSoulDropAddition
-                        origUcpHooks.GetFinalSoulDropAddition = nil
                     end
 
                     local const = nil
@@ -4308,7 +4376,7 @@ if Library then
 
         MiscCombatSec:AddToggle({
             Name = "Enable Overdrive Boosts",
-            Default = false,
+            Default = true,
             Callback = function(state)
                 miscState.active = state
                 applyMiscOverdrive(state)
@@ -4331,6 +4399,17 @@ if Library then
                 end
             end
         })
+
+        -- Auto-activate on script launch
+        applyMiscOverdrive(true)
+        if not miscState.charConn then
+            miscState.charConn = player.CharacterAdded:Connect(function()
+                task.wait(0.5)
+                if miscState.active then
+                    applyMiscOverdrive(true)
+                end
+            end)
+        end
 
         MiscCombatSec:AddSlider({
             Name = "Attack Speed Boost",
@@ -4376,7 +4455,7 @@ if Library then
 
         MiscTab:Column("right")
 
-        local MiscUtilitySec = wrapSection(MiscTab:CreateSection({ Name = "Gacha, Luck & Utility", Collapsible = true }))
+        local MiscUtilitySec = wrapSection(MiscTab:CreateSection({ Name = "Gacha & Utility Overdrive", Collapsible = true }))
 
         MiscUtilitySec:AddSlider({
             Name = "Draw / Banner Speed",
@@ -4402,30 +4481,6 @@ if Library then
             end
         })
 
-        MiscUtilitySec:AddSlider({
-            Name = "Client Luck Addition",
-            Min = 0,
-            Max = 2000,
-            Default = 100,
-            Suffix = "%",
-            Callback = function(val)
-                miscState.luck = val
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
-        MiscUtilitySec:AddSlider({
-            Name = "Soul Drop (Client Tree)",
-            Min = 0,
-            Max = 2000,
-            Default = 200,
-            Suffix = "%",
-            Callback = function(val)
-                miscState.soulDrop = val
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
         table.insert(cleanupHandlers, function()
             miscState.loopActive = false
             if miscState.active then
@@ -4437,73 +4492,77 @@ if Library then
             end
         end)
     end
+    initMiscTab()
 
     -- =====================================================================
     --                           SETTINGS TAB (Custom Extras)
     -- =====================================================================
-    SettingsTab:Column("right")
+    local function initSettingsTab()
+        SettingsTab:Column("right")
 
-    local GameOptSec = wrapSection(SettingsTab:CreateSection({ Name = "Game Optimizations", Collapsible = true }))
+        local GameOptSec = wrapSection(SettingsTab:CreateSection({ Name = "Game Optimizations", Collapsible = true }))
 
-    GameOptSec:AddButton({
-        Name = "FPS Booster (Ultra)",
-        Primary = true,
-        Callback = function()
-            local terrain = workspace:FindFirstChildOfClass("Terrain")
-            if terrain then
-                terrain.WaterWaveSize = 0
-                terrain.WaterWaveSpeed = 0
-                terrain.WaterReflectance = 0
-                terrain.WaterTransparency = 0
-            end
-            
-            lighting.GlobalShadows = false
-            lighting.FogEnd = 9e9
-            lighting.Brightness = 1
-            
-            for _, obj in ipairs(lighting:GetChildren()) do
-                if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") 
-                or obj:IsA("SunRaysEffect") or obj:IsA("DepthOfFieldEffect") then
-                    obj.Enabled = false
+        GameOptSec:AddButton({
+            Name = "FPS Booster (Ultra)",
+            Primary = true,
+            Callback = function()
+                local terrain = workspace:FindFirstChildOfClass("Terrain")
+                if terrain then
+                    terrain.WaterWaveSize = 0
+                    terrain.WaterWaveSpeed = 0
+                    terrain.WaterReflectance = 0
+                    terrain.WaterTransparency = 0
                 end
-            end
-        
-            pcall(function()
-                settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-            end)
-            
-            for _, obj in ipairs(workspace:GetDescendants()) do
-                if obj:IsA("BasePart") then
-                    obj.Material = Enum.Material.Plastic
-                    obj.Reflectance = 0
-                elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                    obj.Transparency = 1
-                elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
-                    obj.Enabled = false
-                elseif obj:IsA("Explosion") then
-                    obj.Visible = false
+                
+                lighting.GlobalShadows = false
+                lighting.FogEnd = 9e9
+                lighting.Brightness = 1
+                
+                for _, obj in ipairs(lighting:GetChildren()) do
+                    if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") 
+                    or obj:IsA("SunRaysEffect") or obj:IsA("DepthOfFieldEffect") then
+                        obj.Enabled = false
+                    end
                 end
-            end
             
-            Notify("Moro Soul", "FPS Has Been Boosted!", 2, "Success")
-        end
-    })
+                pcall(function()
+                    settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+                end)
+                
+                for _, obj in ipairs(workspace:GetDescendants()) do
+                    if obj:IsA("BasePart") then
+                        obj.Material = Enum.Material.Plastic
+                        obj.Reflectance = 0
+                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                        obj.Transparency = 1
+                    elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+                        obj.Enabled = false
+                    elseif obj:IsA("Explosion") then
+                        obj.Visible = false
+                    end
+                end
+                
+                Notify("Moro Soul", "FPS Has Been Boosted!", 2, "Success")
+            end
+        })
 
-    GameOptSec:AddToggle({
-        Name = "Animation Cancel",
-        Default = false,
-        Callback = function(state)
-            animCancel = state
-        end
-    })
+        GameOptSec:AddToggle({
+            Name = "Animation Cancel",
+            Default = false,
+            Callback = function(state)
+                animCancel = state
+            end
+        })
 
-    GameOptSec:AddToggle({
-        Name = "Auto Reconnect",
-        Default = true,
-        Callback = function(state)
-            autoReconnectEnabled = state
-        end
-    })
+        GameOptSec:AddToggle({
+            Name = "Auto Reconnect",
+            Default = true,
+            Callback = function(state)
+                autoReconnectEnabled = state
+            end
+        })
+    end
+    initSettingsTab()
 
     Notify("Moro Soul", "Script Loaded Successfully (Lumina UI)!", 3, "Success")
 end
