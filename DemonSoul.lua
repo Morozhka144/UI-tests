@@ -58,8 +58,12 @@ if Library then
         pcall(_G.__MoroSoulCleanup)
     end
     local scriptActive = true
+    local cleanupHandlers = {}
     _G.__MoroSoulCleanup = function()
         scriptActive = false
+        for _, fn in ipairs(cleanupHandlers) do
+            pcall(fn)
+        end
     end
 
     local rs = game:GetService("ReplicatedStorage")
@@ -74,8 +78,8 @@ if Library then
     local uis = game:GetService("UserInputService")
     
     local remoteFolder = rs:WaitForChild("RemoteEvents", 10) or rs:FindFirstChild("RemoteEvents")
-    local attackRemote = remoteFolder:WaitForChild("GeneralAttack")
-    local skillRemote = remoteFolder:WaitForChild("SkillAttack")
+    local attackRemote = remoteFolder and (remoteFolder:FindFirstChild("GeneralAttack") or remoteFolder:WaitForChild("GeneralAttack", 5))
+    local skillRemote = remoteFolder and (remoteFolder:FindFirstChild("SkillAttack") or remoteFolder:WaitForChild("SkillAttack", 5))
     
     local EventBus = nil
     pcall(function()
@@ -108,25 +112,32 @@ if Library then
     local moveGuardConn = nil
     moveGuardConn = runService.Heartbeat:Connect(function()
         if not scriptActive then
-            if moveGuardConn then moveGuardConn:Disconnect() end
+            if moveGuardConn then pcall(function() moveGuardConn:Disconnect() end) end
             return
         end
-        local char = player.Character
-        local hum = char and char:FindFirstChild("Humanoid")
-        if hum then
-            if not isSpeedHack then
-                if hum.WalkSpeed > 45 then
-                    hum.WalkSpeed = 16
+        pcall(function()
+            local char = player.Character
+            if not char then return end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                if not isSpeedHack then
+                    if hum.WalkSpeed > 45 then
+                        hum.WalkSpeed = 16
+                    end
+                end
+                if hum.UseJumpPower then
+                    if hum.JumpPower > 55 then
+                        hum.JumpPower = 50
+                    end
+                else
+                    if hum.JumpHeight > 8 then
+                        hum.JumpHeight = 7.2
+                    end
                 end
             end
-            if hum.JumpPower > 55 then
-                hum.JumpPower = 50
-            end
-            if hum.JumpHeight > 8 then
-                hum.JumpHeight = 7.2
-            end
-        end
+        end)
     end)
+    table.insert(cleanupHandlers, function() if moveGuardConn then pcall(function() moveGuardConn:Disconnect() end) end end)
     
     -- Dynamic Hero Data from RoleConfig
     local heroData = {}
@@ -300,16 +311,25 @@ if Library then
     task.spawn(function()
         while scriptActive do
             if animCancel then
-                local char = player.Character
-                local hum = char and char:FindFirstChild("Humanoid")
-                if hum then
-                    for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-                        local name = track.Name:lower()
-                        if name:find("attack") then
-                            track:Stop(0)
+                pcall(function()
+                    local char = player.Character
+                    if not char then return end
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        local animator = hum:FindFirstChildOfClass("Animator")
+                        local tracks = animator and animator:GetPlayingAnimationTracks() or hum:GetPlayingAnimationTracks()
+                        if tracks then
+                            for _, track in ipairs(tracks) do
+                                pcall(function()
+                                    local name = tostring(track.Name or ""):lower()
+                                    if name:find("attack", 1, true) then
+                                        track:Stop(0)
+                                    end
+                                end)
+                            end
                         end
                     end
-                end
+                end)
             end
             task.wait(0.05)
         end
@@ -320,18 +340,28 @@ if Library then
         while scriptActive do
             if states.attack then
                 if monsterNearby or killAuraActive then
-                    attackRemote:FireServer(4)
-                    
-                    if animCancel then
-                        local hum = player.Character and player.Character:FindFirstChild("Humanoid")
-                        if hum then
-                            for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-                                track:Stop(0)
+                    pcall(function()
+                        if attackRemote then
+                            attackRemote:FireServer(4)
+                        end
+                        if animCancel then
+                            local char = player.Character
+                            local hum = char and char:FindFirstChildOfClass("Humanoid")
+                            if hum and hum.Health > 0 then
+                                local animator = hum:FindFirstChildOfClass("Animator")
+                                local tracks = animator and animator:GetPlayingAnimationTracks() or hum:GetPlayingAnimationTracks()
+                                if tracks then
+                                    for _, track in ipairs(tracks) do
+                                        pcall(function() track:Stop(0) end)
+                                    end
+                                end
                             end
                         end
-                    end
+                    end)
                     
-                    task.wait(1 / (speeds.attack or 20))
+                    local spd = tonumber(speeds and speeds.attack) or 20
+                    if spd <= 0 then spd = 20 end
+                    task.wait(1 / spd)
                 else
                     task.wait(0.1)
                 end
@@ -349,26 +379,39 @@ if Library then
         task.spawn(function()
             while states[stateKey] and scriptActive do
                 if monsterNearby or killAuraActive then
-                    -- 1. СБРОС СОСТОЯНИЯ ИГРЫ (Освобождаем персонажа для нового действия)
-                    _G.Skilling = false
-                    _G.AttackAnim = nil
-                
-                    -- 2. СБРОС АНИМАЦИИ (Прерываем текущий каст на клиенте)
-                    local char = player.Character
-                    local hum = char and char:FindFirstChild("Humanoid")
-                    if hum then
-                        for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-                            if track.Name:find("Attack") or track.Name:find("Skill") or track.Name:find("SkillAttack") then
-                                track:Stop(0)
+                    pcall(function()
+                        -- 1. СБРОС СОСТОЯНИЯ ИГРЫ (Освобождаем персонажа для нового действия)
+                        _G.Skilling = false
+                        _G.AttackAnim = nil
+                    
+                        -- 2. СБРОС АНИМАЦИИ (Прерываем текущий каст на клиенте)
+                        local char = player.Character
+                        local hum = char and char:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 then
+                            local animator = hum:FindFirstChildOfClass("Animator")
+                            local tracks = animator and animator:GetPlayingAnimationTracks() or hum:GetPlayingAnimationTracks()
+                            if tracks then
+                                for _, track in ipairs(tracks) do
+                                    pcall(function()
+                                        local tName = tostring(track.Name or "")
+                                        if tName:find("Attack", 1, true) or tName:find("Skill", 1, true) or tName:find("SkillAttack", 1, true) then
+                                            track:Stop(0)
+                                        end
+                                    end)
+                                end
                             end
                         end
-                    end
-                
-                    -- 3. ОТПРАВКА СКИЛЛА
-                    skillRemote:FireServer(skillNum)
+                    
+                        -- 3. ОТПРАВКА СКИЛЛА
+                        if skillRemote then
+                            skillRemote:FireServer(skillNum)
+                        end
+                    end)
                 
                     -- Пауза между кастами (регулируется через ползунок CPS в настройках)
-                    task.wait(1 / (speeds.attack or 20)) 
+                    local spd = tonumber(speeds and speeds.attack) or 20
+                    if spd <= 0 then spd = 20 end
+                    task.wait(1 / spd) 
                 else
                     task.wait(0.3)
                 end
@@ -2916,7 +2959,7 @@ if Library then
     local chestBatchAmount = 10
     local chestOpenDelay = 0.3
     local chestSkipPopup = true
-    local notifyOnMythic = false
+    local notifyOnEternal = false
 
     local function safeClick(btn)
         if not btn then return false end
@@ -3010,33 +3053,46 @@ if Library then
         [5] = "/\229\174\157\231\174\177\231\179\187\231\187\159/\229\188\128\229\174\157\231\174\177/\229\188\128\229\174\157\231\174\1775?\229\164\154\230\172\161\232\180\173\228\185\176", -- Mythical (🔴 Tier 5)
     }
 
-    local mythicHeroLookup = {
-        ["Akaza"] = true, ["漪窝座"] = true,
+    -- Eternal Rarity (Quality 4 - Absolute Highest Rarity in Game)
+    local eternalHeroLookup = {
+        ["Kanroji Mitsuri"] = true, ["甘露寺蜜璃"] = true, ["Mitsuri Kanroji"] = true,
+        ["Gyuutarou"] = true, ["妓夫太郎"] = true, ["Gyutaro"] = true,
+        ["Iguro Obanai"] = true, ["伊黑小芭内"] = true,
+        ["Tokitou Muichirou"] = true, ["时透无一郎"] = true, ["Muichiro Tokito"] = true,
+        ["Shinazugawa Sanemi"] = true, ["不死川实弥"] = true, ["Sanemi Shinazugawa"] = true,
         ["Douma"] = true, ["童魔"] = true,
-        ["Kokushibo"] = true, ["黑死牟"] = true,
         ["Zohakuten"] = true, ["憎珀天"] = true,
-        ["Nezuko (Berserk)"] = true, ["弥豆子_鬼化"] = true,
-        ["Tanjiro (Hinokami)"] = true, ["炭治郎_火之神神乐"] = true,
-        ["Tanjiro (Swordsmith Village)"] = true, ["炭治郎_锻刀村篇"] = true,
-        ["Gyomei Himejima"] = true, ["悲鸣屿行冥"] = true,
-        ["Himejima Kyoumei"] = true,
-        ["Yoriichi"] = true, ["继国缘一"] = true,
-        ["Muzan"] = true, ["鬼舞辻无惨"] = true,
-        ["Tengen Uzui"] = true, ["宇髓天元"] = true,
-        ["Muichiro Tokito"] = true, ["时透无一郎"] = true,
-        ["Kaigaku"] = true, ["稻玉狯岳"] = true,
-        ["Daki"] = true, ["堕姬"] = true,
-        ["Gyutaro"] = true, ["妓夫太郎"] = true,
+        ["Tanjirou[Swordsmith]"] = true, ["炭治郎_锻刀村篇"] = true, ["Tanjiro (Swordsmith Village)"] = true,
+    }
+
+    local eternalRoleIds = {
+        [17] = "Kanroji Mitsuri",
+        [20] = "Gyuutarou",
+        [22] = "Iguro Obanai",
+        [23] = "Tokitou Muichirou",
+        [24] = "Shinazugawa Sanemi",
+        [26] = "Douma",
+        [34] = "Zohakuten",
+        [35] = "Tanjirou[Swordsmith]",
     }
 
     local roleIdToName = {}
     pcall(function()
         local rc = require(rs:WaitForChild("Configs"):WaitForChild("RoleConfig"))
         for id, r in pairs(rc) do
-            local q = r.Quality or r.RoleQuality or r.Rarity or r.Grade or r.Star or r.RoleGrade
-            if q == 5 or tostring(q):lower():find("myth", 1, true) or tostring(q):find("神话", 1, true) then
-                if r.RoleName then mythicHeroLookup[r.RoleName] = true end
-                if r.RoleIndex then mythicHeroLookup[r.RoleIndex] = true end
+            local q = r.Quality or r.RoleQuality or r.Rarity or r.Grade
+            if q == 4 or tostring(q):lower():find("eternal", 1, true) or tostring(q):find("永恒", 1, true) then
+                if r.RoleName then
+                    eternalHeroLookup[r.RoleName] = true
+                    eternalHeroLookup[r.RoleName:lower()] = true
+                end
+                if r.RoleIndex then
+                    eternalHeroLookup[r.RoleIndex] = true
+                end
+                if r.RoleId then
+                    eternalRoleIds[r.RoleId] = r.RoleName or tostring(r.RoleId)
+                end
+                eternalRoleIds[tonumber(id) or id] = r.RoleName or tostring(id)
             end
             if r.RoleName and r.RoleId then
                 roleIdToName[r.RoleId] = r.RoleName
@@ -3094,22 +3150,23 @@ if Library then
         return invoked, res
     end
 
-    local function detectMythicDrop(tier, serverRes)
+    local function detectEternalDrop(tier, serverRes)
         local found = {}
 
         local function checkMatch(rawStr)
             if type(rawStr) ~= "string" or #rawStr < 2 then return end
-            for engName, cnIndex in pairs(heroData) do
-                local match = false
-                if rawStr == engName or rawStr == cnIndex then
-                    match = true
-                elseif rawStr:find(engName, 1, true) or (cnIndex and #cnIndex >= 3 and rawStr:find(cnIndex, 1, true)) then
-                    match = true
+            local lower = rawStr:lower()
+            -- Match directly against known Eternal heroes
+            for heroName, _ in pairs(eternalHeroLookup) do
+                if rawStr == heroName or rawStr:find(heroName, 1, true) or lower:find(tostring(heroName):lower(), 1, true) then
+                    found[heroName] = true
                 end
-                if match then
-                    local isMyth = mythicHeroLookup[engName] or (cnIndex and mythicHeroLookup[cnIndex]) or (tier == 5)
-                    if isMyth then
-                        found[engName] = true
+            end
+            -- Match if string explicitly mentions Eternal rarity
+            if lower:find("eternal", 1, true) or lower:find("вечный", 1, true) or lower:find("этернал", 1, true) or rawStr:find("永恒", 1, true) then
+                for heroName, _ in pairs(eternalHeroLookup) do
+                    if rawStr:find(heroName, 1, true) or lower:find(tostring(heroName):lower(), 1, true) then
+                        found[heroName] = true
                     end
                 end
             end
@@ -3121,8 +3178,8 @@ if Library then
             if vt == "string" then
                 checkMatch(val)
             elseif vt == "number" then
-                local rName = roleIdToName[val]
-                if rName and (mythicHeroLookup[rName] or tier == 5) then
+                local rName = eternalRoleIds[val]
+                if rName then
                     found[rName] = true
                 end
             elseif vt == "table" then
@@ -3143,16 +3200,15 @@ if Library then
                     for _, obj in ipairs(gui:GetDescendants()) do
                         if obj:IsA("TextLabel") and obj.Visible and #obj.Text > 1 then
                             local t = obj.Text
-                            local hasMyth = t:lower():find("myth", 1, true) or t:find("神话", 1, true) or t:lower():find("мифич", 1, true)
-                            for engName, cnIndex in pairs(heroData) do
-                                if t:find(engName, 1, true) or (cnIndex and #cnIndex >= 3 and t:find(cnIndex, 1, true)) then
-                                    if hasMyth or mythicHeroLookup[engName] or (tier == 5) then
-                                        found[engName] = true
-                                    end
+                            local lower = t:lower()
+                            local hasEternal = lower:find("eternal", 1, true) or lower:find("вечный", 1, true) or lower:find("этернал", 1, true) or t:find("永恒", 1, true)
+                            for heroName, _ in pairs(eternalHeroLookup) do
+                                if t:find(heroName, 1, true) or (hasEternal and lower:find(tostring(heroName):lower(), 1, true)) then
+                                    found[heroName] = true
                                 end
                             end
-                            if hasMyth and next(found) == nil then
-                                found[t:sub(1, 25)] = true
+                            if hasEternal and next(found) == nil then
+                                found[t:sub(1, 30)] = true
                             end
                         end
                     end
@@ -3167,40 +3223,46 @@ if Library then
         return list
     end
 
-    local mythicGuiConn = nil
-    local lastMythicNotifiedTick = 0
-    local function updateMythicListener(state)
-        if mythicGuiConn then
-            pcall(function() mythicGuiConn:Disconnect() end)
-            mythicGuiConn = nil
+    local eternalGuiConn = nil
+    local lastEternalNotifiedTick = 0
+    local function updateEternalListener(state)
+        if eternalGuiConn then
+            pcall(function() eternalGuiConn:Disconnect() end)
+            eternalGuiConn = nil
         end
         if state then
             local pGui = player:FindFirstChild("PlayerGui")
             if pGui then
-                mythicGuiConn = pGui.DescendantAdded:Connect(function(desc)
-                    if not notifyOnMythic then return end
-                    if tick() - lastMythicNotifiedTick < 1.5 then return end
+                eternalGuiConn = pGui.DescendantAdded:Connect(function(desc)
+                    if not notifyOnEternal then return end
+                    if tick() - lastEternalNotifiedTick < 2.0 then return end
                     if desc:IsA("TextLabel") then
                         task.wait(0.04)
-                        local t = desc.Text
-                        if #t > 1 then
-                            local hasMyth = t:lower():find("myth", 1, true) or t:find("神话", 1, true) or t:lower():find("мифич", 1, true)
-                            for engName, cnIndex in pairs(heroData) do
-                                if t:find(engName, 1, true) or (cnIndex and #cnIndex >= 3 and t:find(cnIndex, 1, true)) then
-                                    if hasMyth or mythicHeroLookup[engName] then
-                                        lastMythicNotifiedTick = tick()
-                                        Notify("Moro Soul", "🔴 ВЫПАЛ МИФИК: " .. engName .. "!", 7, "Success")
-                                        print("[Moro Soul] 🔴 MYTHICAL DROP (GUI): " .. engName)
-                                        return
-                                    end
+                        pcall(function()
+                            local t = desc.Text
+                            if not t or #t < 2 then return end
+                            local lower = t:lower()
+                            local hasEternal = lower:find("eternal", 1, true) or lower:find("вечный", 1, true) or lower:find("этернал", 1, true) or t:find("永恒", 1, true)
+                            for heroName, _ in pairs(eternalHeroLookup) do
+                                if t:find(heroName, 1, true) or (hasEternal and lower:find(tostring(heroName):lower(), 1, true)) then
+                                    lastEternalNotifiedTick = tick()
+                                    Notify("Moro Soul", "🌟 ВЫПАЛ ETERNAL: " .. heroName .. "!", 8, "Success")
+                                    print("[Moro Soul] 🌟 ETERNAL DROP (GUI): " .. heroName)
+                                    return
                                 end
                             end
-                        end
+                            if hasEternal then
+                                lastEternalNotifiedTick = tick()
+                                Notify("Moro Soul", "🌟 ВЫПАЛ ETERNAL ДРОП!", 8, "Success")
+                                print("[Moro Soul] 🌟 ETERNAL DROP (GUI): " .. t)
+                            end
+                        end)
                     end
                 end)
             end
         end
     end
+    table.insert(cleanupHandlers, function() if eternalGuiConn then pcall(function() eternalGuiConn:Disconnect() end) end end)
 
     local function getTierFromTarget(targetStr)
         if not targetStr then return nil end
@@ -3225,14 +3287,14 @@ if Library then
                 local selectedTier = getTierFromTarget(chestRarityTarget)
                 if selectedTier then
                     local ok, sRes = safeInvokeWuKongChest(selectedTier, chestBatchAmount or 10)
-                    if ok and notifyOnMythic then
+                    if ok and notifyOnEternal then
                         task.wait(0.05)
-                        local mythics = detectMythicDrop(selectedTier, sRes)
-                        if #mythics > 0 and tick() - lastMythicNotifiedTick >= 1.5 then
-                            lastMythicNotifiedTick = tick()
-                            local dropStr = table.concat(mythics, ", ")
-                            Notify("Moro Soul", "🔴 ВЫПАЛ МИФИК: " .. dropStr .. "!", 7, "Success")
-                            print("[Moro Soul] 🔴 MYTHICAL DROP: " .. dropStr)
+                        local eternals = detectEternalDrop(selectedTier, sRes)
+                        if #eternals > 0 and tick() - lastEternalNotifiedTick >= 2.0 then
+                            lastEternalNotifiedTick = tick()
+                            local dropStr = table.concat(eternals, ", ")
+                            Notify("Moro Soul", "🌟 ВЫПАЛ ETERNAL: " .. dropStr .. "!", 8, "Success")
+                            print("[Moro Soul] 🌟 ETERNAL DROP: " .. dropStr)
                         end
                     end
                 else
@@ -3240,14 +3302,14 @@ if Library then
                     for tier = 5, 1, -1 do
                         if not autoOpenMenuChests or not scriptActive then break end
                         local ok, sRes = safeInvokeWuKongChest(tier, chestBatchAmount or 10)
-                        if ok and notifyOnMythic then
+                        if ok and notifyOnEternal then
                             task.wait(0.05)
-                            local mythics = detectMythicDrop(tier, sRes)
-                            if #mythics > 0 and tick() - lastMythicNotifiedTick >= 1.5 then
-                                lastMythicNotifiedTick = tick()
-                                local dropStr = table.concat(mythics, ", ")
-                                Notify("Moro Soul", "🔴 ВЫПАЛ МИФИК: " .. dropStr .. "!", 7, "Success")
-                                print("[Moro Soul] 🔴 MYTHICAL DROP: " .. dropStr)
+                            local eternals = detectEternalDrop(tier, sRes)
+                            if #eternals > 0 and tick() - lastEternalNotifiedTick >= 2.0 then
+                                lastEternalNotifiedTick = tick()
+                                local dropStr = table.concat(eternals, ", ")
+                                Notify("Moro Soul", "🌟 ВЫПАЛ ETERNAL: " .. dropStr .. "!", 8, "Success")
+                                print("[Moro Soul] 🌟 ETERNAL DROP: " .. dropStr)
                             end
                         end
                         task.wait(chestOpenDelay or 0.3)
@@ -3313,12 +3375,12 @@ if Library then
     })
 
     ChestsSec:AddToggle({
-        Name = "Notify on Mythic Drop",
+        Name = "Notify on Eternal Drop",
         Default = false,
         Callback = function(state)
-            notifyOnMythic = state
-            updateMythicListener(state)
-            Notify("Moro Soul", state and "Mythic Drop Alert Enabled!" or "Mythic Drop Alert Disabled", 2, state and "Success" or "Info")
+            notifyOnEternal = state
+            updateEternalListener(state)
+            Notify("Moro Soul", state and "Eternal Drop Alert Enabled! (🌟)" or "Eternal Drop Alert Disabled", 2, state and "Success" or "Info")
         end
     })
 
@@ -3797,6 +3859,168 @@ if Library then
             end
         end
     })
+
+    -- 3.5. Friend Server Bonus Exploits (Unlock All 9 Buffs without friends)
+    local FriendBonusSec = wrapSection(ExploitsTab:CreateSection({ Name = "Friend Server Bonus (9/9)", Collapsible = true }))
+
+    local fakeFriendBonusActive = false
+    local friendBonusCharConn = nil
+
+    local function applyFriendBonusState(enable)
+        pcall(function()
+            local PropertyTribeTreeManager = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"))
+            local MathManager = require(rs:WaitForChild("Packages"):WaitForChild("MathManager"))
+            local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+            local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+
+            if enable then
+                -- Calculate combined property tribe of all 9 friend bonus tiers
+                local combinedTribe = nil
+                for i = 1, 9 do
+                    if MathManager.HasConfigPropertyTribe("Friends", i) then
+                        local cfg = MathManager.GetConfigPropertyTribe("Friends", i)
+                        if not combinedTribe then
+                            combinedTribe = cfg:Clone()
+                        else
+                            combinedTribe = combinedTribe + cfg
+                        end
+                    end
+                end
+
+                if userTree and userTree.Friends then
+                    userTree.Friends:ResetHandler(function()
+                        return combinedTribe
+                    end)
+                    userTree.Friends:SetDirty(true)
+                    userTree:SetDirty(true)
+                end
+                if battleTree then
+                    battleTree:SetDirty(true)
+                end
+
+                -- Update in-game model cache
+                pcall(function()
+                    local faModel = require(rs.UI.FriendAddition.Model.Friends)
+                    faModel.OnlineCount = 9
+                end)
+
+                -- Update in-game UI items to Actived
+                pcall(function()
+                    local scroll = player.PlayerGui.MainUi.FriendsAddition.Content.Content.Middle.AdditionList.ScrollingFrame
+                    for _, v in ipairs(scroll:GetChildren()) do
+                        if v:IsA("Frame") and tonumber(v.Name) then
+                            v.Right.NonActived.Visible = false
+                            v.Right.Actived.Visible = true
+                        end
+                    end
+                end)
+
+                -- Hook proxies so any script checking friend count sees 9
+                pcall(function()
+                    local PropertyProxy = require(rs.Helpers.PropertyProxy)
+                    if not PropertyProxy._origGetOnlineFriendsCount then
+                        PropertyProxy._origGetOnlineFriendsCount = PropertyProxy.GetOnlineFriendsCount
+                    end
+                    PropertyProxy.GetOnlineFriendsCount = function(...)
+                        if fakeFriendBonusActive then return 9 end
+                        return PropertyProxy._origGetOnlineFriendsCount(...)
+                    end
+                end)
+
+                pcall(function()
+                    local fim = require(rs.Packages.FriendsInformationModule)
+                    if not fim._origGetFriendsCount then
+                        fim._origGetFriendsCount = fim.GetFriendsCount
+                    end
+                    fim.GetFriendsCount = function(...)
+                        if fakeFriendBonusActive then return 9, 9 end
+                        return fim._origGetFriendsCount(...)
+                    end
+                end)
+            else
+                -- Revert to normal game state
+                local const = nil
+                local WuKong = nil
+                pcall(function()
+                    const = require(rs.Packages.PropertyTribeTreeManager.const)
+                    WuKong = require(rs.WuKong)
+                end)
+
+                if userTree and userTree.Friends then
+                    userTree.Friends:ResetHandler(function()
+                        local v1 = nil
+                        local count = (WuKong and WuKong:ExecuteQuery("/Lua委托值/同服好友数量?获取缓存值")) or 0
+                        if const then
+                            for i = 1, count do
+                                if MathManager.HasConfigPropertyTribe(const.Regions.Friends, i) then
+                                    v1 = if v1 then v1 + MathManager.GetConfigPropertyTribe(const.Regions.Friends, i) else MathManager.GetConfigPropertyTribe(const.Regions.Friends, i)
+                                end
+                            end
+                        end
+                        return v1
+                    end)
+                    userTree.Friends:SetDirty(true)
+                    userTree:SetDirty(true)
+                end
+                if battleTree then
+                    battleTree:SetDirty(true)
+                end
+
+                -- Revert UI
+                pcall(function()
+                    local WuKong = require(rs.WuKong)
+                    local realCount = WuKong:ExecuteQuery("/Lua委托值/同服好友数量?获取缓存值") or 0
+                    local faModel = require(rs.UI.FriendAddition.Model.Friends)
+                    faModel.OnlineCount = realCount
+
+                    local scroll = player.PlayerGui.MainUi.FriendsAddition.Content.Content.Middle.AdditionList.ScrollingFrame
+                    for _, v in ipairs(scroll:GetChildren()) do
+                        if v:IsA("Frame") and tonumber(v.Name) then
+                            local isActive = tonumber(v.Name) <= realCount
+                            v.Right.NonActived.Visible = not isActive
+                            v.Right.Actived.Visible = isActive
+                        end
+                    end
+                end)
+            end
+        end)
+    end
+
+    FriendBonusSec:AddToggle({
+        Name = "Max Friend Bonus (All 9 Buffs)",
+        Default = false,
+        Callback = function(state)
+            fakeFriendBonusActive = state
+            applyFriendBonusState(state)
+            if state then
+                if not friendBonusCharConn then
+                    friendBonusCharConn = player.CharacterAdded:Connect(function()
+                        task.wait(0.5)
+                        if fakeFriendBonusActive then
+                            applyFriendBonusState(true)
+                        end
+                    end)
+                end
+                Notify("Moro Soul", "All 9 Friend Buffs Active (Speed, Souls, Luck, Draw, etc.)!", 3, "Success")
+            else
+                if friendBonusCharConn then
+                    friendBonusCharConn:Disconnect()
+                    friendBonusCharConn = nil
+                end
+                Notify("Moro Soul", "Friend Bonus Buffs Disabled", 2, "Info")
+            end
+        end
+    })
+
+    table.insert(cleanupHandlers, function()
+        if fakeFriendBonusActive then
+            applyFriendBonusState(false)
+        end
+        if friendBonusCharConn then
+            pcall(function() friendBonusCharConn:Disconnect() end)
+            friendBonusCharConn = nil
+        end
+    end)
 
     -- 4. Remote Summoner & Season Rewards
     local GachaSec = wrapSection(ExploitsTab:CreateSection({ Name = "Remote Gacha & Rewards", Collapsible = true }))
