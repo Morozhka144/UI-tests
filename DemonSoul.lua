@@ -235,14 +235,18 @@ if Library then
 
     -- Universal Notification Helper
     local function Notify(title, content, dur, nType)
-        if Win and Win.Notify then
-            Win:Notify({
-                Title = title or "Moro Soul",
-                Content = content or "",
-                Duration = dur or 2.5,
-                Type = nType or "Info"
-            })
-        end
+        task.spawn(function()
+            pcall(function()
+                if Win and Win.Notify then
+                    Win:Notify({
+                        Title = title or "Moro Soul",
+                        Content = content or "",
+                        Duration = dur or 2.5,
+                        Type = nType or "Info"
+                    })
+                end
+            end)
+        end)
     end
     Library.Notify = function(self, title, content, dur, nType)
         Notify(title, content, dur, nType)
@@ -256,6 +260,7 @@ if Library then
     local DispatchTab = Win:CreateTab({ Name = "Dispatch", Icon = "send" })
     local RewardsTab  = Win:CreateTab({ Name = "Rewards", Icon = "gift" })
     local ExploitsTab = Win:CreateTab({ Name = "Exploits", Icon = "shield" })
+    local MiscTab     = Win:CreateTab({ Name = "Misc", Icon = "sliders" })
     local SettingsTab = Win:AddSettingsTab()
 
     -- Compatibility aliases for Section methods
@@ -4101,6 +4106,337 @@ if Library then
             Notify("Moro Soul", "Full Bright Activated!", 2, "Success")
         end
     })
+
+    -- =====================================================================
+    --                           MISC TAB (Custom Overdrive Boosts)
+    -- =====================================================================
+    do
+        MiscTab:Column("left")
+
+        local MiscCombatSec = wrapSection(MiscTab:CreateSection({ Name = "Combat & Speed Overdrive", Collapsible = true }))
+
+        local miscState = {
+            active = false,
+            attackSpeed = 300,
+            moveSpeed = 50,
+            drawSpeed = 500,
+            fishPower = 100,
+            luck = 100,
+            soulDrop = 200,
+            doubleAttack = true,
+            tripleAttack = true,
+            charConn = nil,
+            loopActive = false
+        }
+
+        local origUcpHooks = {
+            GetFinalExpDeskAcceleration = nil,
+            GetLuck = nil,
+            GetLuckAddition = nil,
+            GetFinalSoulDropAddition = nil
+        }
+
+        local function applyMiscOverdrive(enable)
+            pcall(function()
+                local PropertyTribeTreeManager = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"))
+                local PropertyTribe = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribe"))
+                local UserCalculatorPropertys = require(rs:WaitForChild("Packages"):WaitForChild("WuKongDataProvider"):WaitForChild("UserCalculatorPropertys"))
+                local Cheat = nil
+                pcall(function()
+                    Cheat = require(rs.Packages.PropertyTribeTreeManager.BattleUser.Cheat)
+                end)
+
+                if enable then
+                    if not origUcpHooks.GetFinalExpDeskAcceleration and UserCalculatorPropertys.GetFinalExpDeskAcceleration then
+                        origUcpHooks.GetFinalExpDeskAcceleration = UserCalculatorPropertys.GetFinalExpDeskAcceleration
+                        UserCalculatorPropertys.GetFinalExpDeskAcceleration = function(...)
+                            if miscState.active then
+                                return (miscState.drawSpeed / 100) + 0.3
+                            end
+                            return origUcpHooks.GetFinalExpDeskAcceleration(...)
+                        end
+                    end
+
+                    if not origUcpHooks.GetLuck and UserCalculatorPropertys.GetLuck then
+                        origUcpHooks.GetLuck = UserCalculatorPropertys.GetLuck
+                        UserCalculatorPropertys.GetLuck = function(...)
+                            if miscState.active then
+                                return (miscState.luck / 100)
+                            end
+                            return origUcpHooks.GetLuck(...)
+                        end
+                    end
+
+                    if not origUcpHooks.GetLuckAddition and UserCalculatorPropertys.GetLuckAddition then
+                        origUcpHooks.GetLuckAddition = UserCalculatorPropertys.GetLuckAddition
+                        UserCalculatorPropertys.GetLuckAddition = function(...)
+                            if miscState.active then
+                                return (miscState.luck / 100) * 1.5
+                            end
+                            return origUcpHooks.GetLuckAddition(...)
+                        end
+                    end
+
+                    if not origUcpHooks.GetFinalSoulDropAddition and UserCalculatorPropertys.GetFinalSoulDropAddition then
+                        origUcpHooks.GetFinalSoulDropAddition = UserCalculatorPropertys.GetFinalSoulDropAddition
+                        UserCalculatorPropertys.GetFinalSoulDropAddition = function(...)
+                            if miscState.active then
+                                return (miscState.soulDrop / 100)
+                            end
+                            return origUcpHooks.GetFinalSoulDropAddition(...)
+                        end
+                    end
+
+                    local customTribe = PropertyTribe.new({
+                        AttackSpeedAddition = miscState.attackSpeed / 100,
+                        ExpDestSpeedAddition = miscState.drawSpeed / 100,
+                        MoveSpeedRatio = miscState.moveSpeed / 100,
+                        FishPowerAddition = miscState.fishPower / 100,
+                        LuckAddition = miscState.luck / 100,
+                        SoulDropAddition = miscState.soulDrop / 100,
+                        DoubleAttackPercent = miscState.doubleAttack and 1 or 0,
+                        TripleAttackPercent = miscState.tripleAttack and 1 or 0,
+                    })
+
+                    local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+                    local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+
+                    if userTree and userTree.Friends then
+                        userTree.Friends:ResetHandler(function()
+                            return customTribe
+                        end)
+                        userTree.Friends:SetDirty(true)
+                        userTree:SetDirty(true)
+                    end
+                    if battleTree then
+                        battleTree:SetDirty(true)
+                    end
+                    if Cheat then
+                        Cheat.enableCheat(player.UserId)
+                    end
+
+                    if not miscState.loopActive then
+                        miscState.loopActive = true
+                        task.spawn(function()
+                            while miscState.active and miscState.loopActive do
+                                pcall(function()
+                                    local uTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+                                    local bTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+                                    if uTree and uTree.Friends then
+                                        uTree.Friends:ResetHandler(function()
+                                            return PropertyTribe.new({
+                                                AttackSpeedAddition = miscState.attackSpeed / 100,
+                                                ExpDestSpeedAddition = miscState.drawSpeed / 100,
+                                                MoveSpeedRatio = miscState.moveSpeed / 100,
+                                                FishPowerAddition = miscState.fishPower / 100,
+                                                LuckAddition = miscState.luck / 100,
+                                                SoulDropAddition = miscState.soulDrop / 100,
+                                                DoubleAttackPercent = miscState.doubleAttack and 1 or 0,
+                                                TripleAttackPercent = miscState.tripleAttack and 1 or 0,
+                                            })
+                                        end)
+                                        uTree.Friends:SetDirty(true)
+                                        uTree:SetDirty(true)
+                                    end
+                                    if bTree then
+                                        bTree:SetDirty(true)
+                                    end
+                                    if Cheat then
+                                        Cheat.enableCheat(player.UserId)
+                                    end
+                                end)
+                                task.wait(0.5)
+                            end
+                        end)
+                    end
+                else
+                    miscState.loopActive = false
+                    if Cheat then
+                        Cheat.disableCheat(player.UserId)
+                    end
+
+                    if origUcpHooks.GetFinalExpDeskAcceleration and UserCalculatorPropertys.GetFinalExpDeskAcceleration then
+                        UserCalculatorPropertys.GetFinalExpDeskAcceleration = origUcpHooks.GetFinalExpDeskAcceleration
+                        origUcpHooks.GetFinalExpDeskAcceleration = nil
+                    end
+                    if origUcpHooks.GetLuck and UserCalculatorPropertys.GetLuck then
+                        UserCalculatorPropertys.GetLuck = origUcpHooks.GetLuck
+                        origUcpHooks.GetLuck = nil
+                    end
+                    if origUcpHooks.GetLuckAddition and UserCalculatorPropertys.GetLuckAddition then
+                        UserCalculatorPropertys.GetLuckAddition = origUcpHooks.GetLuckAddition
+                        origUcpHooks.GetLuckAddition = nil
+                    end
+                    if origUcpHooks.GetFinalSoulDropAddition and UserCalculatorPropertys.GetFinalSoulDropAddition then
+                        UserCalculatorPropertys.GetFinalSoulDropAddition = origUcpHooks.GetFinalSoulDropAddition
+                        origUcpHooks.GetFinalSoulDropAddition = nil
+                    end
+
+                    local const = nil
+                    local WuKong = nil
+                    local MathManager = nil
+                    pcall(function()
+                        const = require(rs.Packages.PropertyTribeTreeManager.const)
+                        WuKong = require(rs.WuKong)
+                        MathManager = require(rs.Packages.MathManager)
+                    end)
+
+                    local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+                    local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+                    if userTree and userTree.Friends then
+                        userTree.Friends:ResetHandler(function()
+                            local v1 = nil
+                            local count = (WuKong and WuKong:ExecuteQuery("/Lua委托值/同服好友数量?获取缓存值")) or 0
+                            if const and MathManager then
+                                for i = 1, count do
+                                    if MathManager.HasConfigPropertyTribe(const.Regions.Friends, i) then
+                                        v1 = if v1 then v1 + MathManager.GetConfigPropertyTribe(const.Regions.Friends, i) else MathManager.GetConfigPropertyTribe(const.Regions.Friends, i)
+                                    end
+                                end
+                            end
+                            return v1
+                        end)
+                        userTree.Friends:SetDirty(true)
+                        userTree:SetDirty(true)
+                    end
+                    if battleTree then
+                        battleTree:SetDirty(true)
+                    end
+                end
+            end)
+        end
+
+        MiscCombatSec:AddToggle({
+            Name = "Enable Overdrive Boosts",
+            Default = false,
+            Callback = function(state)
+                miscState.active = state
+                applyMiscOverdrive(state)
+                if state then
+                    if not miscState.charConn then
+                        miscState.charConn = player.CharacterAdded:Connect(function()
+                            task.wait(0.5)
+                            if miscState.active then
+                                applyMiscOverdrive(true)
+                            end
+                        end)
+                    end
+                    Notify("Moro Soul", "Overdrive Boosts Activated!", 2, "Success")
+                else
+                    if miscState.charConn then
+                        miscState.charConn:Disconnect()
+                        miscState.charConn = nil
+                    end
+                    Notify("Moro Soul", "Overdrive Boosts Disabled", 2, "Info")
+                end
+            end
+        })
+
+        MiscCombatSec:AddSlider({
+            Name = "Attack Speed Boost",
+            Min = 0,
+            Max = 2000,
+            Default = 300,
+            Suffix = "%",
+            Callback = function(val)
+                miscState.attackSpeed = val
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        MiscCombatSec:AddSlider({
+            Name = "Move Speed Boost",
+            Min = 0,
+            Max = 2000,
+            Default = 50,
+            Suffix = "%",
+            Callback = function(val)
+                miscState.moveSpeed = val
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        MiscCombatSec:AddToggle({
+            Name = "100% Double Attack (Dev Cheat)",
+            Default = true,
+            Callback = function(state)
+                miscState.doubleAttack = state
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        MiscCombatSec:AddToggle({
+            Name = "100% Triple Attack (Dev Cheat)",
+            Default = true,
+            Callback = function(state)
+                miscState.tripleAttack = state
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        MiscTab:Column("right")
+
+        local MiscUtilitySec = wrapSection(MiscTab:CreateSection({ Name = "Gacha, Luck & Utility", Collapsible = true }))
+
+        MiscUtilitySec:AddSlider({
+            Name = "Draw / Banner Speed",
+            Min = 0,
+            Max = 2000,
+            Default = 500,
+            Suffix = "%",
+            Callback = function(val)
+                miscState.drawSpeed = val
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        MiscUtilitySec:AddSlider({
+            Name = "Fishing Power Boost",
+            Min = 0,
+            Max = 2000,
+            Default = 100,
+            Suffix = "%",
+            Callback = function(val)
+                miscState.fishPower = val
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        MiscUtilitySec:AddSlider({
+            Name = "Client Luck Addition",
+            Min = 0,
+            Max = 2000,
+            Default = 100,
+            Suffix = "%",
+            Callback = function(val)
+                miscState.luck = val
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        MiscUtilitySec:AddSlider({
+            Name = "Soul Drop (Client Tree)",
+            Min = 0,
+            Max = 2000,
+            Default = 200,
+            Suffix = "%",
+            Callback = function(val)
+                miscState.soulDrop = val
+                if miscState.active then applyMiscOverdrive(true) end
+            end
+        })
+
+        table.insert(cleanupHandlers, function()
+            miscState.loopActive = false
+            if miscState.active then
+                applyMiscOverdrive(false)
+            end
+            if miscState.charConn then
+                pcall(function() miscState.charConn:Disconnect() end)
+                miscState.charConn = nil
+            end
+        end)
+    end
 
     -- =====================================================================
     --                           SETTINGS TAB (Custom Extras)
