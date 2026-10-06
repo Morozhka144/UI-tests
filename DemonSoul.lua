@@ -2909,29 +2909,48 @@ if Library then
 
     RewardsTab:Column("right")
 
-    local ChestsSec = wrapSection(RewardsTab:CreateSection({ Name = "World Chests & Drops", Collapsible = true }))
+    local ChestsSec = wrapSection(RewardsTab:CreateSection({ Name = "Menu Chests (Auto-Open 10x)", Collapsible = true }))
+
+    local autoOpenMenuChests = false
+    local chestRarityTarget = "All Rarities (Auto)"
+    local chestOpenDelay = 0.3
+    local chestSkipPopup = true
 
     local function safeClick(btn)
         if not btn then return false end
         local clicked = false
-        if firesignal then
-            pcall(function() firesignal(btn.MouseButton1Click) clicked = true end)
-            pcall(function() firesignal(btn.Activated) clicked = true end)
-        end
-        if getconnections then
-            pcall(function()
+        pcall(function()
+            if firesignal then
+                firesignal(btn.MouseButton1Down)
+                firesignal(btn.MouseButton1Click)
+                firesignal(btn.MouseButton1Up)
+                firesignal(btn.Activated)
+                clicked = true
+            end
+        end)
+        pcall(function()
+            if getconnections then
                 for _, c in ipairs(getconnections(btn.MouseButton1Click)) do
                     c:Fire()
                     clicked = true
                 end
-            end)
-            pcall(function()
                 for _, c in ipairs(getconnections(btn.Activated)) do
                     c:Fire()
                     clicked = true
                 end
-            end)
-        end
+            end
+        end)
+        pcall(function()
+            if vim and btn:IsA("GuiObject") and btn.Visible then
+                local absPos = btn.AbsolutePosition + btn.AbsoluteSize / 2
+                if absPos.X > 0 and absPos.Y > 0 then
+                    vim:SendMouseButtonEvent(absPos.X, absPos.Y, 0, true, game, 1)
+                    task.wait(0.04)
+                    vim:SendMouseButtonEvent(absPos.X, absPos.Y, 0, false, game, 1)
+                    clicked = true
+                end
+            end
+        end)
         return clicked
     end
 
@@ -2958,110 +2977,316 @@ if Library then
         return false
     end
 
+    local function closeRewardPopups()
+        local pGui = player:FindFirstChild("PlayerGui")
+        if not pGui then return end
+        for _, gui in ipairs(pGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                for _, obj in ipairs(gui:GetDescendants()) do
+                    if obj:IsA("GuiButton") and obj.Visible then
+                        local n = obj.Name:lower()
+                        local t = (obj:IsA("TextButton") and obj.Text or ""):lower()
+                        if n:find("confirm", 1, true) or n:find("ok", 1, true) or n:find("receive", 1, true) or n:find("claim", 1, true) or n:find("skip", 1, true) or n:find("close", 1, true)
+                           or t:find("ok", 1, true) or t:find("confirm", 1, true) or t:find("receive", 1, true) or t:find("claim", 1, true) or t:find("получить", 1, true) or t:find("пропустить", 1, true) then
+                            local parent = obj.Parent
+                            local pName = parent and parent.Name:lower() or ""
+                            if pName:find("reward", 1, true) or pName:find("popup", 1, true) or pName:find("prompt", 1, true) or pName:find("notice", 1, true) or pName:find("get", 1, true) or pName:find("congrat", 1, true) then
+                                safeClick(obj)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local function findChestElements()
+        local pGui = player:FindFirstChild("PlayerGui")
+        if not pGui then return nil end
+
+        local chestFrame = nil
+        local menuBtn = nil
+        local rarityButtons = {}
+        local open10Btn = nil
+        local open1Btn = nil
+
+        -- 1. Search for Chest menu button in MainUi / PlayerGui
+        for _, gui in ipairs(pGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                for _, btn in ipairs(gui:GetDescendants()) do
+                    if btn:IsA("GuiButton") then
+                        local bName = btn.Name:lower()
+                        local bText = (btn:IsA("TextButton") and btn.Text or ""):lower()
+                        if (bName:find("chest", 1, true) or bName:find("box", 1, true) or bText:find("chest", 1, true) or bText:find("сундук", 1, true) or bText:find("宝箱", 1, true))
+                           and not bName:find("close", 1, true) and not bName:find("back", 1, true) and not bName:find("exit", 1, true) then
+                            menuBtn = btn
+                        end
+                    end
+                end
+            end
+        end
+
+        -- 2. Search for Chest Frame in PlayerGui
+        for _, gui in ipairs(pGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                for _, frame in ipairs(gui:GetDescendants()) do
+                    if frame:IsA("Frame") or frame:IsA("CanvasGroup") or frame:IsA("ScrollingFrame") then
+                        local fName = frame.Name:lower()
+                        if (fName:find("chest", 1, true) or fName:find("treasure", 1, true) or fName:find("box", 1, true))
+                           and not fName:find("train", 1, true) and not fName:find("breath", 1, true) and not fName:find("rank", 1, true) and not fName:find("mystery", 1, true) then
+                            chestFrame = frame
+                            break
+                        end
+                    end
+                end
+                if chestFrame then break end
+            end
+        end
+
+        -- Fallback: Search frame containing rarity labels/buttons
+        if not chestFrame then
+            for _, gui in ipairs(pGui:GetChildren()) do
+                if gui:IsA("ScreenGui") then
+                    for _, frame in ipairs(gui:GetDescendants()) do
+                        if frame:IsA("Frame") or frame:IsA("ScrollingFrame") then
+                            local hasMyth = false
+                            local hasLeg = false
+                            for _, child in ipairs(frame:GetDescendants()) do
+                                if child:IsA("TextLabel") or child:IsA("TextButton") then
+                                    local t = child.Text:lower()
+                                    if t:find("mythic", 1, true) or t:find("神话", 1, true) or t:find("мифич", 1, true) then hasMyth = true end
+                                    if t:find("legend", 1, true) or t:find("传说", 1, true) or t:find("легенд", 1, true) then hasLeg = true end
+                                end
+                            end
+                            if hasMyth and hasLeg then
+                                chestFrame = frame
+                                break
+                            end
+                        end
+                    end
+                    if chestFrame then break end
+                end
+            end
+        end
+
+        -- 3. If chestFrame found, search inside for Rarity cards/buttons and Open buttons
+        if chestFrame then
+            local rarities = {
+                ["Mythical"]  = {"mythic", "神话", "мифич"},
+                ["Legendary"] = {"legend", "传说", "легенд"},
+                ["Epic"]      = {"epic", "史诗", "эпич"},
+                ["Rare"]      = {"rare", "稀有", "редк"},
+                ["Common"]    = {"common", "普通", "обычн"}
+            }
+
+            for _, desc in ipairs(chestFrame:GetDescendants()) do
+                if desc:IsA("GuiButton") then
+                    local dName = desc.Name:lower()
+                    local dText = (desc:IsA("TextButton") and desc.Text or ""):lower()
+
+                    -- Check for Open 10 / Open button
+                    if dName:find("10", 1, true) or dText:find("10", 1, true) or dText:find("十", 1, true) or dName:find("batch", 1, true) then
+                        open10Btn = desc
+                    elseif dName:find("open", 1, true) or dText:find("open", 1, true) or dText:find("открыть", 1, true) or dText:find("开启", 1, true) then
+                        if not open1Btn then
+                            open1Btn = desc
+                        end
+                    end
+
+                    -- Check for rarity buttons
+                    for rName, keywords in pairs(rarities) do
+                        for _, kw in ipairs(keywords) do
+                            if dName:find(kw, 1, true) or dText:find(kw, 1, true) then
+                                rarityButtons[rName] = desc
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        return {
+            MenuButton = menuBtn,
+            ChestFrame = chestFrame,
+            RarityButtons = rarityButtons,
+            Open10Button = open10Btn,
+            OpenButton = open1Btn
+        }
+    end
+
+    local function openChestBatch()
+        local ui = findChestElements()
+        if not ui or not ui.ChestFrame then
+            if ui and ui.MenuButton then
+                safeClick(ui.MenuButton)
+                task.wait(0.2)
+                ui = findChestElements()
+            end
+        end
+
+        if not ui or not ui.ChestFrame then
+            return false, "Chest UI not found in PlayerGui!"
+        end
+
+        if not ui.ChestFrame.Visible and ui.MenuButton then
+            safeClick(ui.MenuButton)
+            task.wait(0.2)
+        end
+
+        local raritiesToOpen = {}
+        if chestRarityTarget == "All Rarities (Auto)" then
+            raritiesToOpen = {"Mythical", "Legendary", "Epic", "Rare", "Common"}
+        else
+            table.insert(raritiesToOpen, chestRarityTarget)
+        end
+
+        local openedAny = false
+        for _, rarity in ipairs(raritiesToOpen) do
+            local rarityBtn = ui.RarityButtons[rarity]
+            if rarityBtn then
+                safeClick(rarityBtn)
+                task.wait(0.1)
+
+                -- Re-scan buttons after selecting rarity card
+                local targetBtn = nil
+                for _, d in ipairs(ui.ChestFrame:GetDescendants()) do
+                    if d:IsA("GuiButton") and d.Visible then
+                        local dName = d.Name:lower()
+                        local dText = (d:IsA("TextButton") and d.Text or ""):lower()
+                        if dName:find("10", 1, true) or dText:find("10", 1, true) or dText:find("十", 1, true) then
+                            targetBtn = d
+                            break
+                        elseif not targetBtn and (dName:find("open", 1, true) or dText:find("open", 1, true) or dText:find("открыть", 1, true)) then
+                            targetBtn = d
+                        end
+                    end
+                end
+
+                targetBtn = targetBtn or ui.Open10Button or ui.OpenButton
+                if targetBtn then
+                    safeClick(targetBtn)
+                    openedAny = true
+                    task.wait(0.15)
+                    if chestSkipPopup then
+                        closeRewardPopups()
+                    end
+                    if chestRarityTarget ~= "All Rarities (Auto)" then
+                        break
+                    end
+                end
+            end
+        end
+
+        -- If rarity buttons couldn't be indexed separately, try clicking whatever Open button is active
+        if not openedAny and (ui.Open10Button or ui.OpenButton) then
+            local btn = ui.Open10Button or ui.OpenButton
+            safeClick(btn)
+            openedAny = true
+            task.wait(0.15)
+            if chestSkipPopup then
+                closeRewardPopups()
+            end
+        end
+
+        return openedAny
+    end
+
     -- === AUTO OPEN CHESTS LOOP ===
     task.spawn(function()
         while scriptActive do
-            if autoOpenChests then
-                -- 1. Pop-up Chests (Train / Breath reward chest)
+            if autoOpenMenuChests then
                 pcall(function()
-                    local gui = player:FindFirstChild("PlayerGui")
-                    local mainUi = gui and gui:FindFirstChild("MainUi")
-                    if mainUi then
-                        -- Train Breath Reward Chest popup ("Congratulations! You got a chest!")
-                        local trainReward = mainUi:FindFirstChild("TrainBreathRewardFrame")
-                        if trainReward and trainReward.Visible then
-                            local bg = trainReward:FindFirstChild("Bg")
-                            if bg then
-                                local chestFrame = bg:FindFirstChild("ChestFrame")
-                                if chestFrame and chestFrame.Visible then
-                                    local openBtn = chestFrame:FindFirstChild("OpenBtn")
-                                    if openBtn and openBtn.Visible then
-                                        safeClick(openBtn)
-                                    end
-                                end
-                                local rewardFrame = bg:FindFirstChild("Reward")
-                                if rewardFrame and rewardFrame.Visible then
-                                    local recvBtn = rewardFrame:FindFirstChild("ReceiveBtn")
-                                    if recvBtn and recvBtn.Visible then
-                                        safeClick(recvBtn)
-                                    end
-                                end
-                            end
-                        end
-
-                        -- Train Rank Reward Chest Frame (from TrainChest_1 / TrainChest_2)
-                        local rankReward = mainUi:FindFirstChild("TrainRankRewardFrame")
-                        if rankReward and rankReward.Visible then
-                            local bg = rankReward:FindFirstChild("Bg")
-                            local content = bg and bg:FindFirstChild("Content")
-                            local lastSeason = content and content:FindFirstChild("LastSeason")
-                            local recvBtn = lastSeason and lastSeason:FindFirstChild("ReceiveButton")
-                            if recvBtn and recvBtn.Visible then
-                                safeClick(recvBtn)
-                            end
-                            local closeBtn = bg and bg:FindFirstChild("CloseButton")
-                            if closeBtn and closeBtn.Visible then
-                                task.wait(0.2)
-                                safeClick(closeBtn)
-                            end
-                        end
-
-                        -- Boss Damage Reward Frame if open
-                        local bossDmg = mainUi:FindFirstChild("BossDamageFrame")
-                        if bossDmg and bossDmg.Visible then
-                            local openBtn = bossDmg:FindFirstChild("OpenButton", true)
-                            if openBtn and openBtn.Visible then
-                                safeClick(openBtn)
-                            end
-                        end
-                    end
+                    openChestBatch()
                 end)
-
-                -- 2. World / Station Chests & Drops
-                pcall(function()
-                    local pt = workspace:FindFirstChild("PromptTriggers")
-                    if pt then
-                        local targets = {"TrainChest_1", "TrainChest_2", "MysteryBoxTouch", "GroupRewardTouch"}
-                        for _, name in ipairs(targets) do
-                            local obj = pt:FindFirstChild(name)
-                            if obj then
-                                safeFirePrompt(obj)
-                            end
-                        end
-                    end
-
-                    local chestsFolder = workspace:FindFirstChild("Chests")
-                    if chestsFolder then
-                        for _, chest in ipairs(chestsFolder:GetChildren()) do
-                            local pp = chest:FindFirstChildWhichIsA("ProximityPrompt", true)
-                            if pp and pp.Enabled and fireproximityprompt then
-                                pcall(function() fireproximityprompt(pp) end)
-                            else
-                                local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                                local touchPart = chest:IsA("BasePart") and chest or chest:FindFirstChildWhichIsA("BasePart", true)
-                                if hrp and touchPart and firetouchinterest then
-                                    firetouchinterest(hrp, touchPart, 0)
-                                    task.wait()
-                                    firetouchinterest(hrp, touchPart, 1)
-                                end
-                            end
-                        end
-                    end
-                end)
-
-                task.wait(0.5)
+                task.wait(chestOpenDelay or 0.3)
             else
-                task.wait(1)
+                task.wait(0.8)
             end
         end
     end)
 
     ChestsSec:AddToggle({
-        Name = "Auto Open Chests (All)",
+        Name = "Auto Open Chests (10x Loop)",
         Default = false,
         Callback = function(state)
-            autoOpenChests = state
+            autoOpenMenuChests = state
             Notify("Moro Soul", state and "Auto Open Chests Active!" or "Auto Open Chests Disabled", 2, state and "Success" or "Info")
+        end
+    })
+
+    ChestsSec:AddDropdown({
+        Name = "Target Rarity",
+        Options = {"All Rarities (Auto)", "Mythical", "Legendary", "Epic", "Rare", "Common"},
+        Default = "All Rarities (Auto)",
+        Callback = function(val)
+            chestRarityTarget = val
+            Notify("Moro Soul", "Target Chest Rarity: " .. tostring(val), 2, "Info")
+        end
+    })
+
+    ChestsSec:AddSlider({
+        Name = "Open Delay (Sec)",
+        Min = 0.1,
+        Max = 2.0,
+        Default = 0.3,
+        Decimals = 2,
+        Callback = function(val)
+            chestOpenDelay = val
+        end
+    })
+
+    ChestsSec:AddToggle({
+        Name = "Auto-Skip Reward Popups",
+        Default = true,
+        Callback = function(state)
+            chestSkipPopup = state
+        end
+    })
+
+    ChestsSec:AddButton({
+        Name = "Open 10x Once (Test)",
+        Primary = true,
+        Callback = function()
+            local ok, err = openChestBatch()
+            Notify("Moro Soul", ok and "Opened 10 chests batch!" or (err or "No active chest button found"), 3, ok and "Success" or "Warning")
+        end
+    })
+
+    ChestsSec:AddButton({
+        Name = "Scan Chest UI Structure",
+        Primary = false,
+        Callback = function()
+            local ui = findChestElements()
+            print("========================================")
+            print("=== [Moro Soul] CHEST UI INSPECTION ===")
+            if ui.MenuButton then
+                print("[+] Menu Button:", ui.MenuButton:GetFullName())
+            else
+                print("[-] Menu Button: Not detected")
+            end
+            if ui.ChestFrame then
+                print("[+] Chest Frame:", ui.ChestFrame:GetFullName())
+                for _, child in ipairs(ui.ChestFrame:GetChildren()) do
+                    print("    Child:", child.Name, "(" .. child.ClassName .. ")")
+                end
+            else
+                print("[-] Chest Frame: Not detected")
+            end
+            local rCount = 0
+            for rName, btn in pairs(ui.RarityButtons) do
+                rCount = rCount + 1
+                print("    Rarity [" .. rName .. "]:", btn:GetFullName())
+            end
+            print("Total Rarities Indexed:", rCount)
+            if ui.Open10Button then
+                print("[+] Open10 Button:", ui.Open10Button:GetFullName())
+            end
+            if ui.OpenButton then
+                print("[+] Open Button:", ui.OpenButton:GetFullName())
+            end
+            print("========================================")
+            Notify("Moro Soul", "Scan complete! Press F9 to view full UI hierarchy.", 3, "Info")
         end
     })
 
