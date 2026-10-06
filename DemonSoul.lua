@@ -5,14 +5,25 @@
 
 local function SafeLoad()
     local path = "MoroLumina.lua"
-    if isfile and isfile(path) then 
-        local ok, res = pcall(function() return loadstring(readfile(path))() end)
+    local path2 = "Lumina.lua"
+
+    if isfile and isfile(path2) then 
+        local ok, res = pcall(function()
+            local src = readfile(path2)
+            local fn, err = loadstring(src)
+            if not fn then error(err or "loadstring error") end
+            return fn()
+        end)
         if ok and res then return res end
     end
-    
-    local path2 = "Lumina.lua"
-    if isfile and isfile(path2) then 
-        local ok, res = pcall(function() return loadstring(readfile(path2))() end)
+
+    if isfile and isfile(path) then 
+        local ok, res = pcall(function()
+            local src = readfile(path)
+            local fn, err = loadstring(src)
+            if not fn then error(err or "loadstring error") end
+            return fn()
+        end)
         if ok and res then return res end
     end
     
@@ -25,8 +36,14 @@ local function SafeLoad()
             if success and lib then
                 if writefile then pcall(function() writefile(path, content) end) end
                 return lib
+            else
+                warn("[Moro Soul] Ошибка инициализации Lumina: " .. tostring(lib))
             end
+        else
+            warn("[Moro Soul] Ошибка компиляции Lumina: " .. tostring(err))
         end
+    else
+        warn("[Moro Soul] Ошибка загрузки Lumina с GitHub: " .. tostring(content))
     end
     
     warn("[Moro Soul] Не удалось загрузить библиотеку Lumina!")
@@ -325,7 +342,10 @@ if Library then
     end)
 
     -- === 4. FAST SKILLS ===
+    local activeSkillLoops = {}
     local function startSkillLoop(stateKey, skillNum)
+        if activeSkillLoops[stateKey] then return end
+        activeSkillLoops[stateKey] = true
         task.spawn(function()
             while states[stateKey] and scriptActive do
                 if monsterNearby or killAuraActive then
@@ -353,6 +373,7 @@ if Library then
                     task.wait(0.3)
                 end
             end
+            activeSkillLoops[stateKey] = nil
         end)
     end
 
@@ -1777,7 +1798,11 @@ if Library then
         return displayList, tList
     end
 
+    local isSyncingHero = false
     local function SyncHeroSelection(heroName, sourceSec)
+        if isSyncingHero then return end
+        isSyncingHero = true
+
         _G.RerollHeroName = heroName
         _G.RerollHeroPath = heroData[heroName] or heroName
         local newNames, newTalents = GetTalentDisplayList(_G.RerollHeroPath)
@@ -1787,24 +1812,34 @@ if Library then
         end
 
         if sourceSec ~= "reroll" and rerollHeroDrop and rerollHeroDrop.Set then
-            rerollHeroDrop.Set(heroName)
+            if rerollHeroDrop.Get and rerollHeroDrop.Get() ~= heroName then
+                pcall(function() rerollHeroDrop.Set(heroName, true) end)
+            end
         end
         if sourceSec ~= "inject" and injectHeroDrop and injectHeroDrop.Set then
-            injectHeroDrop.Set(heroName)
+            if injectHeroDrop.Get and injectHeroDrop.Get() ~= heroName then
+                pcall(function() injectHeroDrop.Set(heroName, true) end)
+            end
         end
 
         if rerollTalentDrop and rerollTalentDrop.Refresh then
-            rerollTalentDrop.Refresh(newNames)
+            pcall(function() rerollTalentDrop.Refresh(newNames, true) end)
         end
         if injectTalentDrop and injectTalentDrop.Refresh then
-            injectTalentDrop.Refresh(newNames)
+            pcall(function() injectTalentDrop.Refresh(newNames, true) end)
         end
         if injectTargetLabel and injectTargetLabel.Set then
-            injectTargetLabel.Set("Target: " .. _G.RerollHeroName .. " -> " .. tostring(_G.RerollTalentName))
+            pcall(function() injectTargetLabel.Set("Target: " .. _G.RerollHeroName .. " -> " .. tostring(_G.RerollTalentName)) end)
         end
+
+        isSyncingHero = false
     end
 
+    local isSyncingTalent = false
     local function SyncTalentSelection(talentName, sourceSec)
+        if isSyncingTalent then return end
+        isSyncingTalent = true
+
         local _, talents = GetTalentDisplayList(_G.RerollHeroPath)
         for _, t in ipairs(talents) do
             if t.name == talentName then
@@ -1815,14 +1850,20 @@ if Library then
         end
 
         if sourceSec ~= "reroll" and rerollTalentDrop and rerollTalentDrop.Set then
-            rerollTalentDrop.Set(talentName)
+            if rerollTalentDrop.Get and rerollTalentDrop.Get() ~= talentName then
+                pcall(function() rerollTalentDrop.Set(talentName, true) end)
+            end
         end
         if sourceSec ~= "inject" and injectTalentDrop and injectTalentDrop.Set then
-            injectTalentDrop.Set(talentName)
+            if injectTalentDrop.Get and injectTalentDrop.Get() ~= talentName then
+                pcall(function() injectTalentDrop.Set(talentName, true) end)
+            end
         end
         if injectTargetLabel and injectTargetLabel.Set then
-            injectTargetLabel.Set("Target: " .. _G.RerollHeroName .. " -> " .. tostring(_G.RerollTalentName))
+            pcall(function() injectTargetLabel.Set("Target: " .. _G.RerollHeroName .. " -> " .. tostring(_G.RerollTalentName)) end)
         end
+
+        isSyncingTalent = false
     end
 
     -- =====================================================================
@@ -1904,6 +1945,7 @@ if Library then
         Options = heroNames,
         Default = _G.RerollHeroName,
         Callback = function(val)
+            if val == _G.RerollHeroName and rerollHeroDrop and rerollHeroDrop.Get and rerollHeroDrop.Get() == val then return end
             SyncHeroSelection(val, "reroll")
             Notify("Moro Soul", "Selected Character: " .. tostring(val), 2, "Info")
         end
@@ -1914,6 +1956,7 @@ if Library then
         Options = initialDisplayList,
         Default = initialDisplayList[1] or "Talent 1",
         Callback = function(val)
+            if val == _G.RerollTalentName and rerollTalentDrop and rerollTalentDrop.Get and rerollTalentDrop.Get() == val then return end
             SyncTalentSelection(val, "reroll")
             Notify("Moro Soul", "Selected Talent: " .. tostring(val), 2, "Info")
         end
@@ -2217,6 +2260,7 @@ if Library then
         Options = heroNames,
         Default = _G.RerollHeroName,
         Callback = function(val)
+            if val == _G.RerollHeroName and injectHeroDrop and injectHeroDrop.Get and injectHeroDrop.Get() == val then return end
             SyncHeroSelection(val, "inject")
             Notify("Moro Soul", "Selected Character: " .. tostring(val), 2, "Info")
         end
@@ -2227,6 +2271,7 @@ if Library then
         Options = initialDisplayList,
         Default = initialDisplayList[1] or "Talent 1",
         Callback = function(val)
+            if val == _G.RerollTalentName and injectTalentDrop and injectTalentDrop.Get and injectTalentDrop.Get() == val then return end
             SyncTalentSelection(val, "inject")
             Notify("Moro Soul", "Selected Talent: " .. tostring(val), 2, "Info")
         end
