@@ -112,8 +112,9 @@ if Library then
     local isSpeedHack = false
     local minHealthLimit = 0
     local tpHeight = 2
-    local walkSpeedValue = 50
+    local walkSpeedValue = 200
     local speedConn = nil
+    local origGetFinalMoveSpeed = nil
     local currentTarget = nil
 
     -- Heartbeat Movement Safety Guard: Never allow WalkSpeed or JumpPower to explode
@@ -128,17 +129,15 @@ if Library then
             if not char then return end
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then
-                if not isSpeedHack then
-                    if hum.WalkSpeed > 45 then
-                        hum.WalkSpeed = 16
-                    end
+                if hum.WalkSpeed > 5000 then
+                    hum.WalkSpeed = 16
                 end
                 if hum.UseJumpPower then
-                    if hum.JumpPower > 55 then
+                    if hum.JumpPower > 500 then
                         hum.JumpPower = 50
                     end
                 else
-                    if hum.JumpHeight > 8 then
+                    if hum.JumpHeight > 500 then
                         hum.JumpHeight = 7.2
                     end
                 end
@@ -640,12 +639,23 @@ if Library then
 
     local MoveSec = wrapSection(MainTab:CreateSection({ Name = "Movement & Speeds", Collapsible = true }))
 
-    MoveSec:AddToggle({
-        Name = "SpeedHack",
-        Default = false,
-        Callback = function(state)
-            isSpeedHack = state
-            if state then
+    local function applySpeedHack(enable)
+        pcall(function()
+            local ucp = require(rs:WaitForChild("Packages"):WaitForChild("WuKongDataProvider"):WaitForChild("UserCalculatorPropertys"))
+            if enable then
+                if not origGetFinalMoveSpeed and ucp.GetFinalMoveSpeed then
+                    origGetFinalMoveSpeed = ucp.GetFinalMoveSpeed
+                end
+                ucp.GetFinalMoveSpeed = function(userId, ...)
+                    if isSpeedHack and (not userId or userId == player.UserId) then
+                        return walkSpeedValue
+                    end
+                    if origGetFinalMoveSpeed then
+                        return origGetFinalMoveSpeed(userId, ...)
+                    end
+                    return walkSpeedValue
+                end
+
                 if speedConn then speedConn:Disconnect() end
                 speedConn = runService.Heartbeat:Connect(function()
                     local char = player.Character
@@ -654,16 +664,46 @@ if Library then
                         hum.WalkSpeed = walkSpeedValue 
                     end
                 end)
+
+                local char = player.Character
+                local hum = char and char:FindFirstChild("Humanoid")
+                if hum then hum.WalkSpeed = walkSpeedValue end
             else
                 if speedConn then 
                     speedConn:Disconnect() 
                     speedConn = nil
                 end
+                if origGetFinalMoveSpeed and ucp.GetFinalMoveSpeed then
+                    ucp.GetFinalMoveSpeed = origGetFinalMoveSpeed
+                    origGetFinalMoveSpeed = nil
+                end
+                local bip = nil
+                pcall(function()
+                    bip = require(rs.Packages.BattleInformationProxy)
+                end)
+                local realSpeed = 16
+                if bip and bip.GetFinalMoveSpeed then
+                    pcall(function() realSpeed = bip.GetFinalMoveSpeed(player.UserId) end)
+                end
                 local char = player.Character
                 local hum = char and char:FindFirstChild("Humanoid")
                 if hum then 
-                    hum.WalkSpeed = 16 
+                    hum.WalkSpeed = realSpeed 
                 end
+            end
+        end)
+    end
+
+    MoveSec:AddToggle({
+        Name = "SpeedHack",
+        Default = false,
+        Callback = function(state)
+            isSpeedHack = state
+            applySpeedHack(state)
+            if state then
+                Notify("Moro Soul", "SpeedHack Enabled (" .. walkSpeedValue .. " ws)", 2, "Success")
+            else
+                Notify("Moro Soul", "SpeedHack Disabled (Restored)", 2, "Info")
             end
         end
     })
@@ -671,19 +711,23 @@ if Library then
     MoveSec:AddSlider({
         Name = "Walk Speed",
         Min = 16,
-        Max = 250,
+        Max = 1000,
         Default = walkSpeedValue,
         Suffix = " ws",
         Decimals = 0,
         Callback = function(val)
-            walkSpeedValue = tonumber(val) or 50
+            walkSpeedValue = tonumber(val) or 200
             if isSpeedHack then
-                local char = player.Character
-                local hum = char and char:FindFirstChild("Humanoid")
-                if hum then hum.WalkSpeed = walkSpeedValue end
+                applySpeedHack(true)
             end
         end
     })
+
+    table.insert(cleanupHandlers, function()
+        if isSpeedHack then
+            applySpeedHack(false)
+        end
+    end)
 
     MoveSec:AddSlider({
         Name = "CPS Speed",
@@ -3683,7 +3727,8 @@ if Library then
     -- =====================================================================
     --                           EXPLOITS TAB
     -- =====================================================================
-    ExploitsTab:Column("left")
+    do
+        ExploitsTab:Column("left")
 
     -- 1. World & Wall Exploits
     local WallSec = wrapSection(ExploitsTab:CreateSection({ Name = "World & Wall Exploits", Collapsible = true }))
@@ -4224,11 +4269,12 @@ if Library then
             Notify("Moro Soul", "Full Bright Activated!", 2, "Success")
         end
     })
+    end
 
     -- =====================================================================
     --                           MISC TAB (Custom Overdrive Boosts)
     -- =====================================================================
-    local function initMiscTab()
+    do
         MiscTab:Column("left")
 
         local MiscCombatSec = wrapSection(MiscTab:CreateSection({ Name = "Combat & Speed Overdrive", Collapsible = true }))
@@ -4481,7 +4527,224 @@ if Library then
             end
         })
 
+        -- -----------------------------------------------------------------
+        -- Skip Gacha Animation (Instant Roll)
+        -- -----------------------------------------------------------------
+        local skipGachaActive = false
+        local origOnDrawRoleEvent = nil
+        local origDrawRoleModelShow = nil
+        local origExpDeskAcc = nil
+
+        local function applySkipGacha(enable)
+            pcall(function()
+                local LuckDrawBG = require(rs.UI.DrawRole.View.LuckDrawBG)
+                local drawRole = require(rs.UI.DrawRole)
+
+                if enable then
+                    if LuckDrawBG.DataContext and LuckDrawBG.DataContext.Packages then
+                        local pkg = LuckDrawBG.DataContext.Packages
+                        if not origExpDeskAcc and pkg.GetFinalExpDeskAcceleration then
+                            origExpDeskAcc = pkg.GetFinalExpDeskAcceleration
+                        end
+                        pkg.GetFinalExpDeskAcceleration = function(...)
+                            return 999999
+                        end
+                    end
+
+                    if drawRole and drawRole.Panel then
+                        drawRole.Panel.IsHadGamepass299R = true
+                        drawRole.Panel.IsHadGamepass799R = true
+                    end
+
+                    if not origOnDrawRoleEvent and LuckDrawBG.OnDrawRoleEvent then
+                        origOnDrawRoleEvent = LuckDrawBG.OnDrawRoleEvent
+                    end
+                    LuckDrawBG.OnDrawRoleEvent = function(self, a2, a3, a4, a5, a6)
+                        if skipGachaActive then
+                            return self:DrawRoleModelShow(a2, a6)
+                        end
+                        if origOnDrawRoleEvent then
+                            return origOnDrawRoleEvent(self, a2, a3, a4, a5, a6)
+                        end
+                    end
+
+                    if not origDrawRoleModelShow and LuckDrawBG.DrawRoleModelShow then
+                        origDrawRoleModelShow = LuckDrawBG.DrawRoleModelShow
+                    end
+                    LuckDrawBG.DrawRoleModelShow = function(self, a2, a6)
+                        if skipGachaActive then
+                            pcall(function()
+                                local Model = workspace.Maps.DrawRoleArchive:FindFirstChildOfClass("Model")
+                                if Model then
+                                    Model.Parent = rs.RoleModels
+                                    local Tips = workspace.Maps.DrawRoleArchive:FindFirstChild("Tips")
+                                    if Tips then Tips:Destroy() end
+                                end
+                                rs.ClientEvents.DrawRole:Fire(a2, a6)
+                                if self.DataContext and self.DataContext.Panel and self.DataContext.Panel.IsAutoDrawing then
+                                    rs.RemoteEvents.DrawRole:FireServer(true)
+                                end
+                                if self.DataContext and self.DataContext.Panel then
+                                    self.DataContext.Panel.IsDrawing = self.DataContext.Panel.IsAutoDrawing
+                                    self.DataContext.Panel.MaskVisible = self.DataContext.Panel.IsDrawing
+                                    if self.DrawRoleFrame_L and self.DrawRoleFrame_L.Mask then
+                                        self.DrawRoleFrame_L.Mask.Visible = self.DataContext.Panel.IsDrawing
+                                    end
+                                end
+                            end)
+                            return
+                        end
+                        if origDrawRoleModelShow then
+                            return origDrawRoleModelShow(self, a2, a6)
+                        end
+                    end
+                else
+                    if LuckDrawBG.DataContext and LuckDrawBG.DataContext.Packages and origExpDeskAcc then
+                        LuckDrawBG.DataContext.Packages.GetFinalExpDeskAcceleration = origExpDeskAcc
+                        origExpDeskAcc = nil
+                    end
+                    if origOnDrawRoleEvent and LuckDrawBG.OnDrawRoleEvent then
+                        LuckDrawBG.OnDrawRoleEvent = origOnDrawRoleEvent
+                        origOnDrawRoleEvent = nil
+                    end
+                    if origDrawRoleModelShow and LuckDrawBG.DrawRoleModelShow then
+                        LuckDrawBG.DrawRoleModelShow = origDrawRoleModelShow
+                        origDrawRoleModelShow = nil
+                    end
+                end
+            end)
+        end
+
+        MiscUtilitySec:AddToggle({
+            Name = "Skip Gacha Animation (Instant Roll)",
+            Default = false,
+            Callback = function(state)
+                skipGachaActive = state
+                applySkipGacha(state)
+                if state then
+                    Notify("Moro Soul", "Skip Gacha Animation Enabled!", 2, "Success")
+                else
+                    Notify("Moro Soul", "Gacha Animation Restored", 2, "Info")
+                end
+            end
+        })
+
+        -- -----------------------------------------------------------------
+        -- Instant Fishing & Auto Fishing
+        -- -----------------------------------------------------------------
+        local instantFishingActive = false
+        local autoFishingLoopActive = false
+        local fishingStateConn = nil
+
+        local function findNearestFishingPrompt()
+            local char = player.Character
+            if not char or not char.PrimaryPart then return nil end
+            local pos = char.PrimaryPart.Position
+            local nearest = nil
+            local minDist = 60
+            local fFolder = workspace:FindFirstChild("Fishing")
+            if not fFolder then return nil end
+            for _, obj in ipairs(fFolder:GetDescendants()) do
+                if obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent:IsA("BasePart") then
+                    local dist = (obj.Parent.Position - pos).Magnitude
+                    if dist < minDist then
+                        minDist = dist
+                        nearest = obj
+                    end
+                end
+            end
+            return nearest
+        end
+
+        local function setupFishingStateWatcher()
+            if fishingStateConn then
+                fishingStateConn:Disconnect()
+                fishingStateConn = nil
+            end
+            local fg = player.PlayerGui:FindFirstChild("Fishing")
+            local fState = fg and fg:FindFirstChild("FishingState")
+            if fState then
+                fishingStateConn = fState.Changed:Connect(function(val)
+                    if (instantFishingActive or autoFishingLoopActive) and val == "Pulling" then
+                        task.spawn(function()
+                            local pull = (remoteFolder or rs.RemoteEvents):FindFirstChild("PullFish")
+                            while (instantFishingActive or autoFishingLoopActive) and fState.Value == "Pulling" do
+                                if pull then pull:FireServer() end
+                                task.wait(0.04)
+                            end
+                        end)
+                    end
+                end)
+            end
+        end
+
+        MiscUtilitySec:AddToggle({
+            Name = "Instant Fishing (Instant Reel)",
+            Default = false,
+            Callback = function(state)
+                instantFishingActive = state
+                if state then
+                    setupFishingStateWatcher()
+                    Notify("Moro Soul", "Instant Catch Active (Bite = Auto Catch)!", 2, "Success")
+                else
+                    if not autoFishingLoopActive and fishingStateConn then
+                        fishingStateConn:Disconnect()
+                        fishingStateConn = nil
+                    end
+                    Notify("Moro Soul", "Instant Fishing Disabled", 2, "Info")
+                end
+            end
+        })
+
+        MiscUtilitySec:AddToggle({
+            Name = "Auto Fish (Cast + Instant Catch)",
+            Default = false,
+            Callback = function(state)
+                autoFishingLoopActive = state
+                if state then
+                    setupFishingStateWatcher()
+                    task.spawn(function()
+                        while autoFishingLoopActive and scriptActive do
+                            local fg = player.PlayerGui:FindFirstChild("Fishing")
+                            local fState = fg and fg:FindFirstChild("FishingState")
+                            local stateVal = fState and fState.Value or ""
+
+                            if stateVal == "" then
+                                local prompt = findNearestFishingPrompt()
+                                if prompt then
+                                    local sf = (remoteFolder or rs.RemoteEvents):FindFirstChild("StartFishing")
+                                    if sf then sf:FireServer(prompt) end
+                                end
+                                task.wait(0.5)
+                            elseif stateVal == "Pulling" then
+                                local pull = (remoteFolder or rs.RemoteEvents):FindFirstChild("PullFish")
+                                if pull then pull:FireServer() end
+                                task.wait(0.04)
+                            else
+                                task.wait(0.2)
+                            end
+                        end
+                    end)
+                    Notify("Moro Soul", "Auto Fishing Active (Auto Cast & Catch)!", 2, "Success")
+                else
+                    if not instantFishingActive and fishingStateConn then
+                        fishingStateConn:Disconnect()
+                        fishingStateConn = nil
+                    end
+                    Notify("Moro Soul", "Auto Fishing Disabled", 2, "Info")
+                end
+            end
+        })
+
         table.insert(cleanupHandlers, function()
+            skipGachaActive = false
+            applySkipGacha(false)
+            instantFishingActive = false
+            autoFishingLoopActive = false
+            if fishingStateConn then
+                pcall(function() fishingStateConn:Disconnect() end)
+                fishingStateConn = nil
+            end
             miscState.loopActive = false
             if miscState.active then
                 applyMiscOverdrive(false)
@@ -4492,12 +4755,11 @@ if Library then
             end
         end)
     end
-    initMiscTab()
 
     -- =====================================================================
     --                           SETTINGS TAB (Custom Extras)
     -- =====================================================================
-    local function initSettingsTab()
+    do
         SettingsTab:Column("right")
 
         local GameOptSec = wrapSection(SettingsTab:CreateSection({ Name = "Game Optimizations", Collapsible = true }))
@@ -4562,7 +4824,6 @@ if Library then
             end
         })
     end
-    initSettingsTab()
 
     Notify("Moro Soul", "Script Loaded Successfully (Lumina UI)!", 3, "Success")
 end
