@@ -3009,14 +3009,6 @@ if Library then
         [5] = "/\229\174\157\231\174\177\231\179\187\231\187\159/\229\188\128\229\174\157\231\174\177/\229\188\128\229\174\157\231\174\1775?\229\164\154\230\172\161\232\180\173\228\185\176", -- Mythical (🔴 Tier 5)
     }
 
-    local CHEST_TIER_NAMES = {
-        [1] = "⚪ Common",
-        [2] = "🔵 Rare",
-        [3] = "🟣 Epic",
-        [4] = "🟡 Legendary",
-        [5] = "🔴 Mythical"
-    }
-
     local function safeInvokeWuKongChest(tier, count)
         local path = CHEST_ACTIONS[tier]
         if not path then return false, "Invalid tier" end
@@ -3152,46 +3144,6 @@ if Library then
         Default = true,
         Callback = function(state)
             chestSkipPopup = state
-        end
-    })
-
-    ChestsSec:AddButton({
-        Name = "🔴 Open Mythical (10x Once)",
-        Primary = true,
-        Callback = function()
-            local ok = safeInvokeWuKongChest(5, chestBatchAmount or 10)
-            if chestSkipPopup then task.wait(0.1); closeRewardPopups(); end
-            Notify("Moro Soul", ok and "Sent 10x Mythical chest open!" or "Failed to call remote", 2, ok and "Success" or "Error")
-        end
-    })
-
-    ChestsSec:AddButton({
-        Name = "🟡 Open Legendary (10x Once)",
-        Primary = true,
-        Callback = function()
-            local ok = safeInvokeWuKongChest(4, chestBatchAmount or 10)
-            if chestSkipPopup then task.wait(0.1); closeRewardPopups(); end
-            Notify("Moro Soul", ok and "Sent 10x Legendary chest open!" or "Failed to call remote", 2, ok and "Success" or "Error")
-        end
-    })
-
-    ChestsSec:AddButton({
-        Name = "Open Selected Rarity Once",
-        Primary = false,
-        Callback = function()
-            local selectedTier = getTierFromTarget(chestRarityTarget)
-            if selectedTier then
-                local ok = safeInvokeWuKongChest(selectedTier, chestBatchAmount or 10)
-                if chestSkipPopup then task.wait(0.1); closeRewardPopups(); end
-                Notify("Moro Soul", ok and ("Opened " .. (CHEST_TIER_NAMES[selectedTier] or "chest")) or "Failed to call remote", 2, ok and "Success" or "Error")
-            else
-                for tier = 5, 1, -1 do
-                    safeInvokeWuKongChest(tier, chestBatchAmount or 10)
-                    task.wait(0.15)
-                end
-                if chestSkipPopup then task.wait(0.1); closeRewardPopups(); end
-                Notify("Moro Soul", "Opened 10x of all 5 rarities!", 2, "Success")
-            end
         end
     })
 
