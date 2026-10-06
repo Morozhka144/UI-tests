@@ -2916,6 +2916,7 @@ if Library then
     local chestBatchAmount = 10
     local chestOpenDelay = 0.3
     local chestSkipPopup = true
+    local notifyOnMythic = false
 
     local function safeClick(btn)
         if not btn then return false end
@@ -3009,19 +3010,55 @@ if Library then
         [5] = "/\229\174\157\231\174\177\231\179\187\231\187\159/\229\188\128\229\174\157\231\174\177/\229\188\128\229\174\157\231\174\1775?\229\164\154\230\172\161\232\180\173\228\185\176", -- Mythical (🔴 Tier 5)
     }
 
+    local mythicHeroLookup = {
+        ["Akaza"] = true, ["漪窝座"] = true,
+        ["Douma"] = true, ["童魔"] = true,
+        ["Kokushibo"] = true, ["黑死牟"] = true,
+        ["Zohakuten"] = true, ["憎珀天"] = true,
+        ["Nezuko (Berserk)"] = true, ["弥豆子_鬼化"] = true,
+        ["Tanjiro (Hinokami)"] = true, ["炭治郎_火之神神乐"] = true,
+        ["Tanjiro (Swordsmith Village)"] = true, ["炭治郎_锻刀村篇"] = true,
+        ["Gyomei Himejima"] = true, ["悲鸣屿行冥"] = true,
+        ["Himejima Kyoumei"] = true,
+        ["Yoriichi"] = true, ["继国缘一"] = true,
+        ["Muzan"] = true, ["鬼舞辻无惨"] = true,
+        ["Tengen Uzui"] = true, ["宇髓天元"] = true,
+        ["Muichiro Tokito"] = true, ["时透无一郎"] = true,
+        ["Kaigaku"] = true, ["稻玉狯岳"] = true,
+        ["Daki"] = true, ["堕姬"] = true,
+        ["Gyutaro"] = true, ["妓夫太郎"] = true,
+    }
+
+    local roleIdToName = {}
+    pcall(function()
+        local rc = require(rs:WaitForChild("Configs"):WaitForChild("RoleConfig"))
+        for id, r in pairs(rc) do
+            local q = r.Quality or r.RoleQuality or r.Rarity or r.Grade or r.Star or r.RoleGrade
+            if q == 5 or tostring(q):lower():find("myth", 1, true) or tostring(q):find("神话", 1, true) then
+                if r.RoleName then mythicHeroLookup[r.RoleName] = true end
+                if r.RoleIndex then mythicHeroLookup[r.RoleIndex] = true end
+            end
+            if r.RoleName and r.RoleId then
+                roleIdToName[r.RoleId] = r.RoleName
+                roleIdToName[tonumber(id) or id] = r.RoleName
+            end
+        end
+    end)
+
     local function safeInvokeWuKongChest(tier, count)
         local path = CHEST_ACTIONS[tier]
         if not path then return false, "Invalid tier" end
         count = tonumber(count) or 10
 
         local invoked = false
+        local res = nil
         -- 1. Direct InvokeServer via RemoteActionFunction (exact method from dss.lua)
         pcall(function()
             local wk = rs:FindFirstChild("WuKong")
             if not wk then return end
             local raf = wk:FindFirstChild("RemoteActionFunction")
             if not raf then return end
-            raf:InvokeServer(path, count)
+            res = raf:InvokeServer(path, count)
             invoked = true
         end)
 
@@ -3033,7 +3070,7 @@ if Library then
                     pcall(function() wkModule = require(rs:WaitForChild("WuKong", 2)) end)
                 end
                 if wkModule and wkModule.ExecuteAction then
-                    wkModule:ExecuteAction(path, count)
+                    res = wkModule:ExecuteAction(path, count)
                     invoked = true
                 end
             end)
@@ -3054,7 +3091,115 @@ if Library then
             remote:FireServer("InfiniteCityEventProgress_OpenChest", 10)
         end)
 
-        return invoked
+        return invoked, res
+    end
+
+    local function detectMythicDrop(tier, serverRes)
+        local found = {}
+
+        local function checkMatch(rawStr)
+            if type(rawStr) ~= "string" or #rawStr < 2 then return end
+            for engName, cnIndex in pairs(heroData) do
+                local match = false
+                if rawStr == engName or rawStr == cnIndex then
+                    match = true
+                elseif rawStr:find(engName, 1, true) or (cnIndex and #cnIndex >= 3 and rawStr:find(cnIndex, 1, true)) then
+                    match = true
+                end
+                if match then
+                    local isMyth = mythicHeroLookup[engName] or (cnIndex and mythicHeroLookup[cnIndex]) or (tier == 5)
+                    if isMyth then
+                        found[engName] = true
+                    end
+                end
+            end
+        end
+
+        local function scanVal(val, depth)
+            if not val or depth > 6 then return end
+            local vt = type(val)
+            if vt == "string" then
+                checkMatch(val)
+            elseif vt == "number" then
+                local rName = roleIdToName[val]
+                if rName and (mythicHeroLookup[rName] or tier == 5) then
+                    found[rName] = true
+                end
+            elseif vt == "table" then
+                for k, v in pairs(val) do
+                    if type(k) == "string" then checkMatch(k) end
+                    scanVal(v, depth + 1)
+                end
+            end
+        end
+        scanVal(serverRes, 1)
+
+        -- Scan PlayerGui reward popups / labels
+        pcall(function()
+            local pGui = player:FindFirstChild("PlayerGui")
+            if not pGui then return end
+            for _, gui in ipairs(pGui:GetChildren()) do
+                if gui:IsA("ScreenGui") and gui.Enabled then
+                    for _, obj in ipairs(gui:GetDescendants()) do
+                        if obj:IsA("TextLabel") and obj.Visible and #obj.Text > 1 then
+                            local t = obj.Text
+                            local hasMyth = t:lower():find("myth", 1, true) or t:find("神话", 1, true) or t:lower():find("мифич", 1, true)
+                            for engName, cnIndex in pairs(heroData) do
+                                if t:find(engName, 1, true) or (cnIndex and #cnIndex >= 3 and t:find(cnIndex, 1, true)) then
+                                    if hasMyth or mythicHeroLookup[engName] or (tier == 5) then
+                                        found[engName] = true
+                                    end
+                                end
+                            end
+                            if hasMyth and next(found) == nil then
+                                found[t:sub(1, 25)] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        local list = {}
+        for name, _ in pairs(found) do
+            table.insert(list, name)
+        end
+        return list
+    end
+
+    local mythicGuiConn = nil
+    local lastMythicNotifiedTick = 0
+    local function updateMythicListener(state)
+        if mythicGuiConn then
+            pcall(function() mythicGuiConn:Disconnect() end)
+            mythicGuiConn = nil
+        end
+        if state then
+            local pGui = player:FindFirstChild("PlayerGui")
+            if pGui then
+                mythicGuiConn = pGui.DescendantAdded:Connect(function(desc)
+                    if not notifyOnMythic then return end
+                    if tick() - lastMythicNotifiedTick < 1.5 then return end
+                    if desc:IsA("TextLabel") then
+                        task.wait(0.04)
+                        local t = desc.Text
+                        if #t > 1 then
+                            local hasMyth = t:lower():find("myth", 1, true) or t:find("神话", 1, true) or t:lower():find("мифич", 1, true)
+                            for engName, cnIndex in pairs(heroData) do
+                                if t:find(engName, 1, true) or (cnIndex and #cnIndex >= 3 and t:find(cnIndex, 1, true)) then
+                                    if hasMyth or mythicHeroLookup[engName] then
+                                        lastMythicNotifiedTick = tick()
+                                        Notify("Moro Soul", "🔴 ВЫПАЛ МИФИК: " .. engName .. "!", 7, "Success")
+                                        print("[Moro Soul] 🔴 MYTHICAL DROP (GUI): " .. engName)
+                                        return
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end)
+            end
+        end
     end
 
     local function getTierFromTarget(targetStr)
@@ -3079,12 +3224,32 @@ if Library then
             if autoOpenMenuChests then
                 local selectedTier = getTierFromTarget(chestRarityTarget)
                 if selectedTier then
-                    safeInvokeWuKongChest(selectedTier, chestBatchAmount or 10)
+                    local ok, sRes = safeInvokeWuKongChest(selectedTier, chestBatchAmount or 10)
+                    if ok and notifyOnMythic then
+                        task.wait(0.05)
+                        local mythics = detectMythicDrop(selectedTier, sRes)
+                        if #mythics > 0 and tick() - lastMythicNotifiedTick >= 1.5 then
+                            lastMythicNotifiedTick = tick()
+                            local dropStr = table.concat(mythics, ", ")
+                            Notify("Moro Soul", "🔴 ВЫПАЛ МИФИК: " .. dropStr .. "!", 7, "Success")
+                            print("[Moro Soul] 🔴 MYTHICAL DROP: " .. dropStr)
+                        end
+                    end
                 else
                     -- "All Rarities (Auto)": iterate 5 down to 1
                     for tier = 5, 1, -1 do
                         if not autoOpenMenuChests or not scriptActive then break end
-                        safeInvokeWuKongChest(tier, chestBatchAmount or 10)
+                        local ok, sRes = safeInvokeWuKongChest(tier, chestBatchAmount or 10)
+                        if ok and notifyOnMythic then
+                            task.wait(0.05)
+                            local mythics = detectMythicDrop(tier, sRes)
+                            if #mythics > 0 and tick() - lastMythicNotifiedTick >= 1.5 then
+                                lastMythicNotifiedTick = tick()
+                                local dropStr = table.concat(mythics, ", ")
+                                Notify("Moro Soul", "🔴 ВЫПАЛ МИФИК: " .. dropStr .. "!", 7, "Success")
+                                print("[Moro Soul] 🔴 MYTHICAL DROP: " .. dropStr)
+                            end
+                        end
                         task.wait(chestOpenDelay or 0.3)
                     end
                 end
@@ -3144,6 +3309,16 @@ if Library then
         Default = true,
         Callback = function(state)
             chestSkipPopup = state
+        end
+    })
+
+    ChestsSec:AddToggle({
+        Name = "Notify on Mythic Drop",
+        Default = false,
+        Callback = function(state)
+            notifyOnMythic = state
+            updateMythicListener(state)
+            Notify("Moro Soul", state and "Mythic Drop Alert Enabled!" or "Mythic Drop Alert Disabled", 2, state and "Success" or "Info")
         end
     })
 
