@@ -78,6 +78,7 @@ if Library then
     local animCancel = false
     local autoRoulette = false
     local autoMissions = false
+    local autoOpenChests = false
     local monsterNearby = false
     local isSpeedHack = false
     local minHealthLimit = 0
@@ -1743,7 +1744,11 @@ if Library then
     _G.RerollHeroPath = initialHeroPath
     _G.RerollTalentId = initialTalent.id
     _G.RerollTalentName = initialTalent.name
-    _G.TargetBonusStat = "Critical Damage"
+    _G.TargetBonusStats = {
+        ["Skill3 Damage"] = true,
+        ["Shield Damage"] = true
+    }
+    _G.TargetBonusStat = "Skill3 Damage"
     _G.TargetMinRank = "S (81-100)"
     _G.AutoLockMatching = true
     _G.AutoRerollActive = false
@@ -1914,10 +1919,11 @@ if Library then
         end
     })
 
-    TalentRerollSec:AddDropdown({
-        Name = "Target Bonus Stat",
+    TalentRerollSec:AddMultiDropdown({
+        Name = "Target Bonus Stats",
         Options = {
-            "Any Stat (Rank Only)",
+            "Skill3 Damage",
+            "Shield Damage",
             "Critical Damage",
             "Critical Chance",
             "Attack",
@@ -1928,20 +1934,33 @@ if Library then
             "Normal Attack Damage",
             "Skill1 Damage",
             "Skill2 Damage",
-            "Skill3 Damage",
-            "Shield Damage",
             "Move Speed",
             "Energy Addition",
+            "Any Stat (Rank Only)",
             "[Leader] Critical Damage",
             "[Leader] Critical Chance",
             "[Leader] Attack",
             "[Leader] Attack Speed",
-            "[Leader] Boss Damage Boost"
+            "[Leader] Boss Damage Boost",
+            "[Leader] Double Attack",
+            "[Leader] Triple Attack",
+            "[Leader] Normal Attack Damage",
+            "[Leader] Skill1 Damage",
+            "[Leader] Skill2 Damage",
+            "[Leader] Skill3 Damage",
+            "[Leader] Shield Damage",
+            "[Leader] Move Speed",
+            "[Leader] Energy Addition"
         },
-        Default = "Critical Damage",
-        Callback = function(val)
-            _G.TargetBonusStat = val
-            Notify("Moro Soul", "Target Stat: " .. tostring(val), 2, "Info")
+        Default = {"Skill3 Damage", "Shield Damage"},
+        Callback = function(orderList, changedOpt, isSelected)
+            local newSet = {}
+            for _, stat in ipairs(orderList) do
+                newSet[stat] = true
+            end
+            _G.TargetBonusStats = newSet
+            _G.TargetBonusStat = orderList[1] or nil
+            Notify("Moro Soul", "Target Stats: " .. (#orderList > 0 and table.concat(orderList, ", ") or "None"), 2, "Info")
         end
     })
 
@@ -1975,18 +1994,31 @@ if Library then
     })
 
     local autoRerollToggleRef = nil
-    local function DoesSlotMatch(attrData, targetStatName, minLevel)
+    local function DoesSlotMatch(attrData, targetStats, minLevel)
         if not attrData or not attrData.Id or not attrData.Level then
             return false
         end
         if attrData.Level < minLevel then
             return false
         end
-        if targetStatName == "Any Stat (Rank Only)" then
-            return true
+        if type(targetStats) == "string" then
+            if targetStats == "Any Stat (Rank Only)" then
+                return true
+            end
+            local targetId = attrNameToId[targetStats]
+            return targetId and attrData.Id == targetId
         end
-        local targetId = attrNameToId[targetStatName]
-        return attrData.Id == targetId
+        if type(targetStats) == "table" then
+            if targetStats["Any Stat (Rank Only)"] then
+                return true
+            end
+            for statName, isSelected in pairs(targetStats) do
+                if isSelected and attrNameToId[statName] and attrData.Id == attrNameToId[statName] then
+                    return true
+                end
+            end
+        end
+        return false
     end
 
     local function ExecuteRerollStep(heroPath, talentId)
@@ -2005,11 +2037,24 @@ if Library then
         local lockedSlots = {}
         local matchedCount = 0
 
+        local hasTarget = false
+        if type(_G.TargetBonusStats) == "table" then
+            for _, v in pairs(_G.TargetBonusStats) do
+                if v then hasTarget = true break end
+            end
+        elseif type(_G.TargetBonusStats) == "string" and _G.TargetBonusStats ~= "" then
+            hasTarget = true
+        end
+
+        if not hasTarget then
+            return false, "No target stats selected!", lockedSlots
+        end
+
         for i = 1, totalSlots do
             local slotKey = "Attr" .. i
             local slotData = currentAttrs[slotKey]
             if slotData and slotData.Id and slotData.Level then
-                if DoesSlotMatch(slotData, _G.TargetBonusStat, minReqLevel) then
+                if DoesSlotMatch(slotData, _G.TargetBonusStats, minReqLevel) then
                     matchedCount = matchedCount + 1
                     if _G.AutoLockMatching then
                         table.insert(lockedSlots, slotKey)
@@ -2821,12 +2866,36 @@ if Library then
 
     local ChestsSec = wrapSection(RewardsTab:CreateSection({ Name = "World Chests & Drops", Collapsible = true }))
 
+    local function safeClick(btn)
+        if not btn then return false end
+        local clicked = false
+        if firesignal then
+            pcall(function() firesignal(btn.MouseButton1Click) clicked = true end)
+            pcall(function() firesignal(btn.Activated) clicked = true end)
+        end
+        if getconnections then
+            pcall(function()
+                for _, c in ipairs(getconnections(btn.MouseButton1Click)) do
+                    c:Fire()
+                    clicked = true
+                end
+            end)
+            pcall(function()
+                for _, c in ipairs(getconnections(btn.Activated)) do
+                    c:Fire()
+                    clicked = true
+                end
+            end)
+        end
+        return clicked
+    end
+
     local function safeFirePrompt(obj)
         if not obj then return false end
         local pp = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pp then
+        if pp and pp.Enabled then
             if fireproximityprompt then
-                fireproximityprompt(pp, 0)
+                pcall(function() fireproximityprompt(pp) end)
                 return true
             else
                 local char = player.Character
@@ -2843,6 +2912,113 @@ if Library then
         end
         return false
     end
+
+    -- === AUTO OPEN CHESTS LOOP ===
+    task.spawn(function()
+        while scriptActive do
+            if autoOpenChests then
+                -- 1. Pop-up Chests (Train / Breath reward chest)
+                pcall(function()
+                    local gui = player:FindFirstChild("PlayerGui")
+                    local mainUi = gui and gui:FindFirstChild("MainUi")
+                    if mainUi then
+                        -- Train Breath Reward Chest popup ("Congratulations! You got a chest!")
+                        local trainReward = mainUi:FindFirstChild("TrainBreathRewardFrame")
+                        if trainReward and trainReward.Visible then
+                            local bg = trainReward:FindFirstChild("Bg")
+                            if bg then
+                                local chestFrame = bg:FindFirstChild("ChestFrame")
+                                if chestFrame and chestFrame.Visible then
+                                    local openBtn = chestFrame:FindFirstChild("OpenBtn")
+                                    if openBtn and openBtn.Visible then
+                                        safeClick(openBtn)
+                                    end
+                                end
+                                local rewardFrame = bg:FindFirstChild("Reward")
+                                if rewardFrame and rewardFrame.Visible then
+                                    local recvBtn = rewardFrame:FindFirstChild("ReceiveBtn")
+                                    if recvBtn and recvBtn.Visible then
+                                        safeClick(recvBtn)
+                                    end
+                                end
+                            end
+                        end
+
+                        -- Train Rank Reward Chest Frame (from TrainChest_1 / TrainChest_2)
+                        local rankReward = mainUi:FindFirstChild("TrainRankRewardFrame")
+                        if rankReward and rankReward.Visible then
+                            local bg = rankReward:FindFirstChild("Bg")
+                            local content = bg and bg:FindFirstChild("Content")
+                            local lastSeason = content and content:FindFirstChild("LastSeason")
+                            local recvBtn = lastSeason and lastSeason:FindFirstChild("ReceiveButton")
+                            if recvBtn and recvBtn.Visible then
+                                safeClick(recvBtn)
+                            end
+                            local closeBtn = bg and bg:FindFirstChild("CloseButton")
+                            if closeBtn and closeBtn.Visible then
+                                task.wait(0.2)
+                                safeClick(closeBtn)
+                            end
+                        end
+
+                        -- Boss Damage Reward Frame if open
+                        local bossDmg = mainUi:FindFirstChild("BossDamageFrame")
+                        if bossDmg and bossDmg.Visible then
+                            local openBtn = bossDmg:FindFirstChild("OpenButton", true)
+                            if openBtn and openBtn.Visible then
+                                safeClick(openBtn)
+                            end
+                        end
+                    end
+                end)
+
+                -- 2. World / Station Chests & Drops
+                pcall(function()
+                    local pt = workspace:FindFirstChild("PromptTriggers")
+                    if pt then
+                        local targets = {"TrainChest_1", "TrainChest_2", "MysteryBoxTouch", "GroupRewardTouch"}
+                        for _, name in ipairs(targets) do
+                            local obj = pt:FindFirstChild(name)
+                            if obj then
+                                safeFirePrompt(obj)
+                            end
+                        end
+                    end
+
+                    local chestsFolder = workspace:FindFirstChild("Chests")
+                    if chestsFolder then
+                        for _, chest in ipairs(chestsFolder:GetChildren()) do
+                            local pp = chest:FindFirstChildWhichIsA("ProximityPrompt", true)
+                            if pp and pp.Enabled and fireproximityprompt then
+                                pcall(function() fireproximityprompt(pp) end)
+                            else
+                                local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                                local touchPart = chest:IsA("BasePart") and chest or chest:FindFirstChildWhichIsA("BasePart", true)
+                                if hrp and touchPart and firetouchinterest then
+                                    firetouchinterest(hrp, touchPart, 0)
+                                    task.wait()
+                                    firetouchinterest(hrp, touchPart, 1)
+                                end
+                            end
+                        end
+                    end
+                end)
+
+                task.wait(0.5)
+            else
+                task.wait(1)
+            end
+        end
+    end)
+
+    ChestsSec:AddToggle({
+        Name = "Auto Open Chests (All)",
+        Default = false,
+        Callback = function(state)
+            autoOpenChests = state
+            Notify("Moro Soul", state and "Auto Open Chests Active!" or "Auto Open Chests Disabled", 2, state and "Success" or "Info")
+        end
+    })
 
     ChestsSec:AddButton({
         Name = "Collect ALL Rewards & Chests",
