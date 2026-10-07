@@ -2065,6 +2065,7 @@ if Library then
     -- =====================================================================
     --                            UPGRADE TAB
     -- =====================================================================
+    do
     _G.BuyCrystalsAmount = 10
     _G.UseCrystalsAmount = 10
     _G.SelectedCrystalTier = "经验水晶3"
@@ -2228,8 +2229,19 @@ if Library then
     end
     ApplySlotCountBypass(true)
 
-    local initialHeroName = heroNames[1] or "Sakonji Urokodaki"
-    local initialHeroPath = heroData[initialHeroName] or "左近次"
+    local initialHeroName = "Iguro Obanai"
+    if not heroData[initialHeroName] then
+        for _, n in ipairs(heroNames) do
+            if n:find("Iguro") or n:find("Obanai") then
+                initialHeroName = n
+                break
+            end
+        end
+        if not heroData[initialHeroName] and heroNames[1] then
+            initialHeroName = heroNames[1]
+        end
+    end
+    local initialHeroPath = heroData[initialHeroName] or "伊黑小芭内"
     local initialTalents = GetTalentsForHero(initialHeroPath)
     local initialTalent = initialTalents[1] or { id = initialHeroPath .. "_1", name = "Talent 1" }
 
@@ -2238,20 +2250,21 @@ if Library then
     _G.RerollTalentId = initialTalent.id
     _G.RerollTalentName = initialTalent.name
     _G.TargetBonusStats = {
+        ["Shield Damage"] = true,
         ["Skill3 Damage"] = true,
-        ["Shield Damage"] = true
+        ["Critical Chance"] = true
     }
-    _G.TargetBonusStat = "Skill3 Damage"
+    _G.TargetBonusStat = "Shield Damage"
     _G.TargetMinRank = "S (81-100)"
     _G.AutoLockMatching = true
     _G.AutoRerollActive = false
     _G.RerollDelay = 0.25
 
-    _G.InjectSlot1Stat = "Critical Damage"
+    _G.InjectSlot1Stat = "Shield Damage"
     _G.InjectSlot1Level = 100
-    _G.InjectSlot2Stat = "Attack"
+    _G.InjectSlot2Stat = "Skill3 Damage"
     _G.InjectSlot2Level = 100
-    _G.InjectSlot3Stat = "Boss Damage Boost"
+    _G.InjectSlot3Stat = "Critical Chance"
     _G.InjectSlot3Level = 100
     _G.BypassSlotUnlock = true
 
@@ -2754,7 +2767,7 @@ if Library then
     TalentInjectSec:AddDropdown({
         Name = "Slot 1 Bonus",
         Options = attrOptions,
-        Default = "Critical Damage",
+        Default = "Shield Damage",
         Callback = function(val)
             _G.InjectSlot1Stat = val
         end
@@ -2773,7 +2786,7 @@ if Library then
     TalentInjectSec:AddDropdown({
         Name = "Slot 2 Bonus",
         Options = attrOptions,
-        Default = "Attack",
+        Default = "Skill3 Damage",
         Callback = function(val)
             _G.InjectSlot2Stat = val
         end
@@ -2792,7 +2805,7 @@ if Library then
     TalentInjectSec:AddDropdown({
         Name = "Slot 3 Bonus",
         Options = attrOptions,
-        Default = "Boss Damage Boost",
+        Default = "Critical Chance",
         Callback = function(val)
             _G.InjectSlot3Stat = val
         end
@@ -2818,16 +2831,33 @@ if Library then
         end
     })
 
-    TalentInjectSec:AddButton({
-        Name = "Write / Inject Bonuses to Game",
-        Primary = true,
-        Callback = function()
-            local heroPath = _G.RerollHeroPath or "左近次"
-            local talentId = _G.RerollTalentId or "左近次_1"
+    local realTalentBuffsActive = false
+    local devCheatActive = false
+    local talentStatMultiplier = 1
+    local origGetPlayerTalentAttributes = nil
+    local origClassGetTalentAttr = nil
+    local realBuffToggleRef = nil
+    local talentLoopActive = false
+    local talentCharConn = nil
 
-            if _G.BypassSlotUnlock then
-                ApplySlotCountBypass(true)
-            end
+    local function applyRealTalentBuffsState(enable)
+        realTalentBuffsActive = enable
+        pcall(function()
+            local PTTM = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"))
+            local PropertyTribe = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribe"))
+            local MathManager = require(rs:WaitForChild("Packages"):WaitForChild("MathManager"))
+            local TalentHooks = nil
+            local battle_attrconfig = nil
+            local WuKongHelper = nil
+            pcall(function()
+                TalentHooks = require(rs:WaitForChild("VendorHooks"):WaitForChild("TalentAtrributeRerollHooks"))
+                battle_attrconfig = require(rs:WaitForChild("_genConfigs"):WaitForChild("battle_attrconfig"))
+                WuKongHelper = require(rs:WaitForChild("WuKong"):WaitForChild("WuKongHelper"))
+            end)
+
+            local userTree = PTTM.GetUserTree(player.UserId)
+            local battleTree = PTTM.GetBattleUserTree(player.UserId)
+            local tl = battleTree and battleTree.TeamLeader
 
             local s1Id = attrNameToId[_G.InjectSlot1Stat] or 2
             local s1Lv = _G.InjectSlot1Level or 100
@@ -2836,25 +2866,356 @@ if Library then
             local s3Id = attrNameToId[_G.InjectSlot3Stat] or 14
             local s3Lv = _G.InjectSlot3Level or 100
 
-            local okWk, child = false, nil
+            if enable then
+                -- 1. Hook TalentHooks.GetPlayerTalentAttributes
+                if TalentHooks and battle_attrconfig then
+                    if not origGetPlayerTalentAttributes then
+                        origGetPlayerTalentAttributes = TalentHooks.GetPlayerTalentAttributes
+                    end
+                    TalentHooks.GetPlayerTalentAttributes = function(userId, roleIndex, talentId)
+                        local res = origGetPlayerTalentAttributes(userId, roleIndex, talentId) or {}
+                        if realTalentBuffsActive and (userId == player.UserId or not userId) then
+                            res[s1Id] = { Level = s1Lv, Config = battle_attrconfig[s1Id] }
+                            res[s2Id] = { Level = s2Lv, Config = battle_attrconfig[s2Id] }
+                            res[s3Id] = { Level = s3Lv, Config = battle_attrconfig[s3Id] }
+                        end
+                        return res
+                    end
+                end
+
+                -- 2. Compute combined PropertyTribe for all 3 injected slots
+                local bonusTribe = nil
+                local function addAttr(attrId, lvl)
+                    if battle_attrconfig and battle_attrconfig[attrId] then
+                        local cfg = battle_attrconfig[attrId]
+                        if cfg and cfg.Region and cfg.Key then
+                            local t = MathManager.GetConfigPropertyTribe(cfg.Region, cfg.Key, nil, nil, nil, {Level = lvl})
+                            if t then
+                                bonusTribe = if bonusTribe then bonusTribe + t else t:Clone()
+                            end
+                        end
+                    end
+                end
+                addAttr(s1Id, s1Lv)
+                addAttr(s2Id, s2Lv)
+                addAttr(s3Id, s3Lv)
+
+                if (talentStatMultiplier or 1) > 1 and bonusTribe then
+                    local multiplied = {}
+                    for k, v in pairs(bonusTribe:GetAllProperties()) do
+                        multiplied[k] = v * (talentStatMultiplier or 1)
+                    end
+                    bonusTribe = PropertyTribe.new(multiplied)
+                end
+
+                -- 3. Connect into TeamLeader.__refCheat & TeamLeader.__refTeamLeaderTalent
+                local PropertyTribeTree = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTree"))
+                if tl then
+                    -- 3a. Direct injection into TeamLeader.__refCheat
+                    if tl.__refCheat then
+                        tl.__refCheat:ResetHandler(function()
+                            local res = nil
+                            if realTalentBuffsActive and bonusTribe then
+                                res = bonusTribe:Clone()
+                            end
+                            if devCheatActive then
+                                local devTribe = MathManager.GetConfigPropertyTribe("Cheat", 1)
+                                res = if res then res + devTribe else devTribe:Clone()
+                            end
+                            return res
+                        end)
+                        tl.__refCheat:SetDirty(true)
+                    end
+
+                    -- 3b. Direct injection into TeamLeader.__refTeamLeaderTalent
+                    local injectedTalentTree = PropertyTribeTree.new(function()
+                        if realTalentBuffsActive and bonusTribe then
+                            return bonusTribe:Clone()
+                        end
+                        return nil
+                    end)
+                    tl:SetValue("__refTeamLeaderTalent1", injectedTalentTree)
+                    tl:SetValue("__refTeamLeaderTalent2", injectedTalentTree)
+                    tl:SetValue("__injectedTalentPT", injectedTalentTree)
+
+                    tl:SetDirty(true)
+                end
+
+                if userTree then userTree:SetDirty(true) end
+                if battleTree then battleTree:SetDirty(true) end
+
+                -- Apply WalkSpeed from FinalMoveSpeed immediately
+                pcall(function()
+                    local BIP = require(rs:WaitForChild("Packages"):WaitForChild("BattleInformationProxy"))
+                    local char = player.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        local finalSpd = BIP.GetFinalMoveSpeed(player.UserId)
+                        if finalSpd and finalSpd > 0 then
+                            hum.WalkSpeed = finalSpd
+                        end
+                    end
+                end)
+
+                -- 4. Hook RerollM.GetTalentAttr via internal classTable so UI and readers see injected bonuses
+                if RerollM then
+                    pcall(function()
+                        local mt = getmetatable(RerollM)
+                        local ups = debug.getupvalues(mt.__index)
+                        local classTable = ups and ups[1]
+                        if classTable then
+                            if not origClassGetTalentAttr then
+                                origClassGetTalentAttr = classTable.GetTalentAttr
+                            end
+                            classTable.GetTalentAttr = function(self, role, talent)
+                                if realTalentBuffsActive then
+                                    local curS1Id = attrNameToId[_G.InjectSlot1Stat] or 2
+                                    local curS1Lv = _G.InjectSlot1Level or 100
+                                    local curS2Id = attrNameToId[_G.InjectSlot2Stat] or 3
+                                    local curS2Lv = _G.InjectSlot2Level or 100
+                                    local curS3Id = attrNameToId[_G.InjectSlot3Stat] or 14
+                                    local curS3Lv = _G.InjectSlot3Level or 100
+                                    return {
+                                        Attr1 = { Id = curS1Id, Level = curS1Lv },
+                                        Attr2 = { Id = curS2Id, Level = curS2Lv },
+                                        Attr3 = { Id = curS3Id, Level = curS3Lv }
+                                    }
+                                end
+                                if origClassGetTalentAttr then
+                                    return origClassGetTalentAttr(self, role, talent)
+                                end
+                                return {}
+                            end
+                        end
+                    end)
+                end
+
+                -- 5. Force update the active in-game GUI panel (AttrSlots)
+                pcall(function()
+                    local roleCtrl = require(rs:WaitForChild("UI"):WaitForChild("Role"))
+                    if roleCtrl and roleCtrl.Panel then
+                        local curS1Id = attrNameToId[_G.InjectSlot1Stat] or 13
+                        local curS1Lv = _G.InjectSlot1Level or 100
+                        local curS2Id = attrNameToId[_G.InjectSlot2Stat] or 10
+                        local curS2Lv = _G.InjectSlot2Level or 100
+                        local curS3Id = attrNameToId[_G.InjectSlot3Stat] or 1
+                        local curS3Lv = _G.InjectSlot3Level or 100
+                        roleCtrl.Panel.AttrSlots = {
+                            Attr1 = { Id = curS1Id, Level = curS1Lv },
+                            Attr2 = { Id = curS2Id, Level = curS2Lv },
+                            Attr3 = { Id = curS3Id, Level = curS3Lv }
+                        }
+                    end
+                end)
+
+                -- 6. Inject into in-game UI facade and container
+                pcall(function()
+                    local heroPath = _G.RerollHeroPath or "伊黑小芭内"
+                    local targetTalentId = _G.RerollTalentId or "伊黑小芭内_1"
+                    local child = nil
+                    if WuKongHelper and WuKongHelper.GetFacade then
+                        local facade = WuKongHelper.GetFacade(player.UserId)
+                        child = facade and facade:GetChild(("/天赋系统/天赋持有者/%s/%s"):format(heroPath, targetTalentId))
+                    end
+                    if not child and WuKong and WuKong.TryGetChild then
+                        local _, c = WuKong:TryGetChild(("/天赋系统/天赋持有者/%s/%s"):format(heroPath, targetTalentId))
+                        child = c
+                    end
+                    if child and WuKongHelper then
+                        local curS1Id = attrNameToId[_G.InjectSlot1Stat] or 13
+                        local curS1Lv = _G.InjectSlot1Level or 100
+                        local curS2Id = attrNameToId[_G.InjectSlot2Stat] or 10
+                        local curS2Lv = _G.InjectSlot2Level or 100
+                        local curS3Id = attrNameToId[_G.InjectSlot3Stat] or 1
+                        local curS3Lv = _G.InjectSlot3Level or 100
+                        WuKongHelper.SetPluginValue(child, "Attr1Id", curS1Id)
+                        WuKongHelper.SetPluginValue(child, "Attr1Level", curS1Lv)
+                        WuKongHelper.SetPluginValue(child, "Attr2Id", curS2Id)
+                        WuKongHelper.SetPluginValue(child, "Attr2Level", curS2Lv)
+                        WuKongHelper.SetPluginValue(child, "Attr3Id", curS3Id)
+                        WuKongHelper.SetPluginValue(child, "Attr3Level", curS3Lv)
+                    end
+                end)
+
+                -- 7. Heartbeat loop to maintain active dirty state, speed, and UI slots
+                if not talentLoopActive then
+                    talentLoopActive = true
+                    task.spawn(function()
+                        while (realTalentBuffsActive or devCheatActive) and talentLoopActive and scriptActive do
+                            pcall(function()
+                                local bTree = PTTM.GetBattleUserTree(player.UserId)
+                                local leader = bTree and bTree.TeamLeader
+                                if leader then
+                                    if leader.__refCheat then
+                                        leader.__refCheat:SetDirty(true)
+                                    end
+                                    leader:SetDirty(true)
+                                    bTree:SetDirty(true)
+                                end
+                                local BIP = require(rs:WaitForChild("Packages"):WaitForChild("BattleInformationProxy"))
+                                local char = player.Character
+                                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                                if hum and hum.Health > 0 then
+                                    local finalSpd = BIP.GetFinalMoveSpeed(player.UserId)
+                                    if finalSpd and finalSpd > 0 and math.abs(hum.WalkSpeed - finalSpd) > 1 then
+                                        hum.WalkSpeed = finalSpd
+                                    end
+                                end
+                                local roleCtrl = require(rs:WaitForChild("UI"):WaitForChild("Role"))
+                                if roleCtrl and roleCtrl.Panel and realTalentBuffsActive then
+                                    local curS1Id = attrNameToId[_G.InjectSlot1Stat] or 13
+                                    local curS1Lv = _G.InjectSlot1Level or 100
+                                    local curS2Id = attrNameToId[_G.InjectSlot2Stat] or 10
+                                    local curS2Lv = _G.InjectSlot2Level or 100
+                                    local curS3Id = attrNameToId[_G.InjectSlot3Stat] or 1
+                                    local curS3Lv = _G.InjectSlot3Level or 100
+                                    roleCtrl.Panel.AttrSlots = {
+                                        Attr1 = { Id = curS1Id, Level = curS1Lv },
+                                        Attr2 = { Id = curS2Id, Level = curS2Lv },
+                                        Attr3 = { Id = curS3Id, Level = curS3Lv }
+                                    }
+                                end
+                            end)
+                            task.wait(0.5)
+                        end
+                    end)
+                end
+            else
+                talentLoopActive = false
+                if origGetPlayerTalentAttributes and TalentHooks then
+                    TalentHooks.GetPlayerTalentAttributes = origGetPlayerTalentAttributes
+                end
+
+                if origClassGetTalentAttr and RerollM then
+                    pcall(function()
+                        local mt = getmetatable(RerollM)
+                        local ups = debug.getupvalues(mt.__index)
+                        local classTable = ups and ups[1]
+                        if classTable and origClassGetTalentAttr then
+                            classTable.GetTalentAttr = origClassGetTalentAttr
+                        end
+                    end)
+                end
+
+                pcall(function()
+                    local roleCtrl = require(rs:WaitForChild("UI"):WaitForChild("Role"))
+                    if roleCtrl and roleCtrl.Panel and RerollM then
+                        roleCtrl.Panel.AttrSlots = RerollM:GetTalentAttr(roleCtrl.Panel.Selected, roleCtrl.Panel.SelectedTalent)
+                    end
+                end)
+
+                if tl then
+                    if tl.__refCheat then
+                        tl.__refCheat:ResetHandler(function()
+                            if devCheatActive then
+                                return MathManager.GetConfigPropertyTribe("Cheat", 1)
+                            end
+                            return nil
+                        end)
+                        tl.__refCheat:SetDirty(true)
+                    end
+                    tl:SetValue("__refTeamLeaderTalent1", nil)
+                    tl:SetValue("__refTeamLeaderTalent2", nil)
+                    tl:SetValue("__injectedTalentPT", nil)
+                    tl:SetDirty(true)
+                end
+
+                if userTree then userTree:SetDirty(true) end
+                if battleTree then battleTree:SetDirty(true) end
+
+                pcall(function()
+                    local BIP = require(rs:WaitForChild("Packages"):WaitForChild("BattleInformationProxy"))
+                    local char = player.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        local finalSpd = BIP.GetFinalMoveSpeed(player.UserId)
+                        if finalSpd and finalSpd > 0 then
+                            hum.WalkSpeed = finalSpd
+                        else
+                            hum.WalkSpeed = 16
+                        end
+                    end
+                end)
+            end
+        end)
+    end
+
+    realBuffToggleRef = TalentInjectSec:AddToggle({
+        Name = "Activate Real Combat Buffs",
+        Default = true,
+        Callback = function(state)
+            applyRealTalentBuffsState(state)
+            if state then
+                if not talentCharConn then
+                    talentCharConn = player.CharacterAdded:Connect(function()
+                        task.wait(0.5)
+                        if realTalentBuffsActive then
+                            applyRealTalentBuffsState(true)
+                        end
+                    end)
+                end
+                Notify("Moro Soul", "Real Combat Talent Buffs Activated (TeamLeader + Tree)!", 3, "Success")
+            else
+                if talentCharConn then
+                    talentCharConn:Disconnect()
+                    talentCharConn = nil
+                end
+                Notify("Moro Soul", "Combat Talent Buffs Disabled", 2, "Info")
+            end
+        end
+    })
+
+    TalentInjectSec:AddToggle({
+        Name = "Dev Battle Overdrive (+500% Spd, Double/Triple Atk)",
+        Default = false,
+        Callback = function(state)
+            devCheatActive = state
+            applyRealTalentBuffsState(realTalentBuffsActive or state)
+            Notify("Moro Soul", "Dev Battle Overdrive: " .. (state and "ACTIVE" or "Disabled"), 2, state and "Success" or "Info")
+        end
+    })
+
+    TalentInjectSec:AddSlider({
+        Name = "Stat Multiplier",
+        Min = 1,
+        Max = 10,
+        Default = 1,
+        Suffix = "x",
+        Decimals = 0,
+        Callback = function(val)
+            talentStatMultiplier = tonumber(val) or 1
+            if realTalentBuffsActive then
+                applyRealTalentBuffsState(true)
+            end
+        end
+    })
+
+    TalentInjectSec:AddButton({
+        Name = "Write / Inject Bonuses to Game",
+        Primary = true,
+        Callback = function()
             pcall(function()
-                if WuKong and WuKong.TryGetChild then
-                    okWk, child = WuKong:TryGetChild(("/天赋系统/天赋持有者/%s/%s"):format(heroPath, talentId))
+                local roleCtrl = require(rs:WaitForChild("UI"):WaitForChild("Role"))
+                if roleCtrl and roleCtrl.Panel and roleCtrl.Panel.Selected then
+                    _G.RerollHeroPath = roleCtrl.Panel.Selected
+                    _G.RerollTalentId = roleCtrl.Panel.SelectedTalent or _G.RerollTalentId
                 end
             end)
 
-            if okWk and child and WuKongHelper then
-                WuKongHelper.SetPluginValue(child, "Attr1Id", s1Id)
-                WuKongHelper.SetPluginValue(child, "Attr1Level", s1Lv)
-                WuKongHelper.SetPluginValue(child, "Attr2Id", s2Id)
-                WuKongHelper.SetPluginValue(child, "Attr2Level", s2Lv)
-                WuKongHelper.SetPluginValue(child, "Attr3Id", s3Id)
-                WuKongHelper.SetPluginValue(child, "Attr3Level", s3Lv)
-
-                Notify("Moro Soul", "Bonuses injected: 3x Lv" .. s1Lv .. " (" .. _G.InjectSlot1Stat .. ", " .. _G.InjectSlot2Stat .. ", " .. _G.InjectSlot3Stat .. ")", 3, "Success")
-            else
-                Notify("Moro Soul", "Failed to access talent container: " .. tostring(talentId), 3, "Error")
+            if _G.BypassSlotUnlock then
+                ApplySlotCountBypass(true)
             end
+
+            applyRealTalentBuffsState(true)
+            if realBuffToggleRef and realBuffToggleRef.Set then
+                pcall(function() realBuffToggleRef.Set(true) end)
+            end
+
+            local s1 = _G.InjectSlot1Stat or "Shield Damage"
+            local s2 = _G.InjectSlot2Stat or "Skill3 Damage"
+            local s3 = _G.InjectSlot3Stat or "Critical Chance"
+            local s1Lv = _G.InjectSlot1Level or 100
+            Notify("Moro Soul", ("Injected: %s, %s, %s (Lv%d) into UI & Combat!"):format(s1, s2, s3, s1Lv), 4, "Success")
         end
     })
 
@@ -2862,8 +3223,18 @@ if Library then
         Name = "Read Current Bonuses",
         Primary = false,
         Callback = function()
-            local heroPath = _G.RerollHeroPath or "左近次"
-            local talentId = _G.RerollTalentId or "左近次_1"
+            local heroPath = _G.RerollHeroPath
+            local talentId = _G.RerollTalentId
+            pcall(function()
+                local roleCtrl = require(rs:WaitForChild("UI"):WaitForChild("Role"))
+                if roleCtrl and roleCtrl.Panel and roleCtrl.Panel.Selected then
+                    heroPath = roleCtrl.Panel.Selected
+                    talentId = roleCtrl.Panel.SelectedTalent or talentId
+                end
+            end)
+            heroPath = heroPath or "伊黑小芭内"
+            talentId = talentId or "伊黑小芭内_1"
+
             local currentAttrs = {}
             if RerollM and RerollM.GetTalentAttr then
                 currentAttrs = RerollM:GetTalentAttr(heroPath, talentId) or {}
@@ -2883,9 +3254,30 @@ if Library then
             end
 
             local summary = table.concat(lines, " | ")
-            Notify("Current Bonuses", summary, 4, "Info")
+            local statusTag = realTalentBuffsActive and "[Injected Active] " or "[Server Live (Not Injected)] "
+            Notify("Current Bonuses", statusTag .. summary, 6, realTalentBuffsActive and "Success" or "Info")
         end
     })
+
+    -- Auto-activate on startup for Obanai with Shield Damage, Skill3, Crit Chance
+    task.spawn(function()
+        task.wait(0.5)
+        pcall(function()
+            applyRealTalentBuffsState(true)
+        end)
+    end)
+
+    table.insert(cleanupHandlers, function()
+        talentLoopActive = false
+        if realTalentBuffsActive then
+            applyRealTalentBuffsState(false)
+        end
+        if talentCharConn then
+            pcall(function() talentCharConn:Disconnect() end)
+            talentCharConn = nil
+        end
+    end)
+    end
 
     -- =====================================================================
     --                           EXPLOITS TAB
