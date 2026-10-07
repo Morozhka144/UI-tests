@@ -110,11 +110,11 @@ if Library then
     local autoOpenChests = false
     local monsterNearby = false
     local isSpeedHack = false
+    local speedPercentValue = 50
+    local fakeFriendBonusActive = false
+    local infiniteFoodActive = false
     local minHealthLimit = 0
     local tpHeight = 2
-    local walkSpeedValue = 200
-    local speedConn = nil
-    local origGetFinalMoveSpeed = nil
     local currentTarget = nil
 
     -- Heartbeat Movement Safety Guard: Never allow WalkSpeed or JumpPower to explode
@@ -267,7 +267,6 @@ if Library then
     local DispatchTab = Win:CreateTab({ Name = "Dispatch", Icon = "send" })
     local RewardsTab  = Win:CreateTab({ Name = "Rewards", Icon = "gift" })
     local ExploitsTab = Win:CreateTab({ Name = "Exploits", Icon = "shield" })
-    local MiscTab     = Win:CreateTab({ Name = "Misc", Icon = "sliders" })
     local SettingsTab = Win:AddSettingsTab()
 
     -- Compatibility aliases for Section methods
@@ -639,84 +638,141 @@ if Library then
 
     local MoveSec = wrapSection(MainTab:CreateSection({ Name = "Movement & Speeds", Collapsible = true }))
 
+    local speedLoopActive = false
+    local speedCharConn = nil
+
     local function applySpeedHack(enable)
+        isSpeedHack = enable
         pcall(function()
-            local ucp = require(rs:WaitForChild("Packages"):WaitForChild("WuKongDataProvider"):WaitForChild("UserCalculatorPropertys"))
+            local PropertyTribeTreeManager = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"))
+            local PropertyTribe = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribe"))
+            local MathManager = require(rs:WaitForChild("Packages"):WaitForChild("MathManager"))
+            local const = nil
+            local WuKong = nil
+            pcall(function()
+                const = require(rs.Packages.PropertyTribeTreeManager.const)
+                WuKong = require(rs.WuKong)
+            end)
+
+            local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+            local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+
             if enable then
-                if not origGetFinalMoveSpeed and ucp.GetFinalMoveSpeed then
-                    origGetFinalMoveSpeed = ucp.GetFinalMoveSpeed
-                end
-                ucp.GetFinalMoveSpeed = function(userId, ...)
-                    if isSpeedHack and (not userId or userId == player.UserId) then
-                        return walkSpeedValue
-                    end
-                    if origGetFinalMoveSpeed then
-                        return origGetFinalMoveSpeed(userId, ...)
-                    end
-                    return walkSpeedValue
-                end
+                if userTree and userTree.Friends then
+                    userTree.Friends:ResetHandler(function()
+                        local baseTribe = nil
+                        if fakeFriendBonusActive then
+                            for i = 1, 9 do
+                                if MathManager.HasConfigPropertyTribe("Friends", i) then
+                                    local cfg = MathManager.GetConfigPropertyTribe("Friends", i)
+                                    baseTribe = if baseTribe then baseTribe + cfg else cfg:Clone()
+                                end
+                            end
+                        else
+                            local count = (WuKong and WuKong:ExecuteQuery("/Lua委托值/同服好友数量?获取缓存值")) or 0
+                            if const then
+                                for i = 1, count do
+                                    if MathManager.HasConfigPropertyTribe(const.Regions.Friends, i) then
+                                        local cfg = MathManager.GetConfigPropertyTribe(const.Regions.Friends, i)
+                                        baseTribe = if baseTribe then baseTribe + cfg else cfg
+                                    end
+                                end
+                            end
+                        end
 
-                if speedConn then speedConn:Disconnect() end
-                speedConn = runService.Heartbeat:Connect(function()
-                    local char = player.Character
-                    local hum = char and char:FindFirstChild("Humanoid")
-                    if isSpeedHack and hum then 
-                        hum.WalkSpeed = walkSpeedValue 
-                    end
-                end)
+                        local speedTribe = PropertyTribe.new({
+                            MoveSpeedRatio = (speedPercentValue or 50) / 100
+                        })
+                        return if baseTribe then baseTribe + speedTribe else speedTribe
+                    end)
+                    userTree.Friends:SetDirty(true)
+                    userTree:SetDirty(true)
+                end
+                if battleTree then battleTree:SetDirty(true) end
 
-                local char = player.Character
-                local hum = char and char:FindFirstChild("Humanoid")
-                if hum then hum.WalkSpeed = walkSpeedValue end
+                if not speedLoopActive then
+                    speedLoopActive = true
+                    task.spawn(function()
+                        while isSpeedHack and speedLoopActive and scriptActive do
+                            pcall(function()
+                                local uTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+                                local bTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+                                if uTree and uTree.Friends then
+                                    uTree.Friends:SetDirty(true)
+                                    uTree:SetDirty(true)
+                                end
+                                if bTree then bTree:SetDirty(true) end
+                            end)
+                            task.wait(0.5)
+                        end
+                    end)
+                end
             else
-                if speedConn then 
-                    speedConn:Disconnect() 
-                    speedConn = nil
+                speedLoopActive = false
+                if userTree and userTree.Friends then
+                    userTree.Friends:ResetHandler(function()
+                        local baseTribe = nil
+                        if fakeFriendBonusActive then
+                            for i = 1, 9 do
+                                if MathManager.HasConfigPropertyTribe("Friends", i) then
+                                    local cfg = MathManager.GetConfigPropertyTribe("Friends", i)
+                                    baseTribe = if baseTribe then baseTribe + cfg else cfg:Clone()
+                                end
+                            end
+                        else
+                            local count = (WuKong and WuKong:ExecuteQuery("/Lua委托值/同服好友数量?获取缓存值")) or 0
+                            if const then
+                                for i = 1, count do
+                                    if MathManager.HasConfigPropertyTribe(const.Regions.Friends, i) then
+                                        local cfg = MathManager.GetConfigPropertyTribe(const.Regions.Friends, i)
+                                        baseTribe = if baseTribe then baseTribe + cfg else cfg
+                                    end
+                                end
+                            end
+                        end
+                        return baseTribe
+                    end)
+                    userTree.Friends:SetDirty(true)
+                    userTree:SetDirty(true)
                 end
-                if origGetFinalMoveSpeed and ucp.GetFinalMoveSpeed then
-                    ucp.GetFinalMoveSpeed = origGetFinalMoveSpeed
-                    origGetFinalMoveSpeed = nil
-                end
-                local bip = nil
-                pcall(function()
-                    bip = require(rs.Packages.BattleInformationProxy)
-                end)
-                local realSpeed = 16
-                if bip and bip.GetFinalMoveSpeed then
-                    pcall(function() realSpeed = bip.GetFinalMoveSpeed(player.UserId) end)
-                end
-                local char = player.Character
-                local hum = char and char:FindFirstChild("Humanoid")
-                if hum then 
-                    hum.WalkSpeed = realSpeed 
-                end
+                if battleTree then battleTree:SetDirty(true) end
             end
         end)
     end
 
     MoveSec:AddToggle({
-        Name = "SpeedHack",
+        Name = "SpeedHack (Overdrive)",
         Default = false,
         Callback = function(state)
             isSpeedHack = state
             applySpeedHack(state)
             if state then
-                Notify("Moro Soul", "SpeedHack Enabled (" .. walkSpeedValue .. " ws)", 2, "Success")
+                if not speedCharConn then
+                    speedCharConn = player.CharacterAdded:Connect(function()
+                        task.wait(0.5)
+                        if isSpeedHack then applySpeedHack(true) end
+                    end)
+                end
+                Notify("Moro Soul", "SpeedHack Enabled (" .. (speedPercentValue or 50) .. "%)", 2, "Success")
             else
+                if speedCharConn then
+                    speedCharConn:Disconnect()
+                    speedCharConn = nil
+                end
                 Notify("Moro Soul", "SpeedHack Disabled (Restored)", 2, "Info")
             end
         end
     })
 
     MoveSec:AddSlider({
-        Name = "Walk Speed",
-        Min = 16,
-        Max = 1000,
-        Default = walkSpeedValue,
-        Suffix = " ws",
+        Name = "Speed Boost",
+        Min = 0,
+        Max = 300,
+        Default = speedPercentValue or 50,
+        Suffix = "%",
         Decimals = 0,
         Callback = function(val)
-            walkSpeedValue = tonumber(val) or 200
+            speedPercentValue = tonumber(val) or 50
             if isSpeedHack then
                 applySpeedHack(true)
             end
@@ -724,8 +780,13 @@ if Library then
     })
 
     table.insert(cleanupHandlers, function()
+        speedLoopActive = false
         if isSpeedHack then
             applySpeedHack(false)
+        end
+        if speedCharConn then
+            pcall(function() speedCharConn:Disconnect() end)
+            speedCharConn = nil
         end
     end)
 
@@ -1133,6 +1194,7 @@ if Library then
     -- =====================================================================
     --                             TRAIN TAB
     -- =====================================================================
+    do
     local autoTrain = false
     local autoTrainV2 = false
     _G.TrainSkillNumber = 2
@@ -1371,10 +1433,12 @@ if Library then
             end
         end
     })
+    end
 
     -- =====================================================================
     --                           FISHING & FOOD TAB
     -- =====================================================================
+    do
     local autoFishing = false
     local fishingArea = "Area_1"
     
@@ -1499,34 +1563,34 @@ if Library then
     pcall(function() FoodVendor = require(rs:WaitForChild("UI"):WaitForChild("FoodCook"):WaitForChild("Model"):WaitForChild("Vendor")) end)
 
     local foodInfoList = {
-        { id = "食物22", craftId = "食物合成22", name = "Tuna Sashimi", buff = "+50% Skill Dmg" },
-        { id = "食物20", craftId = "食物合成20", name = "Koi Sashimi", buff = "+50% Crit Rate" },
-        { id = "食物21", craftId = "食物合成21", name = "Salmon Sashimi", buff = "+50% Double Atk" },
-        { id = "食物26", craftId = "食物合成26", name = "Pumpkin Pie", buff = "+30% Triple, +15% Dbl" },
-        { id = "食物15", craftId = "食物合成15", name = "Steamed Tilapia", buff = "+15% Boss Dmg" },
-        { id = "食物24", craftId = "食物合成24", name = "Green Salad", buff = "+100% Move Speed" },
-        { id = "食物27", craftId = nil,            name = "Halloween Candy", buff = "+100% Drops" },
-        { id = "食物28", craftId = nil,            name = "Gingerbread Man", buff = "+100% Drops" },
-        { id = "食物16", craftId = "食物合成16", name = "Steamed Snapper", buff = "+60% Atk, +15% Dbl" },
-        { id = "食物17", craftId = "食物合成17", name = "Cod Sushi", buff = "+15% Atk, +15% Crit" },
-        { id = "食物18", craftId = "食物合成18", name = "Sea Bass Sushi", buff = "+15% Atk, +35% Shield" },
-        { id = "食物19", craftId = "食物合成19", name = "Unagi Sushi", buff = "+15% Atk, +15% Dbl" },
-        { id = "食物25", craftId = "食物合成25", name = "Fried Rice", buff = "+15% Atk, +40% Energy" },
-        { id = "食物6",  craftId = "食物合成6",  name = "Roasted Snakehead", buff = "+15% Atk Ratio" },
-        { id = "食物12", craftId = "食物合成12", name = "Black Fish Soup", buff = "+15% Atk Ratio" },
-        { id = "食物11", craftId = "食物合成11", name = "Fugu Soup", buff = "+60% Attack Dmg" },
-        { id = "食物5",  craftId = "食物合成5",  name = "Roasted River Fish", buff = "+60% Attack Dmg" },
-        { id = "食物1",  craftId = "食物合成1",  name = "Roasted Grass Carp", buff = "+15% Skill3" },
-        { id = "食物7",  craftId = "食物合成7",  name = "Katsuobu Soup", buff = "+15% Skill3" },
-        { id = "食物2",  craftId = "食物合成2",  name = "Roasted Basa Fish", buff = "+40% Energy" },
-        { id = "食物8",  craftId = "食物合成8",  name = "Basa Fish Soup", buff = "+40% Energy" },
-        { id = "食物14", craftId = "食物合成14", name = "Steamed Mackerel", buff = "+40% Energy, +15% Skill3" },
-        { id = "食物3",  craftId = "食物合成3",  name = "Roasted Mandarin Fish", buff = "+35% Shield" },
-        { id = "食物9",  craftId = "食物合成9",  name = "Mandarin Fish Soup", buff = "+35% Shield" },
-        { id = "食物13", craftId = "食物合成13", name = "Steamed Flounder", buff = "+35% Shield" },
-        { id = "食物4",  craftId = "食物合成4",  name = "Roast Carp", buff = "+50% Move Speed" },
-        { id = "食物10", craftId = "食物合成10", name = "Carp Soup", buff = "+50% Move Speed" },
-        { id = "食物23", craftId = "食物合成23", name = "Jam", buff = "+50% Move Speed" }
+        { id = "食物22", craftId = "食物合成22", name = "Tuna Sashimi", buff = "+50% Skill Dmg", props = { SkillDamageAddition = 0.5 } },
+        { id = "食物20", craftId = "食物合成20", name = "Koi Sashimi", buff = "+50% Crit Rate", props = { CriticalStrikeRate = 0.5 } },
+        { id = "食物21", craftId = "食物合成21", name = "Salmon Sashimi", buff = "+50% Double Atk", props = { DoubleAttackPercent = 1 } },
+        { id = "食物26", craftId = "食物合成26", name = "Pumpkin Pie", buff = "+30% Triple, +15% Dbl", props = { TripleAttackPercent = 1, DoubleAttackPercent = 1 } },
+        { id = "食物15", craftId = "食物合成15", name = "Steamed Tilapia", buff = "+15% Boss Dmg", props = { BossDamageAddition = 0.15 } },
+        { id = "食物24", craftId = "食物合成24", name = "Green Salad", buff = "+100% Move Speed", props = { MoveSpeedRatio = 1.0 } },
+        { id = "食物27", craftId = nil,            name = "Halloween Candy", buff = "+100% Drops", props = { DropRateAddition = 1.0 } },
+        { id = "食物28", craftId = nil,            name = "Gingerbread Man", buff = "+100% Drops", props = { DropRateAddition = 1.0 } },
+        { id = "食物16", craftId = "食物合成16", name = "Steamed Snapper", buff = "+60% Atk, +15% Dbl", props = { AttackDamageRatio = 0.6, DoubleAttackPercent = 1 } },
+        { id = "食物17", craftId = "食物合成17", name = "Cod Sushi", buff = "+15% Atk, +15% Crit", props = { AttackDamageRatio = 0.15, CriticalStrikeRate = 0.15 } },
+        { id = "食物18", craftId = "食物合成18", name = "Sea Bass Sushi", buff = "+15% Atk, +35% Shield", props = { AttackDamageRatio = 0.15, ShieldAddition = 0.35 } },
+        { id = "食物19", craftId = "食物合成19", name = "Unagi Sushi", buff = "+15% Atk, +15% Dbl", props = { AttackDamageRatio = 0.15, DoubleAttackPercent = 1 } },
+        { id = "食物25", craftId = "食物合成25", name = "Fried Rice", buff = "+15% Atk, +40% Energy", props = { AttackDamageRatio = 0.15, EnergyRecoverySpeedRatio = 0.4 } },
+        { id = "食物6",  craftId = "食物合成6",  name = "Roasted Snakehead", buff = "+15% Atk Ratio", props = { AttackDamageRatio = 0.15 } },
+        { id = "食物12", craftId = "食物合成12", name = "Black Fish Soup", buff = "+15% Atk Ratio", props = { AttackDamageRatio = 0.15 } },
+        { id = "食物11", craftId = "食物合成11", name = "Fugu Soup", buff = "+60% Attack Dmg", props = { AttackDamageRatio = 0.6 } },
+        { id = "食物5",  craftId = "食物合成5",  name = "Roasted River Fish", buff = "+60% Attack Dmg", props = { AttackDamageRatio = 0.6 } },
+        { id = "食物1",  craftId = "食物合成1",  name = "Roasted Grass Carp", buff = "+15% Skill3", props = { SkillDamageAddition = 0.15 } },
+        { id = "食物7",  craftId = "食物合成7",  name = "Katsuobu Soup", buff = "+15% Skill3", props = { SkillDamageAddition = 0.15 } },
+        { id = "食物2",  craftId = "食物合成2",  name = "Roasted Basa Fish", buff = "+40% Energy", props = { EnergyRecoverySpeedRatio = 0.4 } },
+        { id = "食物8",  craftId = "食物合成8",  name = "Basa Fish Soup", buff = "+40% Energy", props = { EnergyRecoverySpeedRatio = 0.4 } },
+        { id = "食物14", craftId = "食物合成14", name = "Steamed Mackerel", buff = "+40% Energy, +15% Skill3", props = { EnergyRecoverySpeedRatio = 0.4, SkillDamageAddition = 0.15 } },
+        { id = "食物3",  craftId = "食物合成3",  name = "Roasted Mandarin Fish", buff = "+35% Shield", props = { ShieldAddition = 0.35 } },
+        { id = "食物9",  craftId = "食物合成9",  name = "Mandarin Fish Soup", buff = "+35% Shield", props = { ShieldAddition = 0.35 } },
+        { id = "食物13", craftId = "食物合成13", name = "Steamed Flounder", buff = "+35% Shield", props = { ShieldAddition = 0.35 } },
+        { id = "食物4",  craftId = "食物合成4",  name = "Roast Carp", buff = "+50% Move Speed", props = { MoveSpeedRatio = 0.5 } },
+        { id = "食物10", craftId = "食物合成10", name = "Carp Soup", buff = "+50% Move Speed", props = { MoveSpeedRatio = 0.5 } },
+        { id = "食物23", craftId = "食物合成23", name = "Jam", buff = "+50% Move Speed", props = { MoveSpeedRatio = 0.5 } }
     }
 
     local foodDropdownNames = {}
@@ -1733,6 +1797,142 @@ if Library then
         end
     })
 
+    local persistentFoodTribe = nil
+    local activeFoodIds = {}
+    local origWuKongQuery = nil
+    local foodLoopActive = false
+    local foodCharConn = nil
+
+    local function applyInfiniteFoodState(enable)
+        infiniteFoodActive = enable
+        pcall(function()
+            local PropertyTribeTreeManager = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"))
+            local PropertyTribe = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribe"))
+            if not WuKong then
+                pcall(function() WuKong = require(rs:WaitForChild("WuKong")) end)
+            end
+
+            local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+            local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+
+            if enable then
+                if WuKong and not origWuKongQuery and WuKong.ExecuteQuery then
+                    origWuKongQuery = WuKong.ExecuteQuery
+                    WuKong.ExecuteQuery = function(self, path, ...)
+                        if infiniteFoodActive and typeof(path) == "string" and path:find("食物") then
+                            if path:find("激活") or path:find("状态") then
+                                for fId in pairs(activeFoodIds) do
+                                    if path:find(fId) then return true end
+                                end
+                            elseif path:find("时间") or path:find("倒计时") or path:find("剩余") then
+                                for fId in pairs(activeFoodIds) do
+                                    if path:find(fId) then return 999999 end
+                                end
+                            end
+                        end
+                        return origWuKongQuery(self, path, ...)
+                    end
+                end
+
+                if not persistentFoodTribe and userTree and userTree.Foods then
+                    pcall(function()
+                        local currentSum = userTree.Foods:Sum()
+                        if currentSum and next(currentSum:GetAllProperties()) then
+                            persistentFoodTribe = currentSum:Clone()
+                        end
+                    end)
+                end
+
+                if not persistentFoodTribe then
+                    persistentFoodTribe = PropertyTribe.new({
+                        SkillDamageAddition = 0.5,
+                        CriticalStrikeRate = 0.5,
+                        DoubleAttackPercent = 1,
+                        TripleAttackPercent = 1,
+                        BossDamageAddition = 0.15,
+                        AttackDamageRatio = 0.6,
+                        MoveSpeedRatio = 1.0,
+                    })
+                    activeFoodIds["食物22"] = true
+                    activeFoodIds["食物20"] = true
+                    activeFoodIds["食物21"] = true
+                    activeFoodIds["食物26"] = true
+                    activeFoodIds["食物15"] = true
+                    activeFoodIds["食物16"] = true
+                    activeFoodIds["食物24"] = true
+                end
+
+                if userTree and userTree.Foods then
+                    userTree.Foods:ResetHandler(function()
+                        if infiniteFoodActive and persistentFoodTribe then
+                            return persistentFoodTribe
+                        end
+                    end)
+                    userTree.Foods:SetDirty(true)
+                    userTree:SetDirty(true)
+                end
+                if battleTree then battleTree:SetDirty(true) end
+
+                if not foodLoopActive then
+                    foodLoopActive = true
+                    task.spawn(function()
+                        while infiniteFoodActive and foodLoopActive and scriptActive do
+                            pcall(function()
+                                local uTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
+                                local bTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
+                                if uTree and uTree.Foods then
+                                    uTree.Foods:SetDirty(true)
+                                    uTree:SetDirty(true)
+                                end
+                                if bTree then bTree:SetDirty(true) end
+                            end)
+                            task.wait(1)
+                        end
+                    end)
+                end
+            else
+                foodLoopActive = false
+                if origWuKongQuery and WuKong then
+                    WuKong.ExecuteQuery = origWuKongQuery
+                    origWuKongQuery = nil
+                end
+                if userTree and userTree.Foods then
+                    pcall(function()
+                        local FoodModule = require(rs.Packages.PropertyTribeTreeManager.User.Food)
+                        local freshTree = FoodModule.GetFoodTree({ userId = player.UserId })
+                        userTree.Foods = freshTree
+                    end)
+                    userTree.Foods:SetDirty(true)
+                    userTree:SetDirty(true)
+                end
+                if battleTree then battleTree:SetDirty(true) end
+            end
+        end)
+    end
+
+    local function applyTopFoodBuffsPermanent()
+        pcall(function()
+            local PropertyTribe = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribe"))
+            persistentFoodTribe = PropertyTribe.new({
+                SkillDamageAddition = 0.5,
+                CriticalStrikeRate = 0.5,
+                DoubleAttackPercent = 1,
+                TripleAttackPercent = 1,
+                BossDamageAddition = 0.15,
+                AttackDamageRatio = 0.6,
+                MoveSpeedRatio = 1.0,
+            })
+            activeFoodIds["食物22"] = true
+            activeFoodIds["食物20"] = true
+            activeFoodIds["食物21"] = true
+            activeFoodIds["食物26"] = true
+            activeFoodIds["食物15"] = true
+            activeFoodIds["食物16"] = true
+            activeFoodIds["食物24"] = true
+            applyInfiniteFoodState(true)
+        end)
+    end
+
     FoodCraftSec:AddButton({
         Name = "Eat Selected Food",
         Primary = false,
@@ -1752,11 +1952,61 @@ if Library then
 
                 local res = WuKong:ExecuteAction(("/食物系统/使用食物/使用%s?购买"):format(item.id))
                 if res and not res.HasError then
-                    Notify("Moro Soul", ("Ate %s! Buff active."):format(item.name), 2, "Success")
+                    if infiniteFoodActive and item.props then
+                        pcall(function()
+                            local PropertyTribe = require(rs.Packages.PropertyTribe)
+                            local itemTribe = PropertyTribe.new(item.props)
+                            persistentFoodTribe = if persistentFoodTribe then persistentFoodTribe + itemTribe else itemTribe
+                            activeFoodIds[item.id] = true
+                            local PTTM = require(rs.Packages.PropertyTribeTreeManager)
+                            local uTree = PTTM.GetUserTree(player.UserId)
+                            local bTree = PTTM.GetBattleUserTree(player.UserId)
+                            if uTree and uTree.Foods then
+                                uTree.Foods:SetDirty(true)
+                                uTree:SetDirty(true)
+                            end
+                            if bTree then bTree:SetDirty(true) end
+                        end)
+                        Notify("Moro Soul", ("Ate %s! Buff is now INFINITE (Never Expires)."):format(item.name), 2, "Success")
+                    else
+                        Notify("Moro Soul", ("Ate %s! Buff active."):format(item.name), 2, "Success")
+                    end
                 else
                     Notify("Moro Soul", "Cannot eat now (Full or error)", 2, "Warning")
                 end
             end)
+        end
+    })
+
+    FoodCraftSec:AddToggle({
+        Name = "Infinite Food Buff (Never Expires)",
+        Default = false,
+        Callback = function(state)
+            applyInfiniteFoodState(state)
+            if state then
+                if not foodCharConn then
+                    foodCharConn = player.CharacterAdded:Connect(function()
+                        task.wait(0.5)
+                        if infiniteFoodActive then applyInfiniteFoodState(true) end
+                    end)
+                end
+                Notify("Moro Soul", "Infinite Food Buffs Active (Never Expires)!", 3, "Success")
+            else
+                if foodCharConn then
+                    foodCharConn:Disconnect()
+                    foodCharConn = nil
+                end
+                Notify("Moro Soul", "Infinite Food Buffs Disabled", 2, "Info")
+            end
+        end
+    })
+
+    FoodCraftSec:AddButton({
+        Name = "Apply Top Food Buffs (Permanent)",
+        Primary = true,
+        Callback = function()
+            applyTopFoodBuffsPermanent()
+            Notify("Moro Soul", "Top Combat Buffs Applied Permanently (+50% Dmg, Crit, Dbl, Spd)!", 3, "Success")
         end
     })
 
@@ -1770,6 +2020,17 @@ if Library then
             end
         end
     })
+
+    table.insert(cleanupHandlers, function()
+        foodLoopActive = false
+        if infiniteFoodActive then
+            applyInfiniteFoodState(false)
+        end
+        if foodCharConn then
+            pcall(function() foodCharConn:Disconnect() end)
+            foodCharConn = nil
+        end
+    end)
 
     -- Auto-eat loop for top 3 foods: 食物22 (Tuna), 食物20 (Koi), 食物15 (Tilapia)
     task.spawn(function()
@@ -1797,6 +2058,7 @@ if Library then
             end
         end
     end)
+    end
 
 
 
@@ -4031,12 +4293,12 @@ if Library then
     -- 3.5. Friend Server Bonus Exploits (Unlock All 9 Buffs without friends)
     local FriendBonusSec = wrapSection(ExploitsTab:CreateSection({ Name = "Friend Server Bonus (9/9)", Collapsible = true }))
 
-    local fakeFriendBonusActive = false
     local friendBonusCharConn = nil
 
     local function applyFriendBonusState(enable)
         pcall(function()
             local PropertyTribeTreeManager = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"))
+            local PropertyTribe = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribe"))
             local MathManager = require(rs:WaitForChild("Packages"):WaitForChild("MathManager"))
             local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
             local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
@@ -4057,7 +4319,14 @@ if Library then
 
                 if userTree and userTree.Friends then
                     userTree.Friends:ResetHandler(function()
-                        return combinedTribe
+                        local res = combinedTribe
+                        if isSpeedHack and (speedPercentValue or 0) > 0 then
+                            local speedTribe = PropertyTribe.new({
+                                MoveSpeedRatio = (speedPercentValue or 50) / 100
+                            })
+                            res = if res then res + speedTribe else speedTribe
+                        end
+                        return res
                     end)
                     userTree.Friends:SetDirty(true)
                     userTree:SetDirty(true)
@@ -4124,6 +4393,12 @@ if Library then
                                     v1 = if v1 then v1 + MathManager.GetConfigPropertyTribe(const.Regions.Friends, i) else MathManager.GetConfigPropertyTribe(const.Regions.Friends, i)
                                 end
                             end
+                        end
+                        if isSpeedHack and (speedPercentValue or 0) > 0 then
+                            local speedTribe = PropertyTribe.new({
+                                MoveSpeedRatio = (speedPercentValue or 50) / 100
+                            })
+                            v1 = if v1 then v1 + speedTribe else speedTribe
                         end
                         return v1
                     end)
@@ -4269,491 +4544,6 @@ if Library then
             Notify("Moro Soul", "Full Bright Activated!", 2, "Success")
         end
     })
-    end
-
-    -- =====================================================================
-    --                           MISC TAB (Custom Overdrive Boosts)
-    -- =====================================================================
-    do
-        MiscTab:Column("left")
-
-        local MiscCombatSec = wrapSection(MiscTab:CreateSection({ Name = "Combat & Speed Overdrive", Collapsible = true }))
-
-        local miscState = {
-            active = true,
-            attackSpeed = 300,
-            moveSpeed = 50,
-            drawSpeed = 500,
-            fishPower = 100,
-            doubleAttack = true,
-            tripleAttack = true,
-            charConn = nil,
-            loopActive = false
-        }
-
-        local origUcpHooks = {
-            GetFinalExpDeskAcceleration = nil,
-        }
-
-        local function applyMiscOverdrive(enable)
-            pcall(function()
-                local PropertyTribeTreeManager = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribeTreeManager"))
-                local PropertyTribe = require(rs:WaitForChild("Packages"):WaitForChild("PropertyTribe"))
-                local UserCalculatorPropertys = require(rs:WaitForChild("Packages"):WaitForChild("WuKongDataProvider"):WaitForChild("UserCalculatorPropertys"))
-                local Cheat = nil
-                pcall(function()
-                    Cheat = require(rs.Packages.PropertyTribeTreeManager.BattleUser.Cheat)
-                end)
-
-                if enable then
-                    if not origUcpHooks.GetFinalExpDeskAcceleration and UserCalculatorPropertys.GetFinalExpDeskAcceleration then
-                        origUcpHooks.GetFinalExpDeskAcceleration = UserCalculatorPropertys.GetFinalExpDeskAcceleration
-                        UserCalculatorPropertys.GetFinalExpDeskAcceleration = function(...)
-                            if miscState.active then
-                                return (miscState.drawSpeed / 100) + 0.3
-                            end
-                            return origUcpHooks.GetFinalExpDeskAcceleration(...)
-                        end
-                    end
-
-                    local customTribe = PropertyTribe.new({
-                        AttackSpeedAddition = miscState.attackSpeed / 100,
-                        ExpDestSpeedAddition = miscState.drawSpeed / 100,
-                        MoveSpeedRatio = miscState.moveSpeed / 100,
-                        FishPowerAddition = miscState.fishPower / 100,
-                        DoubleAttackPercent = miscState.doubleAttack and 1 or 0,
-                        TripleAttackPercent = miscState.tripleAttack and 1 or 0,
-                    })
-
-                    local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
-                    local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
-
-                    if userTree and userTree.Friends then
-                        userTree.Friends:ResetHandler(function()
-                            return customTribe
-                        end)
-                        userTree.Friends:SetDirty(true)
-                        userTree:SetDirty(true)
-                    end
-                    if battleTree then
-                        battleTree:SetDirty(true)
-                    end
-                    if Cheat then
-                        Cheat.enableCheat(player.UserId)
-                    end
-
-                    if not miscState.loopActive then
-                        miscState.loopActive = true
-                        task.spawn(function()
-                            while miscState.active and miscState.loopActive do
-                                pcall(function()
-                                    local uTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
-                                    local bTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
-                                    if uTree and uTree.Friends then
-                                        uTree.Friends:ResetHandler(function()
-                                            return PropertyTribe.new({
-                                                AttackSpeedAddition = miscState.attackSpeed / 100,
-                                                ExpDestSpeedAddition = miscState.drawSpeed / 100,
-                                                MoveSpeedRatio = miscState.moveSpeed / 100,
-                                                FishPowerAddition = miscState.fishPower / 100,
-                                                DoubleAttackPercent = miscState.doubleAttack and 1 or 0,
-                                                TripleAttackPercent = miscState.tripleAttack and 1 or 0,
-                                            })
-                                        end)
-                                        uTree.Friends:SetDirty(true)
-                                        uTree:SetDirty(true)
-                                    end
-                                    if bTree then
-                                        bTree:SetDirty(true)
-                                    end
-                                    if Cheat then
-                                        Cheat.enableCheat(player.UserId)
-                                    end
-                                end)
-                                task.wait(0.5)
-                            end
-                        end)
-                    end
-                else
-                    miscState.loopActive = false
-
-                    if Cheat then
-                        Cheat.disableCheat(player.UserId)
-                    end
-
-                    if origUcpHooks.GetFinalExpDeskAcceleration and UserCalculatorPropertys.GetFinalExpDeskAcceleration then
-                        UserCalculatorPropertys.GetFinalExpDeskAcceleration = origUcpHooks.GetFinalExpDeskAcceleration
-                        origUcpHooks.GetFinalExpDeskAcceleration = nil
-                    end
-
-                    local const = nil
-                    local WuKong = nil
-                    local MathManager = nil
-                    pcall(function()
-                        const = require(rs.Packages.PropertyTribeTreeManager.const)
-                        WuKong = require(rs.WuKong)
-                        MathManager = require(rs.Packages.MathManager)
-                    end)
-
-                    local userTree = PropertyTribeTreeManager.GetUserTree(player.UserId)
-                    local battleTree = PropertyTribeTreeManager.GetBattleUserTree(player.UserId)
-                    if userTree and userTree.Friends then
-                        userTree.Friends:ResetHandler(function()
-                            local v1 = nil
-                            local count = (WuKong and WuKong:ExecuteQuery("/Lua委托值/同服好友数量?获取缓存值")) or 0
-                            if const and MathManager then
-                                for i = 1, count do
-                                    if MathManager.HasConfigPropertyTribe(const.Regions.Friends, i) then
-                                        v1 = if v1 then v1 + MathManager.GetConfigPropertyTribe(const.Regions.Friends, i) else MathManager.GetConfigPropertyTribe(const.Regions.Friends, i)
-                                    end
-                                end
-                            end
-                            return v1
-                        end)
-                        userTree.Friends:SetDirty(true)
-                        userTree:SetDirty(true)
-                    end
-                    if battleTree then
-                        battleTree:SetDirty(true)
-                    end
-                end
-            end)
-        end
-
-        MiscCombatSec:AddToggle({
-            Name = "Enable Overdrive Boosts",
-            Default = true,
-            Callback = function(state)
-                miscState.active = state
-                applyMiscOverdrive(state)
-                if state then
-                    if not miscState.charConn then
-                        miscState.charConn = player.CharacterAdded:Connect(function()
-                            task.wait(0.5)
-                            if miscState.active then
-                                applyMiscOverdrive(true)
-                            end
-                        end)
-                    end
-                    Notify("Moro Soul", "Overdrive Boosts Activated!", 2, "Success")
-                else
-                    if miscState.charConn then
-                        miscState.charConn:Disconnect()
-                        miscState.charConn = nil
-                    end
-                    Notify("Moro Soul", "Overdrive Boosts Disabled", 2, "Info")
-                end
-            end
-        })
-
-        -- Auto-activate on script launch
-        applyMiscOverdrive(true)
-        if not miscState.charConn then
-            miscState.charConn = player.CharacterAdded:Connect(function()
-                task.wait(0.5)
-                if miscState.active then
-                    applyMiscOverdrive(true)
-                end
-            end)
-        end
-
-        MiscCombatSec:AddSlider({
-            Name = "Attack Speed Boost",
-            Min = 0,
-            Max = 2000,
-            Default = 300,
-            Suffix = "%",
-            Callback = function(val)
-                miscState.attackSpeed = val
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
-        MiscCombatSec:AddSlider({
-            Name = "Move Speed Boost",
-            Min = 0,
-            Max = 2000,
-            Default = 50,
-            Suffix = "%",
-            Callback = function(val)
-                miscState.moveSpeed = val
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
-        MiscCombatSec:AddToggle({
-            Name = "100% Double Attack (Dev Cheat)",
-            Default = true,
-            Callback = function(state)
-                miscState.doubleAttack = state
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
-        MiscCombatSec:AddToggle({
-            Name = "100% Triple Attack (Dev Cheat)",
-            Default = true,
-            Callback = function(state)
-                miscState.tripleAttack = state
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
-        MiscTab:Column("right")
-
-        local MiscUtilitySec = wrapSection(MiscTab:CreateSection({ Name = "Gacha & Utility Overdrive", Collapsible = true }))
-
-        MiscUtilitySec:AddSlider({
-            Name = "Draw / Banner Speed",
-            Min = 0,
-            Max = 2000,
-            Default = 500,
-            Suffix = "%",
-            Callback = function(val)
-                miscState.drawSpeed = val
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
-        MiscUtilitySec:AddSlider({
-            Name = "Fishing Power Boost",
-            Min = 0,
-            Max = 2000,
-            Default = 100,
-            Suffix = "%",
-            Callback = function(val)
-                miscState.fishPower = val
-                if miscState.active then applyMiscOverdrive(true) end
-            end
-        })
-
-        -- -----------------------------------------------------------------
-        -- Skip Gacha Animation (Instant Roll)
-        -- -----------------------------------------------------------------
-        local skipGachaActive = false
-        local origOnDrawRoleEvent = nil
-        local origDrawRoleModelShow = nil
-        local origExpDeskAcc = nil
-
-        local function applySkipGacha(enable)
-            pcall(function()
-                local LuckDrawBG = require(rs.UI.DrawRole.View.LuckDrawBG)
-                local drawRole = require(rs.UI.DrawRole)
-
-                if enable then
-                    if LuckDrawBG.DataContext and LuckDrawBG.DataContext.Packages then
-                        local pkg = LuckDrawBG.DataContext.Packages
-                        if not origExpDeskAcc and pkg.GetFinalExpDeskAcceleration then
-                            origExpDeskAcc = pkg.GetFinalExpDeskAcceleration
-                        end
-                        pkg.GetFinalExpDeskAcceleration = function(...)
-                            return 999999
-                        end
-                    end
-
-                    if drawRole and drawRole.Panel then
-                        drawRole.Panel.IsHadGamepass299R = true
-                        drawRole.Panel.IsHadGamepass799R = true
-                    end
-
-                    if not origOnDrawRoleEvent and LuckDrawBG.OnDrawRoleEvent then
-                        origOnDrawRoleEvent = LuckDrawBG.OnDrawRoleEvent
-                    end
-                    LuckDrawBG.OnDrawRoleEvent = function(self, a2, a3, a4, a5, a6)
-                        if skipGachaActive then
-                            return self:DrawRoleModelShow(a2, a6)
-                        end
-                        if origOnDrawRoleEvent then
-                            return origOnDrawRoleEvent(self, a2, a3, a4, a5, a6)
-                        end
-                    end
-
-                    if not origDrawRoleModelShow and LuckDrawBG.DrawRoleModelShow then
-                        origDrawRoleModelShow = LuckDrawBG.DrawRoleModelShow
-                    end
-                    LuckDrawBG.DrawRoleModelShow = function(self, a2, a6)
-                        if skipGachaActive then
-                            pcall(function()
-                                local Model = workspace.Maps.DrawRoleArchive:FindFirstChildOfClass("Model")
-                                if Model then
-                                    Model.Parent = rs.RoleModels
-                                    local Tips = workspace.Maps.DrawRoleArchive:FindFirstChild("Tips")
-                                    if Tips then Tips:Destroy() end
-                                end
-                                rs.ClientEvents.DrawRole:Fire(a2, a6)
-                                if self.DataContext and self.DataContext.Panel and self.DataContext.Panel.IsAutoDrawing then
-                                    rs.RemoteEvents.DrawRole:FireServer(true)
-                                end
-                                if self.DataContext and self.DataContext.Panel then
-                                    self.DataContext.Panel.IsDrawing = self.DataContext.Panel.IsAutoDrawing
-                                    self.DataContext.Panel.MaskVisible = self.DataContext.Panel.IsDrawing
-                                    if self.DrawRoleFrame_L and self.DrawRoleFrame_L.Mask then
-                                        self.DrawRoleFrame_L.Mask.Visible = self.DataContext.Panel.IsDrawing
-                                    end
-                                end
-                            end)
-                            return
-                        end
-                        if origDrawRoleModelShow then
-                            return origDrawRoleModelShow(self, a2, a6)
-                        end
-                    end
-                else
-                    if LuckDrawBG.DataContext and LuckDrawBG.DataContext.Packages and origExpDeskAcc then
-                        LuckDrawBG.DataContext.Packages.GetFinalExpDeskAcceleration = origExpDeskAcc
-                        origExpDeskAcc = nil
-                    end
-                    if origOnDrawRoleEvent and LuckDrawBG.OnDrawRoleEvent then
-                        LuckDrawBG.OnDrawRoleEvent = origOnDrawRoleEvent
-                        origOnDrawRoleEvent = nil
-                    end
-                    if origDrawRoleModelShow and LuckDrawBG.DrawRoleModelShow then
-                        LuckDrawBG.DrawRoleModelShow = origDrawRoleModelShow
-                        origDrawRoleModelShow = nil
-                    end
-                end
-            end)
-        end
-
-        MiscUtilitySec:AddToggle({
-            Name = "Skip Gacha Animation (Instant Roll)",
-            Default = false,
-            Callback = function(state)
-                skipGachaActive = state
-                applySkipGacha(state)
-                if state then
-                    Notify("Moro Soul", "Skip Gacha Animation Enabled!", 2, "Success")
-                else
-                    Notify("Moro Soul", "Gacha Animation Restored", 2, "Info")
-                end
-            end
-        })
-
-        -- -----------------------------------------------------------------
-        -- Instant Fishing & Auto Fishing
-        -- -----------------------------------------------------------------
-        local instantFishingActive = false
-        local autoFishingLoopActive = false
-        local fishingStateConn = nil
-
-        local function findNearestFishingPrompt()
-            local char = player.Character
-            if not char or not char.PrimaryPart then return nil end
-            local pos = char.PrimaryPart.Position
-            local nearest = nil
-            local minDist = 60
-            local fFolder = workspace:FindFirstChild("Fishing")
-            if not fFolder then return nil end
-            for _, obj in ipairs(fFolder:GetDescendants()) do
-                if obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent:IsA("BasePart") then
-                    local dist = (obj.Parent.Position - pos).Magnitude
-                    if dist < minDist then
-                        minDist = dist
-                        nearest = obj
-                    end
-                end
-            end
-            return nearest
-        end
-
-        local function setupFishingStateWatcher()
-            if fishingStateConn then
-                fishingStateConn:Disconnect()
-                fishingStateConn = nil
-            end
-            local fg = player.PlayerGui:FindFirstChild("Fishing")
-            local fState = fg and fg:FindFirstChild("FishingState")
-            if fState then
-                fishingStateConn = fState.Changed:Connect(function(val)
-                    if (instantFishingActive or autoFishingLoopActive) and val == "Pulling" then
-                        task.spawn(function()
-                            local pull = (remoteFolder or rs.RemoteEvents):FindFirstChild("PullFish")
-                            while (instantFishingActive or autoFishingLoopActive) and fState.Value == "Pulling" do
-                                if pull then pull:FireServer() end
-                                task.wait(0.04)
-                            end
-                        end)
-                    end
-                end)
-            end
-        end
-
-        MiscUtilitySec:AddToggle({
-            Name = "Instant Fishing (Instant Reel)",
-            Default = false,
-            Callback = function(state)
-                instantFishingActive = state
-                if state then
-                    setupFishingStateWatcher()
-                    Notify("Moro Soul", "Instant Catch Active (Bite = Auto Catch)!", 2, "Success")
-                else
-                    if not autoFishingLoopActive and fishingStateConn then
-                        fishingStateConn:Disconnect()
-                        fishingStateConn = nil
-                    end
-                    Notify("Moro Soul", "Instant Fishing Disabled", 2, "Info")
-                end
-            end
-        })
-
-        MiscUtilitySec:AddToggle({
-            Name = "Auto Fish (Cast + Instant Catch)",
-            Default = false,
-            Callback = function(state)
-                autoFishingLoopActive = state
-                if state then
-                    setupFishingStateWatcher()
-                    task.spawn(function()
-                        while autoFishingLoopActive and scriptActive do
-                            local fg = player.PlayerGui:FindFirstChild("Fishing")
-                            local fState = fg and fg:FindFirstChild("FishingState")
-                            local stateVal = fState and fState.Value or ""
-
-                            if stateVal == "" then
-                                local prompt = findNearestFishingPrompt()
-                                if prompt then
-                                    local sf = (remoteFolder or rs.RemoteEvents):FindFirstChild("StartFishing")
-                                    if sf then sf:FireServer(prompt) end
-                                end
-                                task.wait(0.5)
-                            elseif stateVal == "Pulling" then
-                                local pull = (remoteFolder or rs.RemoteEvents):FindFirstChild("PullFish")
-                                if pull then pull:FireServer() end
-                                task.wait(0.04)
-                            else
-                                task.wait(0.2)
-                            end
-                        end
-                    end)
-                    Notify("Moro Soul", "Auto Fishing Active (Auto Cast & Catch)!", 2, "Success")
-                else
-                    if not instantFishingActive and fishingStateConn then
-                        fishingStateConn:Disconnect()
-                        fishingStateConn = nil
-                    end
-                    Notify("Moro Soul", "Auto Fishing Disabled", 2, "Info")
-                end
-            end
-        })
-
-        table.insert(cleanupHandlers, function()
-            skipGachaActive = false
-            applySkipGacha(false)
-            instantFishingActive = false
-            autoFishingLoopActive = false
-            if fishingStateConn then
-                pcall(function() fishingStateConn:Disconnect() end)
-                fishingStateConn = nil
-            end
-            miscState.loopActive = false
-            if miscState.active then
-                applyMiscOverdrive(false)
-            end
-            if miscState.charConn then
-                pcall(function() miscState.charConn:Disconnect() end)
-                miscState.charConn = nil
-            end
-        end)
     end
 
     -- =====================================================================
