@@ -13403,6 +13403,7 @@ local function ResetFarmState()
   KnobFarm.Teleporting = false
   KnobFarm.DisabledNoclipForSeek = false
   KnobFarm.DisableGodmodeForBoss = false
+  KnobFarm.AvoidFigure = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
   pcall(function()
     if toggles.Phase and toggles.Phase.Value then
@@ -15338,6 +15339,60 @@ local function GetRoomPathfindNodes(room, rootPos, exitPos)
   return points
 end
 
+-- ───────────────────────────── ИЗБЕГАНИЕ ФИГУРЫ (комнаты 50 и 100) ─────────────────────────────
+local FIGURE_HOLD_DIST = 25      -- ближе этого расстояния до Фигуры бот замирает (приседание уже включено)
+local FIGURE_RETREAT_DIST = 14   -- ближе этого — активно отходит от неё
+local figureInst = nil
+local figureSearchAt = 0
+
+local function GetFigurePosition()
+  if not (figureInst and figureInst.Parent) then
+    figureInst = nil
+    local now = tick()
+    if now - figureSearchAt < 0.5 then return nil end
+    figureSearchAt = now
+    figureInst = workspace:FindFirstChild("Figure") or workspace:FindFirstChild("FigureRig")
+    if not figureInst then
+      local curRooms = workspace:FindFirstChild("CurrentRooms")
+      figureInst = curRooms and (curRooms:FindFirstChild("FigureRig", true) or curRooms:FindFirstChild("Figure", true))
+    end
+  end
+  if not figureInst then return nil end
+  local part = figureInst:FindFirstChild("HumanoidRootPart") or figureInst:FindFirstChild("Torso")
+    or figureInst.PrimaryPart or figureInst:FindFirstChildWhichIsA("BasePart", true)
+  return part and part.Position or nil
+end
+
+local function FlatDist(a, b)
+  local dx, dz = a.X - b.X, a.Z - b.Z
+  return math.sqrt(dx * dx + dz * dz)
+end
+
+-- Ждать, пока Фигура не отойдёт от точки pos (куда мы собираемся идти/телепортироваться).
+-- Если она слишком близко к самому боту — отступаем от неё.
+local function WaitFigureClear(pos, timeout)
+  local started = tick()
+  while KnobFarm.Active and not _Unloading and tick() - started < (timeout or 20) do
+    local fp = GetFigurePosition()
+    if not fp or not pos or FlatDist(fp, pos) >= FIGURE_HOLD_DIST then return true end
+
+    KnobFarm.SetStatus("Figure near target — waiting...")
+    local char = localPlayer2 and localPlayer2.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = GetRoot()
+    if hum and root then
+      local d = FlatDist(fp, root.Position)
+      if d < FIGURE_RETREAT_DIST and d > 0.1 then
+        hum:Move(Vector3.new((root.Position.X - fp.X) / d, 0, (root.Position.Z - fp.Z) / d), false)
+      else
+        hum:Move(Vector3.zero, false)
+      end
+    end
+    task.wait(0.3)
+  end
+  return false
+end
+
 -- Путь до точки: PathfindingService → иначе прямая. (Раньше параметры агента были
 -- скопированы в NavigateTo и в главный цикл.)
 local function BuildPathTo(char, startPos, goalPos)
@@ -15385,6 +15440,8 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
   local lastNudgeTime = 0
   local lastRootPos = nil
   local currentTargetPoint = targetPos
+  local figureHoldAt = 0          -- когда последний раз стояли из-за Фигуры
+  local figureHoldTotal = 0
 
   local startChar = localPlayer2 and localPlayer2.Character
   ApplyFarmSpeed(startChar and startChar:FindFirstChildOfClass("Humanoid"))
@@ -15418,6 +15475,23 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     end
 
     local rootPos = root.Position
+
+    -- Фигура рядом: замираем, а если слишком близко — отходим. Путь не продолжаем.
+    if KnobFarm.AvoidFigure then
+      local fp = GetFigurePosition()
+      if fp then
+        local fd = FlatDist(rootPos, fp)
+        if fd < FIGURE_HOLD_DIST then
+          figureHoldAt = tick()
+          if fd < FIGURE_RETREAT_DIST and fd > 0.1 then
+            h:Move(Vector3.new((rootPos.X - fp.X) / fd, 0, (rootPos.Z - fp.Z) / fd), false)
+          else
+            h:Move(Vector3.zero, false)
+          end
+          return
+        end
+      end
+    end
 
     -- Продвигаем индекс точки пути (строго по прямым, без срезания углов)
     while wpIndex < #waypoints do
@@ -15517,6 +15591,14 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     if not root or not h or h.Health <= 0 then break end
 
     local now = tick()
+
+    -- Пока стоим из-за Фигуры — не считаем это застреванием и не тратим таймаут пути
+    if now - figureHoldAt < 0.3 then
+      figureHoldTotal = figureHoldTotal + 0.05
+      lastProgressTime = now
+      startTime = startTime + 0.05
+      if figureHoldTotal > 45 then break end
+    end
 
     -- Вывалились за карту
     if not HasFloorUnder(root.Position, 25) then
@@ -15666,22 +15748,11 @@ local function handleRoom50(room, door)
   end)
   SetCrouched(true)
   KnobFarm.Teleporting = false
+  KnobFarm.AvoidFigure = true
 
-  -- Хелпер поиска Фигуры
+  -- Хелпер поиска Фигуры (общий, см. GetFigurePosition)
   local function getFigurePos()
-    local fig = workspace:FindFirstChild("Figure") or workspace:FindFirstChild("FigureRig")
-    if not fig and targetRoom then
-      fig = targetRoom:FindFirstChild("FigureRig") or targetRoom:FindFirstChild("Figure")
-    end
-    if not fig and curRooms then
-      local r50 = curRooms:FindFirstChild("50")
-      if r50 then fig = r50:FindFirstChild("FigureRig") or r50:FindFirstChild("Figure") end
-    end
-    if fig then
-      local rp = fig:FindFirstChild("HumanoidRootPart") or fig:FindFirstChild("Torso") or fig.PrimaryPart
-      if rp then return rp.Position end
-    end
-    return nil
+    return GetFigurePosition()
   end
 
   -- 2. Находим книги (LiveHintBook) и идем к каждой по полу через Pathfinding (НЕ сквозь стены), избегая Фигуру
@@ -15727,13 +15798,8 @@ local function handleRoom50(room, door)
     if not bPos then
       KnobFarm.LootedObjects[targetBook] = true
     else
-      -- Если Фигура стоит прямо на книге (< 15 стадов), ждем пока отойдет
-      local waitFig = tick()
-      while figPos and (bPos - figPos).Magnitude < 15 and tick() - waitFig < 4.0 and KnobFarm.Active and not _Unloading do
-        KnobFarm.SetStatus("Room 50: Waiting for Figure to pass...")
-        task.wait(0.5)
-        figPos = getFigurePos()
-      end
+      -- Если Фигура рядом с книгой — ждём, пока отойдёт
+      WaitFigureClear(bPos, 15)
 
       -- Идем к книге по полу (Pathfinding НЕ через стены, точно так же как к любым другим предметам)
       KnobFarm.SetStatus("Room 50: Walking to Book (avoiding Figure)...")
@@ -15781,6 +15847,7 @@ local function handleRoom50(room, door)
     local pPos = (paper:IsA("BasePart") and paper.Position) or (paper:IsA("Model") and paper:GetPivot().Position)
     if pPos then
       local floorPos = GetFloorPosition(pPos) or pPos
+      WaitFigureClear(pPos, 15)
       if NavigateTo then
         NavigateTo(floorPos, paper, "Hint Paper", 8.0, "Loot")
       end
@@ -15822,6 +15889,7 @@ local function handleRoom50(room, door)
   if padPart then
     local padPos = (padPart:IsA("BasePart") and padPart.Position) or padPart:GetPivot().Position
     local floorPos = GetFloorPosition(padPos) or padPos
+    WaitFigureClear(padPos, 20)
     if NavigateTo then
       NavigateTo(floorPos, padPart, "Door Padlock", 10.0, "Door")
     end
@@ -15909,6 +15977,7 @@ local function handleRoom50(room, door)
   KnobFarm.PassedFirstDoor = true
   SetCrouched(false)
   KnobFarm.DisableGodmodeForBoss = false
+  KnobFarm.AvoidFigure = false
   KnobFarm.Teleporting = false
 
   -- Включаем ноуклип обратно
@@ -15952,6 +16021,7 @@ local function handleRoom100(room)
     end
   end)
   KnobFarm.Teleporting = true
+  KnobFarm.AvoidFigure = true
 
   -- 1. Fly to all Breaker Switches & Fuses
   KnobFarm.SetStatus("Room 100: Flying to Breaker Switches & Fuses...")
@@ -15971,6 +16041,7 @@ local function handleRoom100(room)
       local target = desc:IsA("ProximityPrompt") and desc.Parent or desc
       local pos = (target:IsA("BasePart") and target.Position) or (target:IsA("Model") and target:GetPivot().Position)
       if pos and root then
+        WaitFigureClear(pos, 20)
         root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
         root.AssemblyLinearVelocity = Vector3.zero
         if pr and pr.Enabled then
@@ -15989,6 +16060,7 @@ local function handleRoom100(room)
     local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
     local kPr = elecKey:FindFirstChildWhichIsA("ProximityPrompt", true)
     if kPos then
+      WaitFigureClear(kPos, 20)
       root.CFrame = CFrame.new(kPos + Vector3.new(0, 1.2, 0))
       root.AssemblyLinearVelocity = Vector3.zero
       if kPr and kPr.Enabled then
@@ -16015,6 +16087,7 @@ local function handleRoom100(room)
       or (elecLock and elecLock:FindFirstChildWhichIsA("BasePart", true))
       or (elecDoor and elecDoor:FindFirstChildWhichIsA("BasePart", true))
     if lockPart and root then
+      WaitFigureClear(lockPart.Position, 20)
       root.CFrame = lockPart.CFrame * CFrame.new(0, 0, 2.5)
       root.AssemblyLinearVelocity = Vector3.zero
       local lockPrompt = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
@@ -16033,6 +16106,7 @@ local function handleRoom100(room)
     local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
     local lPr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
     if lPos then
+      WaitFigureClear(lPos, 20)
       root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
       root.AssemblyLinearVelocity = Vector3.zero
       if lPr then
@@ -16047,6 +16121,7 @@ local function handleRoom100(room)
     KnobFarm.SetStatus("Room 100: Flying to Breaker Panel...")
     local bPos = (breaker:IsA("BasePart") and breaker.Position) or (breaker:IsA("Model") and breaker:GetPivot().Position)
     if bPos then
+      WaitFigureClear(bPos, 20)
       root.CFrame = CFrame.new(bPos + Vector3.new(0, 1.5, 2.5))
       root.AssemblyLinearVelocity = Vector3.zero
       for _, bPr in ipairs(breaker:GetDescendants()) do
@@ -16071,6 +16146,7 @@ local function handleRoom100(room)
   if elevator and root then
     KnobFarm.SetStatus("Room 100: Flying into Elevator...")
     local ePos = elevator:GetPivot().Position
+    WaitFigureClear(ePos, 20)
     root.CFrame = CFrame.new(ePos + Vector3.new(0, 2.0, 0))
     root.AssemblyLinearVelocity = Vector3.zero
     local ePr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
