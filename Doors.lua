@@ -14437,6 +14437,32 @@ local function IsUserMovingManually()
   return false
 end
 
+-- Магазин Джеффа: в комнатах 54–59 ничего не покупаем (раньше бот тратил там все деньги,
+-- потому что промпты товаров попадали под «подбираемые предметы»)
+local function IsJeffShopPrompt(prompt)
+  local n = KnobFarm.CurrentRoomNum or 0
+  if n < 54 or n > 59 then return false end
+  local act = (prompt.ActionText or ""):lower()
+  local obj = (prompt.ObjectText or ""):lower()
+  if act:find("purchase", 1, true) or act:find("buy", 1, true)
+    or obj:find("purchase", 1, true) or obj:find("buy", 1, true) then
+    return true
+  end
+  local node = prompt.Parent
+  if node and (node:GetAttribute("Price") or node:GetAttribute("Cost")
+    or node:FindFirstChild("Price") or node:FindFirstChild("Cost")) then
+    return true
+  end
+  while node and node ~= workspace do
+    local nm = node.Name:lower()
+    if nm:find("shop", 1, true) or nm:find("jeff", 1, true) or nm:find("store", 1, true) then
+      return true
+    end
+    node = node.Parent
+  end
+  return false
+end
+
 local function IsLootablePrompt(prompt)
   if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
   local parent = prompt.Parent
@@ -14472,6 +14498,9 @@ local function IsLootablePrompt(prompt)
 
   -- Don't close drawers
   if actionText == "close" then return false end
+
+  -- Не покупать в магазине Джеффа
+  if IsJeffShopPrompt(prompt) then return false end
 
   -- 1. Gold & Stardust
   if pName == "GoldPile" or pName == "TinyGold" or pName == "Gold"
@@ -15727,6 +15756,40 @@ end
 -- BOSS ROOM SOLVERS (Room 50 and Room 100)
 -- ═══════════════════════════════════════════════════════════════════
 
+-- Надёжно забрать предмет (книгу/листок): с PhantomNoclip персонаж «дрейфует» и одного
+-- нажатия мало. Подходим вплотную, жмём промпт каждые 0.15с и проверяем, что предмет взят.
+local function CollectBossItem(item, isDone)
+  local pos = (item:IsA("BasePart") and item.Position) or (item:IsA("Model") and item:GetPivot().Position)
+  if not pos then return false end
+  local started = tick()
+  while tick() - started < 5.0 and KnobFarm.Active and not _Unloading do
+    if isDone and isDone() then return true end
+    local pr = (item:IsA("ProximityPrompt") and item) or item:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if not item.Parent or not pr or not pr.Parent or not pr.Enabled then return true end   -- предмет взят
+
+    local fp = GetFigurePosition()
+    if fp and FlatDist(fp, pos) < FIGURE_HOLD_DIST then WaitFigureClear(pos, 10) end
+
+    local c = localPlayer2 and localPlayer2.Character
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    local root = c and c:FindFirstChild("HumanoidRootPart")
+    if h and root then
+      local d = FlatDist(root.Position, pos)
+      if d > 2.5 then
+        h:Move(Vector3.new((pos.X - root.Position.X) / d, 0, (pos.Z - root.Position.Z) / d), false)
+      else
+        h:Move(Vector3.zero, false)
+      end
+    end
+    FirePrompt(pr, false, true)
+    task.wait(0.15)
+  end
+  local c = localPlayer2 and localPlayer2.Character
+  local h = c and c:FindFirstChildOfClass("Humanoid")
+  if h then h:Move(Vector3.zero, false) end
+  return (isDone ~= nil and isDone()) or false
+end
+
 local function handleRoom50(room, door)
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -15812,11 +15875,8 @@ local function handleRoom50(room, door)
       local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
       local dist = curRoot and (curRoot.Position - bPos).Magnitude or 999
 
-      if dist <= 9.0 then
-        local pr = targetBook:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr and pr.Enabled then
-          FirePrompt(pr, false, true)
-        end
+      if dist <= 14.0 then
+        CollectBossItem(targetBook)
         KnobFarm.LootedObjects[targetBook] = true
 
         -- Пауза 0.65с после того как бот берет книгу
@@ -15856,11 +15916,13 @@ local function handleRoom50(room, door)
       local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
       local dist = curRoot and (curRoot.Position - pPos).Magnitude or 999
 
-      if dist <= 9.0 then
-        local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr and pr.Enabled then
-          FirePrompt(pr, false, true)
+      if dist <= 14.0 then
+        local function hasPaperTool()
+          local bpk = localPlayer2:FindFirstChildOfClass("Backpack")
+          return (curChar and (curChar:FindFirstChild("LibraryHintPaper") or curChar:FindFirstChild("LibraryHintPaperHard")))
+            or (bpk and (bpk:FindFirstChild("LibraryHintPaper") or bpk:FindFirstChild("LibraryHintPaperHard")))
         end
+        CollectBossItem(paper, function() return hasPaperTool() and true or false end)
         KnobFarm.LootedObjects[paper] = true
         task.wait(0.3)
 
@@ -16504,11 +16566,15 @@ local function Tick()
     end)
   end
 
+  -- Комнаты 60 и 89–99: полный игнор — ничего не лутаем, ничего не ждём, не тянем рычаги,
+  -- просто летим к двери следующей комнаты
+  local isIgnoredRoom = (roomNum == 60) or (roomNum >= 89 and roomNum <= 99)
+
   -- Ворота с рычагом
   local isGateRoom = IsGateRoomWithThingToOpen(room)
   if isGateRoom then
     KnobFarm.SetStatus("Gate room detected — ignoring obstacles, heading straight to Door...")
-  else
+  elseif not isIgnoredRoom then
     PullGateLever(room)
   end
 
@@ -16532,7 +16598,9 @@ local function Tick()
   end
 
   -- Ждём пролёта Rush/Ambush (только вне зоны Seek и вне 50)
-  WaitForThreats(roomNum, room)
+  if not isIgnoredRoom then
+    WaitForThreats(roomNum, room)
+  end
 
   -- Комната 100 (электрощит, лифт)
   if runTo100 and ((roomNum and roomNum >= 100) or currentLatest >= 100) then
@@ -16543,7 +16611,7 @@ local function Tick()
 
   -- Лут. В 49-й не тратим время — бежим сразу к двери 50.
   local lootOn = not (toggles and toggles.AutoFarmLootDrawers) or toggles.AutoFarmLootDrawers.Value
-  if lootOn and (roomNum or 0) > 0 and roomNum ~= 49 and KnobFarm.PassedFirstDoor and not isGateRoom then
+  if lootOn and not isIgnoredRoom and (roomNum or 0) > 0 and roomNum ~= 49 and KnobFarm.PassedFirstDoor and not isGateRoom then
     LootAllInRoom(room)
   end
 
