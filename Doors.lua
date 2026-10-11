@@ -13406,6 +13406,8 @@ local function ResetFarmState()
   KnobFarm.NoclipBeforeJeff = false
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
+  KnobFarm.HumanPath = false
+  KnobFarm.LibraryRestored = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
   pcall(function()
     if toggles.Phase and toggles.Phase.Value then
@@ -14358,8 +14360,14 @@ local OBSTACLE_TERMS = {
 -- на которые потом пришлось навешивать RecoverFromVoid/RecoverFromRoof.
 local STRUCTURAL_NAMES = { floor = true, ground = true, roof = true, ceiling = true }
 
+-- Детали, у которых коллизию отключили МЫ (чтобы вернуть её в библиотеке)
+local DisabledByUs = setmetatable({}, { __mode = "k" })
+
 local function ShouldDisableCollision(desc)
   if not desc:IsA("BasePart") or not desc.CanCollide then return false end
+  -- Библиотека (комната 50): шкафы и стеллажи должны оставаться твёрдыми, чтобы бот
+  -- обходил их, а не бежал сквозь
+  if desc:FindFirstAncestor("50") then return false end
 
   local partName = desc.Name:lower()
   if STRUCTURAL_NAMES[partName] then return false end
@@ -14390,6 +14398,7 @@ local function DisableObstacleCollision(room)
       for _, desc in ipairs(container:GetDescendants()) do
         if ShouldDisableCollision(desc) then
           desc.CanCollide = false
+          DisabledByUs[desc] = true
         end
       end
     end)
@@ -14407,6 +14416,20 @@ local function DisableObstacleCollision(room)
   end
 end
 
+-- Вернуть коллизию всему, что мы отключили в библиотеке (комната 50) до её обнаружения
+local function RestoreLibraryCollision(room50)
+  if not room50 or KnobFarm.LibraryRestored then return end
+  KnobFarm.LibraryRestored = true
+  pcall(function()
+    for _, desc in ipairs(room50:GetDescendants()) do
+      if DisabledByUs[desc] then
+        desc.CanCollide = true
+        DisabledByUs[desc] = nil
+      end
+    end
+  end)
+end
+
 local function SetupObstacleListener()
   if obstacleListener then
     pcall(function() obstacleListener:Disconnect() end)
@@ -14419,6 +14442,7 @@ local function SetupObstacleListener()
         pcall(function()
           if ShouldDisableCollision(desc) then
             desc.CanCollide = false
+            DisabledByUs[desc] = true
           end
         end)
       end)
@@ -15371,8 +15395,8 @@ local function GetRoomPathfindNodes(room, rootPos, exitPos)
 end
 
 -- ───────────────────────────── ИЗБЕГАНИЕ ФИГУРЫ (комнаты 50 и 100) ─────────────────────────────
-local FIGURE_HOLD_DIST = 25      -- ближе этого расстояния до Фигуры бот замирает (приседание уже включено)
-local FIGURE_RETREAT_DIST = 14   -- ближе этого — активно отходит от неё
+local FIGURE_HOLD_DIST = 32      -- ближе этого расстояния до Фигуры бот замирает (приседание уже включено)
+local FIGURE_RETREAT_DIST = 22   -- ближе этого — активно отходит от неё
 local figureInst = nil
 local figureSearchAt = 0
 
@@ -15414,12 +15438,13 @@ local function WaitFigureClear(pos, timeout)
     if hum and root then
       local d = FlatDist(fp, root.Position)
       if d < FIGURE_RETREAT_DIST and d > 0.1 then
+        ApplyFarmSpeed(hum)   -- отходим на полной скорости, а не стоим
         hum:Move(Vector3.new((root.Position.X - fp.X) / d, 0, (root.Position.Z - fp.Z) / d), false)
       else
         hum:Move(Vector3.zero, false)
       end
     end
-    task.wait(0.3)
+    task.wait(0.15)
   end
   return false
 end
@@ -15428,11 +15453,12 @@ end
 -- скопированы в NavigateTo и в главный цикл.)
 local function BuildPathTo(char, startPos, goalPos)
   local waypoints = nil
+  local human = KnobFarm.HumanPath   -- библиотека: идём как человек, огибая мебель
   local path = pathfindingService:CreatePath({
     AgentCanJump = false,
     AgentCanClimb = false,
-    WaypointSpacing = 4,
-    AgentRadius = 1.8,
+    WaypointSpacing = human and 3 or 4,
+    AgentRadius = human and 2.6 or 1.8,
     AgentHeight = 2.0,
     Costs = { StuckPart = 8 },
   })
@@ -15440,7 +15466,11 @@ local function BuildPathTo(char, startPos, goalPos)
     path:ComputeAsync(startPos, goalPos)
   end)
   if ok and path.Status == Enum.PathStatus.Success then
-    waypoints = ProcessWaypoints(path:GetWaypoints(), char)
+    if human then
+      waypoints = path:GetWaypoints()   -- без срезания углов и «прямых» сокращений
+    else
+      waypoints = ProcessWaypoints(path:GetWaypoints(), char)
+    end
   end
   if not waypoints or #waypoints == 0 then
     waypoints = ProcessWaypoints({ startPos, goalPos }, char)
@@ -15480,6 +15510,10 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
   local isOrtho = (options and options.AutoFarmMovementMode and options.AutoFarmMovementMode.Value == "Orthogonal")
   local reachDist = isOrtho and 2.2 or 3.0
   local lookaheadDist = isOrtho and 3.5 or 5.0
+  if KnobFarm.HumanPath then
+    reachDist = 1.6        -- идём строго по точкам пути, не срезая углы шкафов
+    lookaheadDist = 0
+  end
 
   local function dropNode(i)
     local node = currentNodes[i]
@@ -15664,6 +15698,9 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
         end
       end
       if stalled > ((targetType == "Loot") and 3.0 or 4.5) then
+        if targetType ~= "Loot" then
+          KnobFarm.StuckBreaks = (KnobFarm.StuckBreaks or 0) + 1   -- застряли на пути к двери/цели
+        end
         break
       end
     end
@@ -15697,6 +15734,9 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
   local root = c and c:FindFirstChild("HumanoidRootPart")
 
   ClearPathNodes()
+  if reached and targetType ~= "Loot" then
+    KnobFarm.StuckBreaks = 0
+  end
 
   -- Для двери НИКОГДА не останавливаемся — проходим сквозь проём
   if targetType == "Door" then
@@ -16280,6 +16320,16 @@ local function handleRoom100(room)
     return items
   end
 
+  -- Объекты комнаты могут подгружаться не сразу: пока предохранителей нет — ждём (до 8 секунд)
+  local searchStart = tick()
+  while #getFuses() == 0 and tick() - searchStart < 8.0 and KnobFarm.Active and not _Unloading do
+    KnobFarm.SetStatus("Room 100: Waiting for fuses to load...")
+    task.wait(0.5)
+  end
+  if #getFuses() == 0 then
+    KnobFarm.SetStatus("Room 100: No fuses found, continuing...")
+  end
+
   local fuseStart = tick()
   while KnobFarm.Active and not _Unloading and (tick() - fuseStart < 90) do
     local unlooted = getFuses()
@@ -16318,27 +16368,7 @@ local function handleRoom100(room)
     end
   end
 
-  -- 2. Идет к воротам и дергает рычаг (Gate Lever)
-  local lever = (targetRoom and (targetRoom:FindFirstChild("LeverForGate", true) or targetRoom:FindFirstChild("Lever", true)))
-    or (curRooms and (curRooms:FindFirstChild("LeverForGate", true) or curRooms:FindFirstChild("Lever", true)))
-  if lever then
-    KnobFarm.SetStatus("Room 100: Walking to Gate Lever...")
-    local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
-    if lPos then
-      WaitFigureClear(lPos, 15)
-      local floorPos = GetFloorPosition(lPos) or lPos
-      if NavigateTo then
-        NavigateTo(floorPos, lever, "Gate Lever", 10.0, "Lever")
-      end
-      local lPr = (lever:IsA("ProximityPrompt") and lever) or lever:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if lPr then
-        FirePrompt(lPr, false, true)
-      end
-      task.wait(0.4)
-    end
-  end
-
-  -- 3. Идет за ключом вверх по лестнице (Electrical Room Key), избегая Фигуру
+  -- 2. Сначала собираем ВСЁ нужное: после предохранителей — ключ от щитовой (вверх по лестнице), избегая Фигуру
   local elecKey = (targetRoom and (targetRoom:FindFirstChild("ElectricalKeyObtain", true) or targetRoom:FindFirstChild("KeyElectrical", true)
     or targetRoom:FindFirstChild("Electrical Key", true) or targetRoom:FindFirstChild("ElectricalRoomKey", true)))
     or (curRooms and (curRooms:FindFirstChild("ElectricalKeyObtain", true) or curRooms:FindFirstChild("KeyElectrical", true)))
@@ -16373,6 +16403,40 @@ local function handleRoom100(room)
     end
   end
 
+  -- 3. Только теперь, когда всё собрано, идём к воротам и дёргаем рычаг (Gate Lever)
+  local lever = (targetRoom and (targetRoom:FindFirstChild("LeverForGate", true) or targetRoom:FindFirstChild("Lever", true)))
+    or (curRooms and (curRooms:FindFirstChild("LeverForGate", true) or curRooms:FindFirstChild("Lever", true)))
+  if lever then
+    KnobFarm.SetStatus("Room 100: Walking to Gate Lever...")
+    local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
+    if lPos then
+      WaitFigureClear(lPos, 15)
+      local floorPos = GetFloorPosition(lPos) or lPos
+      if NavigateTo then
+        NavigateTo(floorPos, lever, "Gate Lever", 10.0, "Lever")
+      end
+      WaitFigureClear(lPos, 15)   -- Фигура подошла, пока шли — ждём, пока отойдёт
+      local lPr = (lever:IsA("ProximityPrompt") and lever) or lever:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if lPr then
+        FirePrompt(lPr, false, true)
+      end
+      task.wait(0.4)
+    end
+  end
+
+  -- Перед щитовой убеждаемся, что ключ в руках (после рычага он мог остаться в рюкзаке)
+  do
+    local c2 = localPlayer2 and localPlayer2.Character
+    local bp2 = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+    local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
+    local k2 = (c2 and (c2:FindFirstChild("KeyElectrical") or c2:FindFirstChild("ElectricalKeyObtain")))
+      or (bp2 and (bp2:FindFirstChild("KeyElectrical") or bp2:FindFirstChild("ElectricalKeyObtain")))
+    if k2 and h2 and k2.Parent ~= c2 then
+      pcall(function() h2:EquipTool(k2) end)
+      task.wait(0.2)
+    end
+  end
+
   -- 4. С ключом идет к двери щитовой (Electrical Door), отпирает её и идет к Breaker Box
   local elecLock = (targetRoom and (targetRoom:FindFirstChild("KeyElectrical", true) or targetRoom:FindFirstChild("ElectricalLock", true)))
     or (curRooms and (curRooms:FindFirstChild("KeyElectrical", true) or curRooms:FindFirstChild("ElectricalLock", true)))
@@ -16391,6 +16455,7 @@ local function handleRoom100(room)
       if NavigateTo then
         NavigateTo(floorPos, elecDoor or lockPart, "Electrical Door", 10.0, "Door")
       end
+      WaitFigureClear(lPos, 15)
       local lockPrompt = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
         or (elecDoor and elecDoor:FindFirstChildWhichIsA("ProximityPrompt", true))
       if lockPrompt and lockPrompt.Enabled then
@@ -16414,6 +16479,7 @@ local function handleRoom100(room)
         NavigateTo(floorPos, breaker, "Breaker Panel", 12.0, "Loot")
       end
 
+      WaitFigureClear(bPos, 15)
       -- Вставляем собранные предохранители в щиток
       local insertStart = tick()
       while tick() - insertStart < 3.0 and KnobFarm.Active and not _Unloading do
@@ -16714,6 +16780,34 @@ local function ResetAtRoom49(char, hum)
   task.wait(1.0)
 end
 
+-- Скип двери: телепорт к двери текущей комнаты со стороны подхода + обычное открытие/проход.
+-- Используется, когда бот слишком долго торчит в одной комнате или упёрся в угол.
+local function SkipCurrentDoor(room, roomNum, reason)
+  local char = localPlayer2 and localPlayer2.Character
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not (hum and root and room) then return false end
+
+  local door = GetRoomTarget(room)
+  if not door then return false end
+  local _, center, _, passDir = GetDoorVectors(door, root.Position)
+  if not center or not passDir then return false end
+
+  KnobFarm.SetStatus("Door skip (" .. tostring(reason) .. ") — Room " .. tostring(roomNum))
+  local approach = center - passDir * 3
+  local floorPos = GetFloorPosition(approach) or approach
+
+  KnobFarm.Teleporting = true   -- иначе «страж» PhantomNoclip откатит телепорт
+  root.CFrame = CFrame.new(floorPos + Vector3.new(0, 3, 0))
+  root.AssemblyLinearVelocity = Vector3.zero
+  task.wait(0.15)
+  KnobFarm.Teleporting = false
+
+  PassDoorStraight(door, root, hum)   -- отпирание (ключ/отмычка), открытие, проход
+  KnobFarm.StuckBreaks = 0
+  return true
+end
+
 -- 10. Главная цель: дверь выхода (или ключ, если заперто и нет отмычек)
 local function StepGoToExit(char, root, room, roomNum)
   local target, targetPos, targetType = GetRoomTarget(room)
@@ -16732,17 +16826,28 @@ local function StepGoToExit(char, root, room, roomNum)
     end
   end
 
+  -- Упёрлись в угол несколько раз подряд: сначала пробуем прямой маршрут без PathfindNodes,
+  -- а если и это не помогло — скипаем дверь
+  local stuckBreaks = KnobFarm.StuckBreaks or 0
+  if stuckBreaks >= 4 and roomNum ~= 50 and roomNum ~= 100 then
+    if SkipCurrentDoor(room, roomNum, "stuck") then return end
+  end
+
   KnobFarm.SetStatus("Running to Door (Room " .. tostring(roomNum) .. ")")
 
   -- 1. Официальные PathfindNodes комнаты (центр коридоров от разработчиков DOORS)
   local waypoints = nil
-  local roomNodes = GetRoomPathfindNodes(room, root.Position, targetPos)
+  local roomNodes = (stuckBreaks < 2) and GetRoomPathfindNodes(room, root.Position, targetPos) or nil
   if roomNodes and #roomNodes >= 2 then
     waypoints = ProcessWaypoints(roomNodes, char)
   end
   -- 2. Иначе PathfindingService, иначе прямая
   if not waypoints or #waypoints == 0 then
-    waypoints = BuildPathTo(char, root.Position, targetPos)
+    if stuckBreaks >= 2 then
+      waypoints = ProcessWaypoints({ root.Position, targetPos }, char)   -- прямая, в обход «умных» путей
+    else
+      waypoints = BuildPathTo(char, root.Position, targetPos)
+    end
   end
 
   if waypoints and #waypoints > 0 then
@@ -16787,6 +16892,7 @@ local function Tick()
   if KnobFarm.LastRoomNum ~= roomNum then
     KnobFarm.LastRoomNum = roomNum
     KnobFarm.RoomEntryTime = tick()
+    KnobFarm.StuckBreaks = 0
     DisableObstacleCollision(nil)   -- все комнаты, включая текущую (отдельный вызов для room был лишним)
   end
 
@@ -16805,6 +16911,14 @@ local function Tick()
 
   -- Застревание / пустота / крыша
   if StepRecovery(hum, root, room) then return end
+
+  -- Больше 1.5 минут в одной комнате (кроме 50 и 100) — скипаем дверь.
+  -- Если скип не удался, повторяем через 30 секунд.
+  if roomNum ~= 50 and roomNum ~= 100 and (GetLatestRoomNum() or 0) ~= 50
+    and KnobFarm.RoomEntryTime and (tick() - KnobFarm.RoomEntryTime >= 90) then
+    KnobFarm.RoomEntryTime = tick() - 60
+    if SkipCurrentDoor(room, roomNum, "90s in room") then return end
+  end
 
   -- Баланс Knobs на старте (если скрипт запущен посреди забега — тоже запомним)
   CaptureStartKnobs(false)
@@ -16865,9 +16979,15 @@ local function Tick()
     return
   end
 
+  if not (runTo100 and (roomNum == 50 or currentLatest == 50)) then
+    KnobFarm.HumanPath = false
+  end
+
   -- Комната 50 (Фигура + библиотека)
   if runTo100 and (roomNum == 50 or currentLatest == 50) then
     local room50 = (curRooms and curRooms:FindFirstChild("50")) or room
+    KnobFarm.HumanPath = true
+    RestoreLibraryCollision(room50)
     handleRoom50(room50, room50 and room50:FindFirstChild("Door"))
     return
   end
@@ -16878,7 +16998,9 @@ local function Tick()
   end
 
   -- Комната 100 (электрощит, лифт)
-  if runTo100 and ((roomNum and roomNum >= 100) or currentLatest >= 100) then
+  -- Только когда бот реально В комнате 100. Раньше хватало LatestRoom >= 100: бот ещё стоял в 99-й,
+  -- объекты 100-й не успевали загрузиться, список предохранителей был пуст, и он сразу шёл к рычагу.
+  if runTo100 and roomNum and roomNum >= 100 then
     local room100 = (curRooms and curRooms:FindFirstChild("100")) or room
     handleRoom100(room100)
     return
