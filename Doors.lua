@@ -13406,8 +13406,6 @@ local function ResetFarmState()
   KnobFarm.NoclipBeforeJeff = false
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
-  KnobFarm.HumanPath = false
-  KnobFarm.LibraryRestored = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
   pcall(function()
     if toggles.Phase and toggles.Phase.Value then
@@ -14360,14 +14358,8 @@ local OBSTACLE_TERMS = {
 -- на которые потом пришлось навешивать RecoverFromVoid/RecoverFromRoof.
 local STRUCTURAL_NAMES = { floor = true, ground = true, roof = true, ceiling = true }
 
--- Детали, у которых коллизию отключили МЫ (чтобы вернуть её в библиотеке)
-local DisabledByUs = setmetatable({}, { __mode = "k" })
-
 local function ShouldDisableCollision(desc)
   if not desc:IsA("BasePart") or not desc.CanCollide then return false end
-  -- Библиотека (комната 50): шкафы и стеллажи должны оставаться твёрдыми, чтобы бот
-  -- обходил их, а не бежал сквозь
-  if desc:FindFirstAncestor("50") then return false end
 
   local partName = desc.Name:lower()
   if STRUCTURAL_NAMES[partName] then return false end
@@ -14398,7 +14390,6 @@ local function DisableObstacleCollision(room)
       for _, desc in ipairs(container:GetDescendants()) do
         if ShouldDisableCollision(desc) then
           desc.CanCollide = false
-          DisabledByUs[desc] = true
         end
       end
     end)
@@ -14416,20 +14407,6 @@ local function DisableObstacleCollision(room)
   end
 end
 
--- Вернуть коллизию всему, что мы отключили в библиотеке (комната 50) до её обнаружения
-local function RestoreLibraryCollision(room50)
-  if not room50 or KnobFarm.LibraryRestored then return end
-  KnobFarm.LibraryRestored = true
-  pcall(function()
-    for _, desc in ipairs(room50:GetDescendants()) do
-      if DisabledByUs[desc] then
-        desc.CanCollide = true
-        DisabledByUs[desc] = nil
-      end
-    end
-  end)
-end
-
 local function SetupObstacleListener()
   if obstacleListener then
     pcall(function() obstacleListener:Disconnect() end)
@@ -14442,7 +14419,6 @@ local function SetupObstacleListener()
         pcall(function()
           if ShouldDisableCollision(desc) then
             desc.CanCollide = false
-            DisabledByUs[desc] = true
           end
         end)
       end)
@@ -15453,12 +15429,11 @@ end
 -- скопированы в NavigateTo и в главный цикл.)
 local function BuildPathTo(char, startPos, goalPos)
   local waypoints = nil
-  local human = KnobFarm.HumanPath   -- библиотека: идём как человек, огибая мебель
   local path = pathfindingService:CreatePath({
     AgentCanJump = false,
     AgentCanClimb = false,
-    WaypointSpacing = human and 3 or 4,
-    AgentRadius = human and 2.6 or 1.8,
+    WaypointSpacing = 4,
+    AgentRadius = 1.8,
     AgentHeight = 2.0,
     Costs = { StuckPart = 8 },
   })
@@ -15466,11 +15441,7 @@ local function BuildPathTo(char, startPos, goalPos)
     path:ComputeAsync(startPos, goalPos)
   end)
   if ok and path.Status == Enum.PathStatus.Success then
-    if human then
-      waypoints = path:GetWaypoints()   -- без срезания углов и «прямых» сокращений
-    else
-      waypoints = ProcessWaypoints(path:GetWaypoints(), char)
-    end
+    waypoints = ProcessWaypoints(path:GetWaypoints(), char)
   end
   if not waypoints or #waypoints == 0 then
     waypoints = ProcessWaypoints({ startPos, goalPos }, char)
@@ -15510,10 +15481,6 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
   local isOrtho = (options and options.AutoFarmMovementMode and options.AutoFarmMovementMode.Value == "Orthogonal")
   local reachDist = isOrtho and 2.2 or 3.0
   local lookaheadDist = isOrtho and 3.5 or 5.0
-  if KnobFarm.HumanPath then
-    reachDist = 1.6        -- идём строго по точкам пути, не срезая углы шкафов
-    lookaheadDist = 0
-  end
 
   local function dropNode(i)
     local node = currentNodes[i]
@@ -16979,15 +16946,9 @@ local function Tick()
     return
   end
 
-  if not (runTo100 and (roomNum == 50 or currentLatest == 50)) then
-    KnobFarm.HumanPath = false
-  end
-
   -- Комната 50 (Фигура + библиотека)
   if runTo100 and (roomNum == 50 or currentLatest == 50) then
     local room50 = (curRooms and curRooms:FindFirstChild("50")) or room
-    KnobFarm.HumanPath = true
-    RestoreLibraryCollision(room50)
     handleRoom50(room50, room50 and room50:FindFirstChild("Door"))
     return
   end
