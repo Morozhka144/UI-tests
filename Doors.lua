@@ -13203,6 +13203,7 @@ KnobFarm.RunGold = 0
 KnobFarm.Teleporting = false
 KnobFarm.InLobby = false
 KnobFarm.DisabledNoclipForSeek = false
+KnobFarm.NoclipBeforeJeff = false
 KnobFarm.IgnoredDoors = setmetatable({}, { __mode = "k" })
 KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
 
@@ -13402,6 +13403,7 @@ local function ResetFarmState()
   -- и античит-«страж» PhantomNoclip переставал откатывать подозрительные телепорты до перезапуска.
   KnobFarm.Teleporting = false
   KnobFarm.DisabledNoclipForSeek = false
+  KnobFarm.NoclipBeforeJeff = false
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
@@ -16175,9 +16177,7 @@ local function handleRoom50(room, door)
           if dp:IsA("BasePart") then dp.CanCollide = false end
         end
       end)
-      KnobFarm.IgnoredDoors = KnobFarm.IgnoredDoors or setmetatable({}, { __mode = "k" })
       KnobFarm.OpenedDoors[door52] = true
-      KnobFarm.IgnoredDoors[door52] = true
     end
   end
 
@@ -16197,13 +16197,17 @@ local function handleRoom50(room, door)
   KnobFarm.AvoidFigure = false
   KnobFarm.Teleporting = false
 
-  -- Включаем ноуклип и годмод обратно
+  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке
   pcall(function()
     if toggles and toggles.Godmode and not toggles.Godmode.Value then
       toggles.Godmode:SetValue(true)
     end
-    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    else
+      KnobFarm.NoclipBeforeJeff = true
     end
   end)
   KnobFarm.SetStatus("Room 50 completed! Resuming Knob Farm...")
@@ -16715,6 +16719,22 @@ local function Tick()
       if options and options.GodmodeMethod then
         options.GodmodeMethod:SetValue("On entity spawn")
       end
+      if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+        toggles.PhantomNoclip:SetValue(true)
+      end
+    end)
+  end
+
+  -- Комнаты 51–55 (коридор перед магазином Джеффа и сам магазин): выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке. В комнате 56+ включаем обратно.
+  if roomNum and roomNum >= 51 and roomNum <= 55 then
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    end
+  elseif roomNum and roomNum >= 56 and KnobFarm.NoclipBeforeJeff then
+    KnobFarm.NoclipBeforeJeff = nil
+    pcall(function()
       if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
         toggles.PhantomNoclip:SetValue(true)
       end
