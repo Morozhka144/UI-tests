@@ -14949,18 +14949,6 @@ local function GetDoorVectors(door, fromPos)
     end
   end
 
-  -- Проверка: passDir должен смотреть СКВОЗЬ дверь в сторону движения от игрока, а не НАЗАД к игроку!
-  local char = localPlayer2 and localPlayer2.Character
-  local root = char and char:FindFirstChild("HumanoidRootPart")
-  local pPos = fromPos or (root and root.Position)
-  if pPos and passDir then
-    local toDoor = doorCenter - pPos
-    local flatToDoor = Vector3.new(toDoor.X, 0, toDoor.Z)
-    if flatToDoor.Magnitude > 0.8 and passDir:Dot(flatToDoor.Unit) < -0.2 then
-      passDir = -passDir
-    end
-  end
-
   local approachDir = -passDir
   local normal = passDir
 
@@ -16218,17 +16206,23 @@ local function handleRoom100(room)
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
-  if not root then return end
+  if not root or not hum or hum.Health <= 0 then return end
 
-  -- 0. Check threats before disabling Godmode
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  local targetRoom = (room and (room.Name == "100" or room:FindFirstChild("ElevatorBreaker", true)) and room)
+    or (curRooms and curRooms:FindFirstChild("100"))
+    or room
+
+  -- 0. Ожидание угроз перед входом
   if HasEntityThreat() then
-    KnobFarm.SetStatus("Room 100: Threat detected! Waiting before disabling Godmode...")
-    while HasEntityThreat() and KnobFarm.Active and not _Unloading do
+    KnobFarm.SetStatus("Room 100: Threat detected! Waiting...")
+    while HasEntityThreat() and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading do
       task.wait(0.3)
     end
     task.wait(0.5)
   end
 
+  -- Подготовка: отключаем годмод для босса, включаем обычный Noclip (чтобы идти пешком сквозь объекты)
   KnobFarm.DisableGodmodeForBoss = true
   pcall(function()
     if toggles and toggles.Godmode and toggles.Godmode.Value then
@@ -16237,146 +16231,252 @@ local function handleRoom100(room)
     if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
       toggles.PhantomNoclip:SetValue(false)
     end
-    if toggles and toggles.Noclip and toggles.Noclip.Value then
-      toggles.Noclip:SetValue(false)
+    if toggles and toggles.Noclip and not toggles.Noclip.Value then
+      toggles.Noclip:SetValue(true)
     end
   end)
-  KnobFarm.Teleporting = true
+
+  SetCrouched(true)
+  KnobFarm.Teleporting = false
   KnobFarm.AvoidFigure = true
 
-  -- 1. Fly to all Breaker Switches & Fuses
-  KnobFarm.SetStatus("Room 100: Flying to Breaker Switches & Fuses...")
-  for _, desc in ipairs(room:GetDescendants()) do
-    if not KnobFarm.Active or _Unloading then break end
-    local isFuse = desc.Name == "FusePickup" or desc.Name == "FuseObtain" or desc.Name == "Fuse"
-      or desc.Name == "LiveBreakerPolePickup" or desc.Name == "Breaker Switch" or desc.Name == "BreakerSwitch"
-    if not isFuse and desc:IsA("ProximityPrompt") then
-      local ot = desc.ObjectText:lower()
-      local at = desc.ActionText:lower()
-      if ot:find("fuse", 1, true) or at:find("fuse", 1, true) or ot:find("breaker", 1, true) or at:find("switch", 1, true) then
-        isFuse = true
-      end
-    end
-    if isFuse then
-      local pr = desc:IsA("ProximityPrompt") and desc or desc:FindFirstChildWhichIsA("ProximityPrompt", true)
-      local target = desc:IsA("ProximityPrompt") and desc.Parent or desc
-      local pos = (target:IsA("BasePart") and target.Position) or (target:IsA("Model") and target:GetPivot().Position)
-      if pos and root then
-        WaitFigureClear(pos, 20)
-        root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-        root.AssemblyLinearVelocity = Vector3.zero
-        if pr and pr.Enabled then
-          FirePrompt(pr, false, true)
+  -- Ожидание загрузки объектов комнаты 100 (до 3 сек)
+  local loadStart = tick()
+  while tick() - loadStart < 3.0 and KnobFarm.Active and not _Unloading do
+    local f = targetRoom and (targetRoom:FindFirstChild("FusePickup", true) or targetRoom:FindFirstChild("ElevatorBreaker", true))
+    if f then break end
+    task.wait(0.2)
+  end
+
+  -- 1. Сбор всех предохранителей / рубильников (fuses / breaker switches) пешком в ноуклипе
+  KnobFarm.SetStatus("Room 100: Finding Breaker Switches & Fuses...")
+
+  local function getFuses()
+    local items = {}
+    local seen = {}
+    local searchContainers = { targetRoom, curRooms and curRooms:FindFirstChild("100") }
+    for _, container in ipairs(searchContainers) do
+      if container then
+        for _, desc in ipairs(container:GetDescendants()) do
+          local isFuse = desc.Name == "FusePickup" or desc.Name == "FuseObtain" or desc.Name == "Fuse"
+            or desc.Name == "LiveBreakerPolePickup" or desc.Name == "Breaker Switch" or desc.Name == "BreakerSwitch"
+          if not isFuse and desc:IsA("ProximityPrompt") then
+            local ot = (desc.ObjectText or ""):lower()
+            local at = (desc.ActionText or ""):lower()
+            if ot:find("fuse", 1, true) or at:find("fuse", 1, true) or ot:find("breaker", 1, true) or at:find("switch", 1, true) then
+              isFuse = true
+            end
+          end
+          if isFuse then
+            local inst = desc:IsA("ProximityPrompt") and desc.Parent or desc
+            if inst and not seen[inst] and not KnobFarm.LootedObjects[inst] and inst.Parent then
+              seen[inst] = true
+              table.insert(items, inst)
+            end
+          end
         end
-        task.wait(0.12)
       end
+    end
+    return items
+  end
+
+  local fuseStart = tick()
+  while KnobFarm.Active and not _Unloading and (tick() - fuseStart < 90) do
+    local unlooted = getFuses()
+    if #unlooted == 0 then break end
+
+    local figPos = GetFigurePosition()
+    table.sort(unlooted, function(a, b)
+      local posA = (a:IsA("BasePart") and a.Position) or (a:IsA("Model") and a:GetPivot().Position) or Vector3.zero
+      local posB = (b:IsA("BasePart") and b.Position) or (b:IsA("Model") and b:GetPivot().Position) or Vector3.zero
+      local distA = figPos and FlatDist(posA, figPos) or 100
+      local distB = figPos and FlatDist(posB, figPos) or 100
+      return distA > distB
+    end)
+
+    local targetFuse = unlooted[1]
+    local fPos = (targetFuse:IsA("BasePart") and targetFuse.Position)
+      or (targetFuse:IsA("Model") and targetFuse:GetPivot().Position)
+    if not fPos then
+      KnobFarm.LootedObjects[targetFuse] = true
+    else
+      WaitFigureClear(fPos, 15)
+      KnobFarm.SetStatus("Room 100: Walking to Fuse/Switch (avoiding Figure)...")
+      local floorPos = GetFloorPosition(fPos) or fPos
+      if NavigateTo then
+        NavigateTo(floorPos, targetFuse, "Fuse", 8.0, "Loot")
+      end
+
+      local curChar = localPlayer2 and localPlayer2.Character
+      local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+      local dist = curRoot and (curRoot.Position - fPos).Magnitude or 999
+      if dist <= 14.0 then
+        CollectBossItem(targetFuse)
+        task.wait(0.2)
+      end
+      KnobFarm.LootedObjects[targetFuse] = true
     end
   end
 
-  -- 2. Fly to Electrical Room Key
-  local elecKey = room:FindFirstChild("ElectricalKeyObtain", true) or room:FindFirstChild("KeyElectrical", true)
-    or room:FindFirstChild("Electrical Key", true) or room:FindFirstChild("ElectricalRoomKey", true)
-  if elecKey and root then
-    KnobFarm.SetStatus("Room 100: Flying to Electrical Room Key...")
-    local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
-    local kPr = elecKey:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if kPos then
-      WaitFigureClear(kPos, 20)
-      root.CFrame = CFrame.new(kPos + Vector3.new(0, 1.2, 0))
-      root.AssemblyLinearVelocity = Vector3.zero
-      if kPr and kPr.Enabled then
-        FirePrompt(kPr, false, true)
-      end
-      task.wait(0.25)
-    end
-  end
-
-  -- 3. Fly to Electrical Room door and unlock
-  local elecLock = room:FindFirstChild("KeyElectrical", true) or room:FindFirstChild("ElectricalLock", true)
-  local elecDoor = room:FindFirstChild("ElectricalDoor", true) or (elecLock and elecLock:FindFirstAncestorWhichIsA("Model"))
-  if elecLock or elecDoor then
-    KnobFarm.SetStatus("Room 100: Flying to Electrical Door...")
-    local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-    local keyTool = (char and char:FindFirstChild("KeyElectrical")) or (bp and bp:FindFirstChild("KeyElectrical"))
-      or (char and char:FindFirstChild("ElectricalKeyObtain")) or (bp and bp:FindFirstChild("ElectricalKeyObtain"))
-    if keyTool and hum and keyTool.Parent ~= char then
-      pcall(function() hum:EquipTool(keyTool) end)
-      task.wait(0.15)
-    end
-
-    local lockPart = (elecLock and elecLock:IsA("BasePart") and elecLock)
-      or (elecLock and elecLock:FindFirstChildWhichIsA("BasePart", true))
-      or (elecDoor and elecDoor:FindFirstChildWhichIsA("BasePart", true))
-    if lockPart and root then
-      WaitFigureClear(lockPart.Position, 20)
-      root.CFrame = lockPart.CFrame * CFrame.new(0, 0, 2.5)
-      root.AssemblyLinearVelocity = Vector3.zero
-      local lockPrompt = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
-        or (elecDoor and elecDoor:FindFirstChildWhichIsA("ProximityPrompt", true))
-      if lockPrompt then
-        FirePrompt(lockPrompt, false, true)
-      end
-      task.wait(0.3)
-    end
-  end
-
-  -- 4. Fly to Gate lever and pull
-  local lever = room:FindFirstChild("LeverForGate", true) or room:FindFirstChild("Lever", true)
-  if lever and root then
-    KnobFarm.SetStatus("Room 100: Flying to Gate Lever...")
+  -- 2. Идет к воротам и дергает рычаг (Gate Lever)
+  local lever = (targetRoom and (targetRoom:FindFirstChild("LeverForGate", true) or targetRoom:FindFirstChild("Lever", true)))
+    or (curRooms and (curRooms:FindFirstChild("LeverForGate", true) or curRooms:FindFirstChild("Lever", true)))
+  if lever then
+    KnobFarm.SetStatus("Room 100: Walking to Gate Lever...")
     local lPos = (lever:IsA("BasePart") and lever.Position) or (lever:IsA("Model") and lever:GetPivot().Position)
-    local lPr = lever:FindFirstChildWhichIsA("ProximityPrompt", true)
     if lPos then
-      WaitFigureClear(lPos, 20)
-      root.CFrame = CFrame.new(lPos + Vector3.new(0, 1.2, 0))
-      root.AssemblyLinearVelocity = Vector3.zero
+      WaitFigureClear(lPos, 15)
+      local floorPos = GetFloorPosition(lPos) or lPos
+      if NavigateTo then
+        NavigateTo(floorPos, lever, "Gate Lever", 10.0, "Lever")
+      end
+      local lPr = (lever:IsA("ProximityPrompt") and lever) or lever:FindFirstChildWhichIsA("ProximityPrompt", true)
       if lPr then
         FirePrompt(lPr, false, true)
       end
+      task.wait(0.4)
+    end
+  end
+
+  -- 3. Идет за ключом вверх по лестнице (Electrical Room Key), избегая Фигуру
+  local elecKey = (targetRoom and (targetRoom:FindFirstChild("ElectricalKeyObtain", true) or targetRoom:FindFirstChild("KeyElectrical", true)
+    or targetRoom:FindFirstChild("Electrical Key", true) or targetRoom:FindFirstChild("ElectricalRoomKey", true)))
+    or (curRooms and (curRooms:FindFirstChild("ElectricalKeyObtain", true) or curRooms:FindFirstChild("KeyElectrical", true)))
+
+  if elecKey then
+    KnobFarm.SetStatus("Room 100: Walking up stairs to Electrical Key...")
+    local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
+    if kPos then
+      WaitFigureClear(kPos, 20)
+      local floorPos = GetFloorPosition(kPos) or kPos
+      if NavigateTo then
+        NavigateTo(floorPos, elecKey, "Electrical Key", 12.0, "Key")
+      end
+
+      local curChar = localPlayer2 and localPlayer2.Character
+      local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+      local dist = curRoot and (curRoot.Position - kPos).Magnitude or 999
+      if dist <= 14.0 then
+        CollectBossItem(elecKey)
+        task.wait(0.2)
+      end
+
+      -- Берем ключ в руки
+      local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+      local curHum = curChar and curChar:FindFirstChildOfClass("Humanoid")
+      local keyTool = (curChar and (curChar:FindFirstChild("KeyElectrical") or curChar:FindFirstChild("ElectricalKeyObtain")))
+        or (bp and (bp:FindFirstChild("KeyElectrical") or bp:FindFirstChild("ElectricalKeyObtain")))
+      if keyTool and curHum and keyTool.Parent ~= curChar then
+        pcall(function() curHum:EquipTool(keyTool) end)
+        task.wait(0.2)
+      end
+    end
+  end
+
+  -- 4. С ключом идет к двери щитовой (Electrical Door), отпирает её и идет к Breaker Box
+  local elecLock = (targetRoom and (targetRoom:FindFirstChild("KeyElectrical", true) or targetRoom:FindFirstChild("ElectricalLock", true)))
+    or (curRooms and (curRooms:FindFirstChild("KeyElectrical", true) or curRooms:FindFirstChild("ElectricalLock", true)))
+  local elecDoor = (targetRoom and targetRoom:FindFirstChild("ElectricalDoor", true))
+    or (elecLock and elecLock:FindFirstAncestorWhichIsA("Model"))
+
+  if elecLock or elecDoor then
+    local lockPart = (elecLock and elecLock:IsA("BasePart") and elecLock)
+      or (elecLock and elecLock:FindFirstChildWhichIsA("BasePart", true))
+      or (elecDoor and elecDoor:FindFirstChildWhichIsA("BasePart", true))
+    if lockPart then
+      KnobFarm.SetStatus("Room 100: Walking to Electrical Door...")
+      local lPos = lockPart.Position
+      WaitFigureClear(lPos, 20)
+      local floorPos = GetFloorPosition(lPos) or lPos
+      if NavigateTo then
+        NavigateTo(floorPos, elecDoor or lockPart, "Electrical Door", 10.0, "Door")
+      end
+      local lockPrompt = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
+        or (elecDoor and elecDoor:FindFirstChildWhichIsA("ProximityPrompt", true))
+      if lockPrompt and lockPrompt.Enabled then
+        FirePrompt(lockPrompt, false, true)
+      end
+      task.wait(0.4)
+    end
+  end
+
+  local breaker = (targetRoom and targetRoom:FindFirstChild("ElevatorBreaker", true))
+    or (curRooms and curRooms:FindFirstChild("ElevatorBreaker", true))
+    or workspace:FindFirstChild("ElevatorBreaker")
+
+  if breaker then
+    KnobFarm.SetStatus("Room 100: Walking to Breaker Panel...")
+    local bPos = (breaker:IsA("BasePart") and breaker.Position) or (breaker:IsA("Model") and breaker:GetPivot().Position)
+    if bPos then
+      WaitFigureClear(bPos, 20)
+      local floorPos = GetFloorPosition(bPos) or bPos
+      if NavigateTo then
+        NavigateTo(floorPos, breaker, "Breaker Panel", 12.0, "Loot")
+      end
+
+      -- Вставляем собранные предохранители в щиток
+      local insertStart = tick()
+      while tick() - insertStart < 3.0 and KnobFarm.Active and not _Unloading do
+        local hadPrompt = false
+        for _, bPr in ipairs(breaker:GetDescendants()) do
+          if bPr:IsA("ProximityPrompt") and bPr.Enabled then
+            hadPrompt = true
+            FirePrompt(bPr, false, false)
+          end
+        end
+        if not hadPrompt then break end
+        task.wait(0.2)
+      end
       task.wait(0.3)
     end
   end
 
-  local breaker = room:FindFirstChild("ElevatorBreaker", true) or workspace:FindFirstChild("ElevatorBreaker")
-  if breaker and root then
-    KnobFarm.SetStatus("Room 100: Flying to Breaker Panel...")
-    local bPos = (breaker:IsA("BasePart") and breaker.Position) or (breaker:IsA("Model") and breaker:GetPivot().Position)
-    if bPos then
-      WaitFigureClear(bPos, 20)
-      root.CFrame = CFrame.new(bPos + Vector3.new(0, 1.5, 2.5))
-      root.AssemblyLinearVelocity = Vector3.zero
-      for _, bPr in ipairs(breaker:GetDescendants()) do
-        if bPr:IsA("ProximityPrompt") then
-          FirePrompt(bPr, false, false)
-        end
-      end
-      task.wait(0.5)
-
-      if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-        pcall(function() remotesFolder2.EBF:FireServer() end)
-      end
-      task.wait(2.0)
+  -- 5. Мгновенно проходит щиток с помощью эксплоита
+  KnobFarm.SetStatus("Room 100: Solving Breaker Box with exploit...")
+  pcall(function()
+    if toggles and toggles.AutoBreakerBox and not toggles.AutoBreakerBox.Value then
+      toggles.AutoBreakerBox:SetValue(true)
     end
+    if options and options.BreakerBoxMethod then
+      options.BreakerBoxMethod:SetValue("Instant")
+    end
+  end)
+
+  if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
+    pcall(function() remotesFolder2.EBF:FireServer() end)
   end
 
-  -- 5. Fly into Elevator
-  local elevator = room:FindFirstChild("ElevatorCar", true)
-    or room:FindFirstChild("Elevator", true)
+  local solveWait = tick()
+  while tick() - solveWait < 3.5 and KnobFarm.Active and not _Unloading do
+    if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
+      pcall(function() remotesFolder2.EBF:FireServer() end)
+    end
+    task.wait(0.5)
+  end
+
+  -- 6. Телепортируется в лифт (ElevatorCar)
+  local elevator = (targetRoom and (targetRoom:FindFirstChild("ElevatorCar", true) or targetRoom:FindFirstChild("Elevator", true)))
+    or (curRooms and (curRooms:FindFirstChild("ElevatorCar", true) or curRooms:FindFirstChild("Elevator", true)))
     or workspace:FindFirstChild("ElevatorCar")
 
-  if elevator and root then
-    KnobFarm.SetStatus("Room 100: Flying into Elevator...")
+  if elevator then
+    KnobFarm.SetStatus("Room 100: Teleporting into Elevator...")
+    KnobFarm.Teleporting = true
+    SetCrouched(false)
     local ePos = elevator:GetPivot().Position
-    WaitFigureClear(ePos, 20)
-    root.CFrame = CFrame.new(ePos + Vector3.new(0, 2.0, 0))
-    root.AssemblyLinearVelocity = Vector3.zero
+    local curChar = localPlayer2 and localPlayer2.Character
+    local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+    if curRoot then
+      curRoot.CFrame = CFrame.new(ePos + Vector3.new(0, 2.0, 0))
+      curRoot.AssemblyLinearVelocity = Vector3.zero
+    end
     local ePr = elevator:FindFirstChildWhichIsA("ProximityPrompt", true)
     if ePr then
       FirePrompt(ePr, false, false)
     end
   end
 
-  -- 6. Game complete: wait 10 seconds and Play Again
+  -- 7. Завершение игры: ждем результатов и нажимаем Play Again
   KnobFarm.SetStatus("Game Completed! Waiting for results...")
   task.wait(6.0)
   RecordRunStats()
