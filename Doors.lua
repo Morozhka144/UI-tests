@@ -14722,7 +14722,7 @@ local function HasSeekEyes(room)
 end
 
 local function MaxSeekDoors(roomNum)
-  return ((roomNum or 0) < 60) and 5 or 6   -- 5 дверей в 1-й погоне, 6 во 2-й
+  return ((roomNum or 0) < 60) and 7 or 10   -- 7 дверей в 1-й погоне, 10 во 2-й
 end
 
 local function MarkSeekDone(roomNum)
@@ -14746,19 +14746,19 @@ local function UpdateSeekState(room, roomNum)
   if curNum < 60 and KnobFarm.FirstChaseDone then return false end
   if curNum >= 60 and KnobFarm.SecondChaseDone then return false end
 
-  local gameData = GetGameData()
-  local chaseVal = gameData and gameData:FindFirstChild("ChaseInSession")
-  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or RoomHasSeekTrigger(targetRoom)
-
+  -- Погоня уже идёт: пропускаем ровно MaxSeekDoors дверей, без досрочного выхода
   if KnobFarm.InSeekChase then
-    local skipped = KnobFarm.SeekDoorsSkipped or 0
-    if skipped >= MaxSeekDoors(curNum) or (not inChase and skipped >= 3) then
+    if (KnobFarm.SeekDoorsSkipped or 0) >= MaxSeekDoors(curNum) then
       MarkSeekDone(curNum)
       return false
     end
     return true
   end
 
+  -- Начало погони: флаг игры или триггеры Seek в комнате
+  local gameData = GetGameData()
+  local chaseVal = gameData and gameData:FindFirstChild("ChaseInSession")
+  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or RoomHasSeekTrigger(targetRoom)
   if inChase and curNum > 0 then
     KnobFarm.InSeekChase = true
     KnobFarm.SeekDoorsSkipped = 0
@@ -15656,24 +15656,12 @@ local function handleRoom50(room, door)
     or (curRooms and curRooms:FindFirstChild("50"))
     or room
 
-  -- 1. Выключаем фантом ноуклип (коллизии строго включены, сквозь стены не ходим!)
+  -- 1. Фантом ноуклип в комнате 50 НЕ трогаем (раньше он тут выключался и коллизии принудительно
+  -- включались — отсюда «в библиотеке перестаёт работать ноуклип»). Выключаем только Godmode.
   KnobFarm.DisableGodmodeForBoss = true
   pcall(function()
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(false)
-    end
-    if toggles and toggles.Noclip and toggles.Noclip.Value then
-      toggles.Noclip:SetValue(false)
-    end
     if toggles and toggles.Godmode and toggles.Godmode.Value then
       toggles.Godmode:SetValue(false)
-    end
-    if char then
-      for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-          p.CanCollide = true
-        end
-      end
     end
   end)
   SetCrouched(true)
@@ -16171,9 +16159,11 @@ local function EndSeek(curRoomNum)
       task.wait(0.05)
       toggles.PhantomNoclip:SetValue(true)
     end
-    if toggles and toggles.Noclip and not toggles.Noclip.Value then
+    -- Обычный Noclip возвращаем ТОЛЬКО если он был включён до погони (раньше включался всегда)
+    if KnobFarm.NoclipBeforeSeek and toggles and toggles.Noclip and not toggles.Noclip.Value then
       toggles.Noclip:SetValue(true)
     end
+    KnobFarm.NoclipBeforeSeek = false
     local curChar = localPlayer2 and localPlayer2.Character
     if curChar then
       for _, p in ipairs(curChar:GetDescendants()) do
@@ -16201,6 +16191,11 @@ local function StepSeek(char, hum, root, room, roomNum)
       return true
     end
     return false
+  end
+
+  -- Запоминаем, был ли включён обычный Noclip, ДО погони (один раз), чтобы вернуть ровно его
+  if not KnobFarm.DisabledNoclipForSeek then
+    KnobFarm.NoclipBeforeSeek = (toggles and toggles.Noclip and toggles.Noclip.Value) or false
   end
 
   -- Ноуклип выкл, коллизии вкл
