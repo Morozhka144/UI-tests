@@ -15982,10 +15982,51 @@ local function handleRoom50(room, door)
     end
   end
 
-  -- Ждем пока замок откроется
+  -- Вспомогательная функция: есть ли лист у игрока
+  local function hasSheet()
+    local c = localPlayer2 and localPlayer2.Character
+    local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+    return (c and (c:FindFirstChild("LibraryHintPaper") or c:FindFirstChild("LibraryHintPaperHard")))
+      or (bp and (bp:FindFirstChild("LibraryHintPaper") or bp:FindFirstChild("LibraryHintPaperHard")))
+  end
+
+  -- Вспомогательная функция: найти дверь 52
+  local function findDoor52()
+    local curR = workspace:FindFirstChild("CurrentRooms")
+    if curR then
+      for _, r in ipairs(curR:GetChildren()) do
+        local rnum = tonumber(r.Name)
+        if rnum == 51 or rnum == 52 then
+          for _, d in ipairs(r:GetDescendants()) do
+            if d.Name == "Door" and d:IsA("Model") then
+              local sign = d:FindFirstChild("Sign")
+              local txt = sign and sign:FindFirstChildWhichIsA("TextLabel", true)
+              if txt and txt.Text == "52" then return d end
+            end
+          end
+          if rnum == 51 then
+            for _, d in ipairs(r:GetDescendants()) do
+              if d.Name == "Door" and d:IsA("Model") then return d end
+            end
+          end
+        end
+      end
+    end
+    return nil
+  end
+
+  -- Ждем пока замок откроется ИЛИ пока лист пропадет из инвентаря
   local t = tick()
-  while padlock and padlock.Parent and (tick() - t < 5) and KnobFarm.Active and not _Unloading do
-    task.wait(0.2)
+  local sheetWasPresent = hasSheet()
+  local sheetConsumed = false
+  while KnobFarm.Active and not _Unloading and (tick() - t < 10) do
+    if not padlock or not padlock.Parent then break end
+    if sheetWasPresent and not hasSheet() then
+      sheetConsumed = true
+      KnobFarm.SetStatus("Room 50: Sheet consumed! Lock opened. Going to Door 52...")
+      break
+    end
+    task.wait(0.15)
   end
 
   -- 6. Открытие 51 двери и удаление её из памяти вообще
@@ -16007,8 +16048,37 @@ local function handleRoom50(room, door)
     end)
   end
 
-  -- Проходим через 51 дверь в 51 комнату на ногах
-  if root and actualDoor and hum then
+  -- Идем к двери 52 через NavigateTo (как обычный фарм, без телепорта)
+  if sheetConsumed then
+    local door52 = findDoor52()
+    local d52Part = door52 and (door52:FindFirstChild("Door") or door52.PrimaryPart
+      or door52:FindFirstChildWhichIsA("BasePart", true))
+    if d52Part and NavigateTo then
+      KnobFarm.SetStatus("Room 50: Walking to Door 52...")
+      local d52Pos = d52Part.Position
+      local floorPos = GetFloorPosition(d52Pos) or d52Pos
+      NavigateTo(floorPos, d52Part, "Door 52", 10.0, "Door")
+      -- Открываем дверь 52
+      if door52 then
+        if OpenDoor then
+          pcall(function() OpenDoor(door52) end)
+        else
+          local pr52 = door52:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if pr52 then pcall(safeFirePrompt, pr52) end
+          local co52 = door52:FindFirstChild("ClientOpen")
+          if co52 then pcall(function() co52:FireServer() end) end
+        end
+        pcall(function()
+          for _, dp in ipairs(door52:GetDescendants()) do
+            if dp:IsA("BasePart") then dp.CanCollide = false end
+          end
+        end)
+        KnobFarm.IgnoredDoors = KnobFarm.IgnoredDoors or setmetatable({}, { __mode = "k" })
+        KnobFarm.OpenedDoors[door52] = true
+        KnobFarm.IgnoredDoors[door52] = true
+      end
+    end
+  elseif root and actualDoor and hum then
     PassDoorStraight(actualDoor, root, hum)
   end
 
