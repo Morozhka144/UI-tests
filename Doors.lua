@@ -1699,40 +1699,42 @@ hasRequire = Executor.require ~= nil
 
 Groupboxes.Misc = element3.Miscellaneous:AddLeftGroupbox("Miscellaneous")
 
--- ─── Queue on Teleport (Перезапуск скрипта при телепорте/смене сервера) ───
-local QueueOnTeleportURL = "https://raw.githubusercontent.com/Morozhka144/UI-tests/main/Doors.lua"
+do
+  -- ─── Queue on Teleport (Перезапуск скрипта при телепорте/смене сервера) ───
+  local QueueOnTeleportURL = "https://raw.githubusercontent.com/Morozhka144/UI-tests/main/Doors.lua"
 
-local function ExecuteQueueOnTeleport()
-  local qtp = queue_on_teleport or queueonteleport
-  if type(qtp) ~= "function" then
-    library:Notify({ Title = "Queue On Teleport", Description = "Your executor does not support queue_on_teleport", Time = 5 })
-    return false
+  local function ExecuteQueueOnTeleport()
+    local qtp = queue_on_teleport or queueonteleport
+    if type(qtp) ~= "function" then
+      library:Notify({ Title = "Queue On Teleport", Description = "Your executor does not support queue_on_teleport", Time = 5 })
+      return false
+    end
+
+    local ok, err = pcall(function()
+      qtp('loadstring(game:HttpGet("' .. QueueOnTeleportURL .. '"))()')
+    end)
+
+    if ok then
+      library:Notify({ Title = "Queue On Teleport", Description = "Script will re-execute on server change!", Time = 4 })
+      return true
+    else
+      library:Notify({ Title = "Queue On Teleport", Description = tostring(err), Time = 5 })
+      return false
+    end
   end
 
-  local ok, err = pcall(function()
-    qtp('loadstring(game:HttpGet("' .. QueueOnTeleportURL .. '"))()')
+  Groupboxes.Misc:AddToggle("QueueOnTeleport", {
+    Text = "Queue On Teleport",
+    Default = false,
+    Tooltip = "Re-executes the script when you change floors or rejoin",
+  })
+
+  toggles.QueueOnTeleport:OnChanged(function(enabled)
+    if enabled then
+      ExecuteQueueOnTeleport()
+    end
   end)
-
-  if ok then
-    library:Notify({ Title = "Queue On Teleport", Description = "Script will re-execute on server change!", Time = 4 })
-    return true
-  else
-    library:Notify({ Title = "Queue On Teleport", Description = tostring(err), Time = 5 })
-    return false
-  end
 end
-
-Groupboxes.Misc:AddToggle("QueueOnTeleport", {
-  Text = "Queue On Teleport",
-  Default = false,
-  Tooltip = "Re-executes the script when you change floors or rejoin",
-})
-
-toggles.QueueOnTeleport:OnChanged(function(enabled)
-  if enabled then
-    ExecuteQueueOnTeleport()
-  end
-end)
 
 Groupboxes.Misc:AddButton({
   Text = "Play Again", Callback = function()
@@ -8566,92 +8568,94 @@ end
 Groupboxes.Visuals_ESPBox = element3.Visuals:AddLeftTabbox("ESP / Settings")
 Groupboxes.Visuals_ESP = Groupboxes.Visuals_ESPBox:AddTab("ESP")
 
--- ─── Show Entity Path (Траектория движения сущностей) ───
-EntityPathNodes = {}
-EntityPathConns = {}
-EntityPathContainers = setmetatable({}, { __mode = "k" })
+do
+  -- ─── Show Entity Path (Траектория движения сущностей) ───
+  EntityPathNodes = {}
+  EntityPathConns = {}
+  EntityPathContainers = setmetatable({}, { __mode = "k" })
 
-local function IsEntityPathContainer(inst)
-  if typeof(inst) ~= "Instance" then return false end
-  if not (inst:IsA("Folder") or inst:IsA("Model")) then return false end
-  return string.lower(inst.Name):find("node") ~= nil
-end
+  local function IsEntityPathContainer(inst)
+    if typeof(inst) ~= "Instance" then return false end
+    if not (inst:IsA("Folder") or inst:IsA("Model")) then return false end
+    return string.lower(inst.Name):find("node") ~= nil
+  end
 
-function ClearEntityPath()
-  for _, node in ipairs(EntityPathNodes) do
-    if node and node.Parent then
-      pcall(function() node.Transparency = 1 end)
+  function ClearEntityPath()
+    for _, node in ipairs(EntityPathNodes) do
+      if node and node.Parent then
+        pcall(function() node.Transparency = 1 end)
+      end
+    end
+    TableClear(EntityPathNodes)
+
+    if Connections.EntityPathWatch then
+      Connections.EntityPathWatch:Disconnect()
+      Connections.EntityPathWatch = nil
     end
   end
-  table.clear(EntityPathNodes)
 
-  if Connections.EntityPathWatch then
-    Connections.EntityPathWatch:Disconnect()
-    Connections.EntityPathWatch = nil
-  end
-end
-
-function ApplyEntityPath(part)
-  if typeof(part) ~= "Instance" or not part:IsA("BasePart") then return end
-  if part.Transparency == 0 then return end
-  pcall(function() part.Transparency = 0 end)
-  table.insert(EntityPathNodes, part)
-end
-
-function WatchEntityPathContainer(container)
-  if EntityPathContainers[container] then return end
-  EntityPathContainers[container] = true
-
-  for _, desc in ipairs(container:GetDescendants()) do
-    ApplyEntityPath(desc)
+  function ApplyEntityPath(part)
+    if typeof(part) ~= "Instance" or not part:IsA("BasePart") then return end
+    if part.Transparency == 0 then return end
+    pcall(function() part.Transparency = 0 end)
+    table.insert(EntityPathNodes, part)
   end
 
-  EntityPathConns[container] = container.DescendantAdded:Connect(ApplyEntityPath)
-end
+  function WatchEntityPathContainer(container)
+    if EntityPathContainers[container] then return end
+    EntityPathContainers[container] = true
 
-function InEntityPathContainer(part)
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  local parent = part.Parent
-  while parent and parent ~= curRooms do
-    if EntityPathContainers[parent] or IsEntityPathContainer(parent) then
-      return true
-    end
-    parent = parent.Parent
-  end
-  return false
-end
-
-function RebuildEntityPath()
-  ClearEntityPath()
-
-  if not toggles.ShowEntityPath or not toggles.ShowEntityPath.Value then return end
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if not curRooms then return end
-
-  for _, desc in ipairs(curRooms:GetDescendants()) do
-    if IsEntityPathContainer(desc) then
-      WatchEntityPathContainer(desc)
-    elseif desc:IsA("BasePart") and InEntityPathContainer(desc) then
+    for _, desc in ipairs(container:GetDescendants()) do
       ApplyEntityPath(desc)
     end
+
+    EntityPathConns[container] = container.DescendantAdded:Connect(ApplyEntityPath)
   end
 
-  Connections.EntityPathWatch = curRooms.DescendantAdded:Connect(function(desc)
-    if typeof(desc) ~= "Instance" then return end
-    if IsEntityPathContainer(desc) then
-      WatchEntityPathContainer(desc)
-    elseif desc:IsA("BasePart") and InEntityPathContainer(desc) then
-      ApplyEntityPath(desc)
+  function InEntityPathContainer(part)
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    local parent = part.Parent
+    while parent and parent ~= curRooms do
+      if EntityPathContainers[parent] or IsEntityPathContainer(parent) then
+        return true
+      end
+      parent = parent.Parent
     end
-  end)
-end
+    return false
+  end
 
-Groupboxes.Visuals_ESP:AddToggle("ShowEntityPath", {
-  Text = "Show Entity Path",
-  Default = false,
-  Tooltip = "Shows the pathfind nodes entities follow in each room",
-  Callback = function() RebuildEntityPath() end,
-})
+  function RebuildEntityPath()
+    ClearEntityPath()
+
+    if not toggles.ShowEntityPath or not toggles.ShowEntityPath.Value then return end
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if not curRooms then return end
+
+    for _, desc in ipairs(curRooms:GetDescendants()) do
+      if IsEntityPathContainer(desc) then
+        WatchEntityPathContainer(desc)
+      elseif desc:IsA("BasePart") and InEntityPathContainer(desc) then
+        ApplyEntityPath(desc)
+      end
+    end
+
+    Connections.EntityPathWatch = curRooms.DescendantAdded:Connect(function(desc)
+      if typeof(desc) ~= "Instance" then return end
+      if IsEntityPathContainer(desc) then
+        WatchEntityPathContainer(desc)
+      elseif desc:IsA("BasePart") and InEntityPathContainer(desc) then
+        ApplyEntityPath(desc)
+      end
+    end)
+  end
+
+  Groupboxes.Visuals_ESP:AddToggle("ShowEntityPath", {
+    Text = "Show Entity Path",
+    Default = false,
+    Tooltip = "Shows the pathfind nodes entities follow in each room",
+    Callback = function() RebuildEntityPath() end,
+  })
+end
 Groupboxes.Visuals_Settings = Groupboxes.Visuals_ESPBox:AddTab("Settings")
 
 helper60("Entities", "Entities")
@@ -10700,6 +10704,7 @@ end
 
 Groupboxes.StairwellMain = element3.Stairwell:AddLeftGroupbox("Stairwell")
 
+do
 -- ─── Stairwell New Features (Anti Crusher, Break Noise TV, Creak Meter, Scrap Items) ───
 
 -- 1. Break Noise TV
@@ -10972,6 +10977,9 @@ toggles.StairwellChairFly:OnChanged(function()
     helper46()
   end
 end)
+
+
+end
 
 Groupboxes.StairwellExperimental = element3.Stairwell:AddRightGroupbox("Experimental")
 
