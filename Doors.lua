@@ -1180,6 +1180,70 @@ end
 
 local character, humanoidRootPart
 
+-- ─── Godmode Sink / Unsink (Фикс лестниц и застревания в полу) ───
+local function SinkGodmode()
+  if not character or not humanoid or not humanoidRootPart then
+    return
+  end
+
+  if CurrentFloor == "Fools" or CurrentFloor == "OldHotel" then
+    return
+  end
+
+  if val85 and not val85.OriginalC1 then
+    local lowerTorso = character:FindFirstChild("LowerTorso")
+    local root = lowerTorso and lowerTorso:FindFirstChild("Root")
+
+    if root then
+      val85.OriginalC1 = root.C1
+    end
+  end
+
+  if not character:GetAttribute("GodmodeSunk") then
+    humanoidRootPart.CFrame = humanoidRootPart.CFrame + Vector3.new(0, -2.346, 0)
+    humanoid.HipHeight = 0.05
+    character:SetAttribute("GodmodeSunk", true)
+    val85.SkipGodmodeCrouchForce = true
+
+    local remotes = remotesFolder2 or (replicatedStorage and (replicatedStorage:FindFirstChild("RemotesFolder") or replicatedStorage:FindFirstChild("Bricks")))
+    if remotes then
+      local crouch = remotes:FindFirstChild("Crouch")
+      if crouch then
+        crouch:FireServer(true, true)
+      end
+    end
+  end
+end
+
+local function UnsinkGodmode()
+  if not character or not humanoid or not humanoidRootPart then
+    return
+  end
+
+  if character:GetAttribute("GodmodeSunk") then
+    humanoidRootPart.CFrame = humanoidRootPart.CFrame + Vector3.new(0, 2.346, 0)
+    character:SetAttribute("GodmodeSunk", nil)
+  end
+
+  humanoid.HipHeight = val85.OriginalHipHeight or 2.396
+  val85.SkipGodmodeCrouchForce = true
+
+  pcall(function()
+    local remotes = remotesFolder2 or (replicatedStorage and (replicatedStorage:FindFirstChild("RemotesFolder") or replicatedStorage:FindFirstChild("Bricks")))
+    local crouch2 = remotes and remotes:FindFirstChild("Crouch")
+
+    if crouch2 then
+      crouch2:FireServer(false, false)
+    end
+
+    if character then
+      character:SetAttribute("Crouching", false)
+    end
+  end)
+
+  val85.SkipGodmodeCrouchForce = false
+end
+
 local function helper10()
   if not character or not humanoidRootPart then
     return
@@ -1634,6 +1698,41 @@ hasHookMeta = Executor.hookmetamethod ~= nil and Executor.newcclosure ~= nil
 hasRequire = Executor.require ~= nil
 
 Groupboxes.Misc = element3.Miscellaneous:AddLeftGroupbox("Miscellaneous")
+
+-- ─── Queue on Teleport (Перезапуск скрипта при телепорте/смене сервера) ───
+local QueueOnTeleportURL = "https://raw.githubusercontent.com/Morozhka144/UI-tests/main/Doors.lua"
+
+local function ExecuteQueueOnTeleport()
+  local qtp = queue_on_teleport or queueonteleport
+  if type(qtp) ~= "function" then
+    library:Notify({ Title = "Queue On Teleport", Description = "Your executor does not support queue_on_teleport", Time = 5 })
+    return false
+  end
+
+  local ok, err = pcall(function()
+    qtp('loadstring(game:HttpGet("' .. QueueOnTeleportURL .. '"))()')
+  end)
+
+  if ok then
+    library:Notify({ Title = "Queue On Teleport", Description = "Script will re-execute on server change!", Time = 4 })
+    return true
+  else
+    library:Notify({ Title = "Queue On Teleport", Description = tostring(err), Time = 5 })
+    return false
+  end
+end
+
+Groupboxes.Misc:AddToggle("QueueOnTeleport", {
+  Text = "Queue On Teleport",
+  Default = false,
+  Tooltip = "Re-executes the script when you change floors or rejoin",
+})
+
+toggles.QueueOnTeleport:OnChanged(function(enabled)
+  if enabled then
+    ExecuteQueueOnTeleport()
+  end
+end)
 
 Groupboxes.Misc:AddButton({
   Text = "Play Again", Callback = function()
@@ -3415,6 +3514,12 @@ options.PromptRange:OnChanged(function(p41)
 end)
 
 Groupboxes.Exploits = element3.Exploits:AddLeftGroupbox("Exploits")
+
+Groupboxes.Exploits:AddToggle("CrouchSpoof", {
+  Text = "Crouch Spoof " .. CheckMark(hasHookMeta) .. " (hookmetamethod)",
+  Default = false,
+  Tooltip = "Spoofs crouching without making you crouch, so you can walk at full speed while crouching",
+})
 
 Groupboxes.Exploits:AddToggle("InfiniteItemsToggle", {
   Text = "Infinite Items", Default = false, Tooltip = "Allows you to use lockpicks, shears, skeleton keys, and multitools without draining the usage", DisabledTooltip = "Your executor doesn't support this feature :(", })
@@ -5424,7 +5529,13 @@ local function helper35()
     end
 
     if p80.Name == "MotorReplication" and executor == "FireServer" then
-      if toggles.BypassEyes.Value and val85.IsEyes
+      local isMonument = toggles.BypassMonument and toggles.BypassMonument.Value and val85.IsMonument
+      if isMonument then
+        local angle = GetMonumentLookAngle()
+        if angle ~= nil then
+          val141[1] = angle
+        end
+      elseif toggles.BypassEyes.Value and val85.IsEyes
         or toggles.BypassLookman.Value and val85.IsLookman then
         local currentFloor2 = CurrentFloor
 
@@ -5440,8 +5551,12 @@ local function helper35()
     end
 
     if p80.Name == "Crouch" and executor == "FireServer" then
-      if toggles.Godmode and toggles.Godmode.Value then
+      if toggles.CrouchSpoof and toggles.CrouchSpoof.Value then
         val141[1] = true
+      elseif not val85.SkipGodmodeCrouchForce then
+        if toggles.Godmode and toggles.Godmode.Value then
+          val141[1] = true
+        end
       end
 
       val141[2] = true
@@ -5950,22 +6065,189 @@ toggles.Godmode:AddKeyPicker("GodmodeKeybind", {
   Text = "Godmode", Default = "G", Mode = "Toggle", SyncToggleState = true, })
 
 toggles.Godmode:OnChanged(function(p87)
-  if not character or not humanoid or not humanoidRootPart then
-    return
-  end
-
-  if val85 and not val85.OriginalC1 then
-    local lowerTorso2 = character:FindFirstChild("LowerTorso")
-    local root3 = lowerTorso2 and lowerTorso2:FindFirstChild("Root")
-
-    if root3 then
-      val85.OriginalC1 = root3.C1
+  if p87 then
+    if helper8() then
+      SinkGodmode()
     end
+  else
+    UnsinkGodmode()
   end
 end)
 
 Groupboxes.Other:AddDropdown("GodmodeMethod", {
   Text = "Godmode Method", Values = { "Always enabled", "On entity spawn" }, Default = "On entity spawn", Tooltip = "Always enabled keeps godmode active while the toggle is on. On entity spawn only activates it when a listed entity exists.", })
+
+-- ─── Figure Godmode & Groundskeeper Godmode ───
+Groupboxes.Other:AddToggle("FigureGodmode", {
+  Text = "Figure Godmode",
+  Default = false,
+  Tooltip = "Holds you out of the Figure's reach while it is close, without moving your camera",
+  Disabled = CurrentFloor == "OldHotel" or CurrentFloor == "Fools",
+  DisabledTooltip = "This feature doesn't work in this floor",
+})
+
+do
+  local FigureTargets = {}
+  local FigureNames = { Figure = true, FigureRig = true, FigureRagdoll = true }
+  local FigureOffset = 10.5
+  local FigureRange = 25
+  local GroundskeeperRigs = {}
+  local GroundskeeperRange = 90
+  local GroundskeeperReduction = 3
+
+  local figGodState = {
+    Active = false,
+    BaseY = 0,
+    Hum = nil,
+    SavedOffset = nil,
+    Cam = nil,
+  }
+
+  local function GetFigureRoot(model)
+    if not model or not model:IsA("Model") then return nil end
+    return model.PrimaryPart or model:FindFirstChild("Root") or model:FindFirstChildWhichIsA("BasePart", true)
+  end
+
+  local function GetGkRoot(model)
+    if not model or not model:IsA("Model") then return nil end
+    return model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+  end
+
+  local function TrackFigureDescendant(desc)
+    if not desc then return end
+    if desc:IsA("Model") and desc.Name == "Groundskeeper" then
+      local root = GetGkRoot(desc)
+      if root then GroundskeeperRigs[desc] = root end
+    elseif desc:IsA("Model") and FigureNames[desc.Name] then
+      local root = GetFigureRoot(desc)
+      if root then FigureTargets[desc] = root end
+    elseif desc:IsA("BasePart") and desc.Name == "Root" then
+      local parent = desc.Parent
+      if parent and parent:IsA("Model") and FigureNames[parent.Name] then
+        FigureTargets[parent] = desc
+      end
+    end
+  end
+
+  local function UntrackFigureDescendant(desc)
+    FigureTargets[desc] = nil
+    GroundskeeperRigs[desc] = nil
+  end
+
+  local function CalculateFigureOffset(pos)
+    local offset = FigureOffset
+    local gkRangeSq = GroundskeeperRange * GroundskeeperRange
+
+    for rig, root in pairs(GroundskeeperRigs) do
+      if root and root.Parent then
+        local rPos = root.Position
+        local dx = rPos.X - pos.X
+        local dy = (rPos.Y - pos.Y) * 5
+        local dz = rPos.Z - pos.Z
+        if dx * dx + dy * dy + dz * dz < gkRangeSq then
+          offset = offset - GroundskeeperReduction
+          break
+        end
+      else
+        GroundskeeperRigs[rig] = nil
+      end
+    end
+
+    if offset < 0 then offset = 0 end
+    return offset
+  end
+
+  local function ApplyFigureGodmode(rootPart)
+    if not figGodState.Active then
+      figGodState.Active = true
+      figGodState.Cam = workspace.CurrentCamera
+    end
+
+    local curOffset = CalculateFigureOffset(rootPart.Position)
+    local oldCF = rootPart.CFrame
+    rootPart.CFrame = oldCF * CFrame.new(0, curOffset, 0)
+    runService.RenderStepped:Wait()
+    rootPart.CFrame = oldCF
+    local cam = workspace.CurrentCamera
+    if cam then
+      cam.CFrame = cam.CFrame - Vector3.new(0, curOffset, 0)
+    end
+  end
+
+  local function ResetFigureGodmode()
+    if not figGodState.Active then return end
+    figGodState.Cam = nil
+    figGodState.Active = false
+  end
+
+  local function SetupFigureGodmodeWatcher()
+    local rooms = workspace:FindFirstChild("CurrentRooms")
+    if not rooms then return end
+
+    for _, desc in ipairs(rooms:GetDescendants()) do
+      TrackFigureDescendant(desc)
+    end
+
+    Connections.FigureGodmodeFig = rooms.DescendantAdded:Connect(TrackFigureDescendant)
+    Connections.FigureGodmodeFigGone = rooms.DescendantRemoving:Connect(UntrackFigureDescendant)
+
+    Connections.FigureGodmodeHeartbeat = runService.Heartbeat:Connect(function()
+      if _Unloading or not (toggles.FigureGodmode and toggles.FigureGodmode.Value) then
+        ResetFigureGodmode()
+        return
+      end
+
+      local rootPart = humanoidRootPart or GetRoot()
+      if not rootPart or not rootPart.Parent then
+        ResetFigureGodmode()
+        return
+      end
+
+      local pos = rootPart.Position
+      local rangeSq = FigureRange * FigureRange
+      local nearFig = false
+
+      for fig, figRoot in pairs(FigureTargets) do
+        if figRoot and figRoot.Parent then
+          local fPos = figRoot.Position
+          local dx, dz = fPos.X - pos.X, fPos.Z - pos.Z
+          if dx * dx + dz * dz < rangeSq then
+            nearFig = true
+            break
+          end
+        else
+          FigureTargets[fig] = nil
+        end
+      end
+
+      if nearFig then
+        ApplyFigureGodmode(rootPart)
+      else
+        ResetFigureGodmode()
+      end
+    end)
+  end
+
+  toggles.FigureGodmode:OnChanged(function(val)
+    if val then
+      SetupFigureGodmodeWatcher()
+    else
+      if Connections.FigureGodmodeHeartbeat then
+        Connections.FigureGodmodeHeartbeat:Disconnect()
+        Connections.FigureGodmodeHeartbeat = nil
+      end
+      if Connections.FigureGodmodeFig then
+        Connections.FigureGodmodeFig:Disconnect()
+        Connections.FigureGodmodeFig = nil
+      end
+      if Connections.FigureGodmodeFigGone then
+        Connections.FigureGodmodeFigGone:Disconnect()
+        Connections.FigureGodmodeFigGone = nil
+      end
+      ResetFigureGodmode()
+    end
+  end)
+end
 
 Groupboxes.Other:AddToggle("NotifyVulnerable", {
   Text = "Notify When Vulnerable", Default = false, Tooltip = "Notifies you when your character moves 3+ studs upward", })
@@ -6982,43 +7264,28 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
     return
   end
 
-  local val155 = helper8()
+  local isGodmodeActive = helper8()
+  local godmodeSunk = character:GetAttribute("GodmodeSunk") and true or false
 
-  if val155 and not val83.Sunk then
-    if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
-      humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, -2.346, 0)
-      humanoid.HipHeight = 0.05
-      val83.Sunk = true
-
-      if remotesFolder2 then
-        local crouch5 = remotesFolder2:FindFirstChild("Crouch")
-
-        if crouch5 then
-          crouch5:FireServer(true, true)
-        end
-      end
-    end
+  if isGodmodeActive and not godmodeSunk then
+    SinkGodmode()
+  elseif not isGodmodeActive and godmodeSunk then
+    UnsinkGodmode()
   end
 
-  if not val155 and val83.Sunk then
-    if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
-      humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 2.346, 0)
-      humanoid.HipHeight = 2.396
-      val83.Sunk = false
-    end
+  if (isGodmodeActive or (toggles.CrouchSpoof and toggles.CrouchSpoof.Value)) and remotesFolder2
+    and remotesFolder2:FindFirstChild("Crouch") then
+    remotesFolder2.Crouch:FireServer(true, true)
   end
 
-  if val155 and val83.Sunk and CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
-    if humanoid.HipHeight ~= 0.05 then
-      humanoid.HipHeight = 0.05
-    end
+  if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel"
+    and not (workspace.CurrentCamera and workspace.CurrentCamera:FindFirstChild("MinecartRig")) then
+    humanoidRootPart.CanCollide = false
   end
 
-  if val155 and remotesFolder2 then
-    local crouch6 = remotesFolder2:FindFirstChild("Crouch")
-
-    if crouch6 then
-      crouch6:FireServer(true, true)
+  for _, childPart in character:GetChildren() do
+    if childPart:IsA("BasePart") then
+      childPart.CanCollide = false
     end
   end
 
@@ -7027,8 +7294,8 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
   local collisionClone6 = character:FindFirstChild("CollisionClone")
 
   if CurrentFloor == "OldHotel" or CurrentFloor == "Fools" then
-    local functions4 = val155 and Functions.GetNearestEntity() and 200
-      or toggles.FigureGodmode.Value and Functions.GetNearestFigure() and 200 or 0
+    local functions4 = isGodmodeActive and Functions.GetNearestEntity() and 200
+      or (toggles.FigureGodmode and toggles.FigureGodmode.Value and Functions.GetNearestFigure() and 200 or 0)
 
     val85.SpoofOffset = functions4
 
@@ -7038,43 +7305,43 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
     end
 
     if CurrentFloor == "Fools" then
-      local collisionCrouch5 = collision2 and collision2:FindFirstChild("CollisionCrouch")
-
-      if collisionCrouch5 then
-        collisionCrouch5.CanCollide = false
+      if collision2 and collision2:FindFirstChild("CollisionCrouch") then
+        collision2.CollisionCrouch.CanCollide = false
       end
 
-      local collisionCrouch6 = collisionClone6
-        and collisionClone6:FindFirstChild("CollisionCrouch")
-
-      if collisionCrouch6 then
-        collisionCrouch6.CanCollide = false
+      if collisionClone6 and collisionClone6:FindFirstChild("CollisionCrouch") then
+        collisionClone6.CollisionCrouch.CanCollide = false
       end
     end
 
-    humanoidRootPart.CanCollide = not toggles.Noclip.Value
+    humanoidRootPart.CanCollide = not (toggles.Noclip and toggles.Noclip.Value)
   else
     if collision2 then
       collision2.CanCollide = false
-      local collisionCrouch7 = collision2:FindFirstChild("CollisionCrouch")
 
-      if collisionCrouch7 then
-        collisionCrouch7.CanCollide = false
+      if collision2:FindFirstChild("CollisionCrouch") then
+        collision2.CollisionCrouch.CanCollide = false
       end
+    end
+
+    if collisionClone6 and collisionClone6:FindFirstChild("CollisionCrouch") then
+      local isCrouchingOrSunk = isGodmodeActive or Functions.IsCrouching()
+      collisionClone6.CanCollide = not ((toggles.Noclip and toggles.Noclip.Value) or isCrouchingOrSunk)
+      collisionClone6.CollisionCrouch.CanCollide = not ((toggles.Noclip and toggles.Noclip.Value) or not isCrouchingOrSunk)
+    elseif collisionClone6 then
+      collisionClone6.CanCollide = not ((toggles.Noclip and toggles.Noclip.Value) or isGodmodeActive or Functions.IsCrouching())
+    else
+      humanoidRootPart.CanCollide = not (toggles.Noclip and toggles.Noclip.Value)
     end
 
     local lowerTorso3 = character:FindFirstChild("LowerTorso")
     local root4 = lowerTorso3 and lowerTorso3:FindFirstChild("Root")
 
-    if root4 and not val85.OriginalC1 then
-      val85.OriginalC1 = root4.C1
-    end
-
     if root4 and val85.OriginalC1 then
-      root4.C1 = val85.OriginalC1 * CFrame.new(0, val155 and -2.346 or 0, 0)
+      root4.C1 = val85.OriginalC1 * CFrame.new(0, isGodmodeActive and -2.346 or 0, 0)
     end
 
-    local val156 = val155 and 2.328 or 0.18
+    local val156 = isGodmodeActive and 2.328 or 0.18
 
     if collision2 then
       collision2.Position = humanoidRootPart.Position + Vector3.new(0, val156, 0)
@@ -7084,22 +7351,19 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
       collisionPart3.Position = humanoidRootPart.Position + Vector3.new(0, val156, 0)
     end
 
-    if collision2 and collisionClone6 then
-      local collisionCrouch8 = collision2:FindFirstChild("CollisionCrouch")
-      local collisionCrouch9 = collisionClone6:FindFirstChild("CollisionCrouch")
+    if collision2 and collision2:FindFirstChild("CollisionCrouch") and collisionClone6
+      and collisionClone6:FindFirstChild("CollisionCrouch") then
+      local val157 = isGodmodeActive and 1.328 or -0.982
 
-      if collisionCrouch8 and collisionCrouch9 then
-        local val157 = val155 and 1.328 or -0.982
-        collisionCrouch8.Position = humanoidRootPart.Position + Vector3.new(0, val157, 0)
-        collisionCrouch9.CollisionGroup = collisionCrouch8.CollisionGroup
-      end
+      collision2.CollisionCrouch.Position = humanoidRootPart.Position
+        + Vector3.new(0, val157, 0)
 
-      local collisionCrouch10 = collisionClone6:FindFirstChild("CollisionCrouch")
+      collisionClone6.CollisionCrouch.CollisionGroup = collision2.CollisionCrouch.CollisionGroup
+    end
 
-      if collisionCrouch10 then
-        collisionCrouch10.Position = humanoidRootPart.Position
-          + Vector3.new(0, val155 and 0.75 or -0.982, 0)
-      end
+    if collisionClone6 and collisionClone6:FindFirstChild("CollisionCrouch") then
+      collisionClone6.CollisionCrouch.Position = humanoidRootPart.Position
+        + Vector3.new(0, isGodmodeActive and 0.75 or -0.982, 0)
     end
   end
 
@@ -7107,7 +7371,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
     collisionClone6.CollisionGroup = collision2.CollisionGroup
 
     collisionClone6.Position = humanoidRootPart.Position
-      + Vector3.new(0, val155 and 1.75 or 0.18, 0)
+      + Vector3.new(0, isGodmodeActive and 1.75 or 0.18, 0)
   end
 
   local crouch7 = remotesFolder2 and remotesFolder2:FindFirstChild("Crouch")
@@ -7115,12 +7379,21 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
   if crouch7 and collisionPart and tick() - val85.LastCrouchFire > 0.1 then
     local functions5 = Functions.IsCrouching()
 
-    if val155 then
+    if isGodmodeActive or (toggles.CrouchSpoof and toggles.CrouchSpoof.Value) then
       functions5 = true
     end
 
     crouch7:FireServer(functions5, true)
     val85.LastCrouchFire = tick()
+  end
+
+  local functions7 = isGodmodeActive or Functions.IsCrouching()
+  if toggles.CrouchSpoof and toggles.CrouchSpoof.Value then
+    functions7 = true
+  end
+
+  if character:GetAttribute("Crouching") ~= functions7 then
+    character:SetAttribute("Crouching", functions7)
   end
 end)
 
@@ -7318,6 +7591,10 @@ local function helper53(val159)
     or val159:FindFirstAncestor("ForgetMeNotVineDoors")
     or val159:FindFirstAncestor("StairwellTerminal")
     or val159:FindFirstAncestor("StairwellOfficeChair")
+    or val159:FindFirstAncestor("WaitingSeats")
+    or val159:FindFirstAncestor("MeldChord")
+    or val159:FindFirstAncestor("StemsEntity")
+    or val159:FindFirstAncestor("NoiseTV")
     or val159:FindFirstAncestor("Fireplace")
     or val159:FindFirstAncestor("FirePlace")
     or (val159.Parent and val159.Parent.Name:lower():find("fireplace", 1, true))
@@ -7780,6 +8057,15 @@ local function helper58(val180)
     end
 
     locked = "Door " .. FunctionGetDoorNumber(val180)
+
+    if val180:GetAttribute("Opened") == true then
+      locked = locked .. " (Opened)"
+    elseif val180.Parent then
+      local parent13 = val180.Parent
+      if parent13:GetAttribute("RequiresKey") == true or parent13:GetAttribute("RequiresGenerator") == true then
+        locked = locked .. " (Locked)"
+      end
+    end
 
     if CurrentFloor == "Archives" then
       local sign = val180:FindFirstChild("Sign")
@@ -8279,6 +8565,93 @@ end
 
 Groupboxes.Visuals_ESPBox = element3.Visuals:AddLeftTabbox("ESP / Settings")
 Groupboxes.Visuals_ESP = Groupboxes.Visuals_ESPBox:AddTab("ESP")
+
+-- ─── Show Entity Path (Траектория движения сущностей) ───
+EntityPathNodes = {}
+EntityPathConns = {}
+EntityPathContainers = setmetatable({}, { __mode = "k" })
+
+local function IsEntityPathContainer(inst)
+  if typeof(inst) ~= "Instance" then return false end
+  if not (inst:IsA("Folder") or inst:IsA("Model")) then return false end
+  return string.lower(inst.Name):find("node") ~= nil
+end
+
+function ClearEntityPath()
+  for _, node in ipairs(EntityPathNodes) do
+    if node and node.Parent then
+      pcall(function() node.Transparency = 1 end)
+    end
+  end
+  table.clear(EntityPathNodes)
+
+  if Connections.EntityPathWatch then
+    Connections.EntityPathWatch:Disconnect()
+    Connections.EntityPathWatch = nil
+  end
+end
+
+function ApplyEntityPath(part)
+  if typeof(part) ~= "Instance" or not part:IsA("BasePart") then return end
+  if part.Transparency == 0 then return end
+  pcall(function() part.Transparency = 0 end)
+  table.insert(EntityPathNodes, part)
+end
+
+function WatchEntityPathContainer(container)
+  if EntityPathContainers[container] then return end
+  EntityPathContainers[container] = true
+
+  for _, desc in ipairs(container:GetDescendants()) do
+    ApplyEntityPath(desc)
+  end
+
+  EntityPathConns[container] = container.DescendantAdded:Connect(ApplyEntityPath)
+end
+
+function InEntityPathContainer(part)
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  local parent = part.Parent
+  while parent and parent ~= curRooms do
+    if EntityPathContainers[parent] or IsEntityPathContainer(parent) then
+      return true
+    end
+    parent = parent.Parent
+  end
+  return false
+end
+
+function RebuildEntityPath()
+  ClearEntityPath()
+
+  if not toggles.ShowEntityPath or not toggles.ShowEntityPath.Value then return end
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if not curRooms then return end
+
+  for _, desc in ipairs(curRooms:GetDescendants()) do
+    if IsEntityPathContainer(desc) then
+      WatchEntityPathContainer(desc)
+    elseif desc:IsA("BasePart") and InEntityPathContainer(desc) then
+      ApplyEntityPath(desc)
+    end
+  end
+
+  Connections.EntityPathWatch = curRooms.DescendantAdded:Connect(function(desc)
+    if typeof(desc) ~= "Instance" then return end
+    if IsEntityPathContainer(desc) then
+      WatchEntityPathContainer(desc)
+    elseif desc:IsA("BasePart") and InEntityPathContainer(desc) then
+      ApplyEntityPath(desc)
+    end
+  end)
+end
+
+Groupboxes.Visuals_ESP:AddToggle("ShowEntityPath", {
+  Text = "Show Entity Path",
+  Default = false,
+  Tooltip = "Shows the pathfind nodes entities follow in each room",
+  Callback = function() RebuildEntityPath() end,
+})
 Groupboxes.Visuals_Settings = Groupboxes.Visuals_ESPBox:AddTab("Settings")
 
 helper60("Entities", "Entities")
@@ -9105,6 +9478,81 @@ local function helper66(val220)
 end
 
 Groupboxes.ArchivesMain = element3.Archives:AddLeftGroupbox("Archives")
+
+-- ─── Auto Skip ForgetMeNot (Архивы) ───
+Groupboxes.ArchivesMain:AddToggle("ForgetMeNotSolver", {
+  Text = "Auto Skip ForgetMeNot",
+  Default = false,
+  Tooltip = "Automatically skips the ForgetMeNot minigame",
+})
+
+do
+  local fmnActive = false
+  local fmnVisited = {}
+
+  local function GetNextFmnRoom(roomNum)
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if not curRooms then return nil end
+    for i = roomNum + 1, roomNum + 5 do
+      local r = curRooms:FindFirstChild(tostring(i))
+      if r then return r end
+    end
+    return nil
+  end
+
+  local function FireFmnLookAts(room)
+    for i = 1, 6 do
+      local sub = room:FindFirstChild(tostring(i))
+      if sub then
+        local lookAt = sub:FindFirstChild("LookAt")
+        if lookAt then
+          pcall(function() lookAt:FireServer() end)
+        end
+      end
+    end
+  end
+
+  local function HandleFmnRoom(room)
+    if not fmnActive or fmnVisited[room] then return end
+    fmnVisited[room] = true
+    task.wait(1.5)
+
+    if not fmnActive or not room.Parent then return end
+    if not room:FindFirstChild("ForgetMeNotVineDoors", true) then return end
+
+    FireFmnLookAts(room)
+    local nextR = GetNextFmnRoom(tonumber(room.Name) or 0)
+    if not nextR then return end
+
+    local door = nextR:FindFirstChild("Door")
+    if door and door:GetAttribute("Opened") ~= true then
+      library:Notify({ Title = "ForgetMeNot", Description = "Auto-skipped ForgetMeNot puzzle!", Time = 4 })
+    end
+  end
+
+  toggles.ForgetMeNotSolver:OnChanged(function(enabled)
+    fmnActive = enabled
+    table.clear(fmnVisited)
+    if not enabled then return end
+
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if curRooms then
+      for _, r in ipairs(curRooms:GetChildren()) do
+        if r:FindFirstChild("ForgetMeNotVineDoors", true) then
+          task.spawn(HandleFmnRoom, r)
+        end
+      end
+      curRooms.ChildAdded:Connect(function(r)
+        if fmnActive then
+          task.wait(1)
+          if r:FindFirstChild("ForgetMeNotVineDoors", true) then
+            task.spawn(HandleFmnRoom, r)
+          end
+        end
+      end)
+    end
+  end)
+end
 
 Groupboxes.ArchivesMain:AddToggle("BypassDrones", {
   Text = "Bypass Drones",
@@ -10252,6 +10700,256 @@ end
 
 Groupboxes.StairwellMain = element3.Stairwell:AddLeftGroupbox("Stairwell")
 
+-- ─── Stairwell New Features (Anti Crusher, Break Noise TV, Creak Meter, Scrap Items) ───
+
+-- 1. Break Noise TV
+Groupboxes.StairwellMain:AddToggle("BreakNoiseTv", {
+  Text = "Break Noise TV",
+  Default = false,
+  Tooltip = "Breaks noise's TV when you are holding it",
+})
+
+local BreakNoiseTvConn = nil
+local BreakNoiseTvRoomsConn = nil
+local NoiseTvDropHeight = 250
+
+local function DropNoiseTvStand(stand)
+  if not stand or not stand:IsA("Model") or stand.Name ~= "TV_Stand" then return end
+  if stand:GetAttribute("LastPusherId") ~= localPlayer2.UserId then return end
+
+  local pivot = stand:GetPivot()
+  local targetY = pivot.Position.Y - NoiseTvDropHeight
+  if pivot.Position.Y > targetY then
+    stand:PivotTo(CFrame.new(pivot.Position.X, targetY, pivot.Position.Z))
+  end
+end
+
+local function ScanNoiseTvStands()
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms then
+    for _, r in ipairs(curRooms:GetChildren()) do
+      local assets = r:FindFirstChild("Assets")
+      if assets then
+        local tv = assets:FindFirstChild("TV_Stand")
+        if tv then DropNoiseTvStand(tv) end
+      end
+    end
+  end
+  local misc = workspace:FindFirstChild("Misc")
+  if misc then
+    for _, item in ipairs(misc:GetChildren()) do DropNoiseTvStand(item) end
+  end
+end
+
+local function StopBreakNoiseTv()
+  if BreakNoiseTvConn then BreakNoiseTvConn:Disconnect(); BreakNoiseTvConn = nil end
+  if BreakNoiseTvRoomsConn then BreakNoiseTvRoomsConn:Disconnect(); BreakNoiseTvRoomsConn = nil end
+end
+
+toggles.BreakNoiseTv:OnChanged(function(enabled)
+  StopBreakNoiseTv()
+  if not enabled then return end
+
+  ScanNoiseTvStands()
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms then
+    BreakNoiseTvRoomsConn = curRooms.ChildAdded:Connect(function()
+      task.wait(1)
+      ScanNoiseTvStands()
+    end)
+  end
+
+  BreakNoiseTvConn = task.spawn(function()
+    while toggles.BreakNoiseTv and toggles.BreakNoiseTv.Value and not _Unloading do
+      ScanNoiseTvStands()
+      task.wait(2)
+    end
+  end)
+end)
+
+-- 2. Anti Crusher
+Groupboxes.StairwellMain:AddToggle("AntiCrusher", {
+  Text = "Anti Crusher",
+  Default = false,
+  Tooltip = "Prevents you from getting hurt from crushers",
+})
+
+local AntiCrusherConn = nil
+local CrusherConns = {}
+
+local function IsCrusherUnderBasicWall(part, container)
+  local parent = part.Parent
+  while parent and parent ~= container do
+    if parent.Name == "BasicWall" then return true end
+    parent = parent.Parent
+  end
+  return false
+end
+
+local function StripCrusherParts(container)
+  if not container then return end
+  for _, desc in ipairs(container:GetDescendants()) do
+    if desc:IsA("BasePart") then
+      if not IsCrusherUnderBasicWall(desc, container) then
+        desc.CanCollide = false
+        desc.CanTouch = false
+      end
+    end
+    if desc.Name == "StairwellCrusher" then
+      for _, trigName in ipairs({ "OuterTrigger", "CoreTrigger" }) do
+        local trig = desc:FindFirstChild(trigName)
+        if trig then pcall(function() trig:Destroy() end) end
+      end
+    end
+  end
+
+  if CrusherConns[container] then return end
+  CrusherConns[container] = container.DescendantAdded:Connect(function(desc)
+    if desc:IsA("BasePart") and not IsCrusherUnderBasicWall(desc, container) then
+      desc.CanCollide = false
+      desc.CanTouch = false
+    end
+  end)
+end
+
+local function ScanCrushers()
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if not curRooms then return end
+  for _, r in ipairs(curRooms:GetChildren()) do
+    local assets = r:FindFirstChild("Assets")
+    if assets then
+      for _, item in ipairs(assets:GetChildren()) do
+        if item.Name:match("^StairwellCrusherContainer%d+$") then
+          StripCrusherParts(item)
+        end
+      end
+    end
+  end
+end
+
+local function StopAntiCrusher()
+  if AntiCrusherConn then AntiCrusherConn:Disconnect(); AntiCrusherConn = nil end
+  for c, conn in pairs(CrusherConns) do
+    if conn then pcall(function() conn:Disconnect() end) end
+    CrusherConns[c] = nil
+  end
+end
+
+toggles.AntiCrusher:OnChanged(function(enabled)
+  StopAntiCrusher()
+  if not enabled then return end
+
+  ScanCrushers()
+  AntiCrusherConn = workspace.DescendantAdded:Connect(function(desc)
+    if desc:IsA("Model") and desc.Name:match("^StairwellCrusherContainer%d+$") then
+      task.wait()
+      StripCrusherParts(desc)
+    end
+  end)
+
+  task.spawn(function()
+    while toggles.AntiCrusher and toggles.AntiCrusher.Value and not _Unloading do
+      ScanCrushers()
+      task.wait(2)
+    end
+  end)
+end)
+
+-- 3. Creak Aggression Meter
+Groupboxes.StairwellMain:AddToggle("CreakAggressionMeter", {
+  Text = "Creak Aggression Meter",
+  Default = true,
+  Tooltip = "Shows in the ESP text the percentage of Creak's aggression",
+})
+
+local function GetCreakAggressionValue(model)
+  if not model then return nil end
+  local anim = model:FindFirstChildOfClass("Animator")
+    or (model:FindFirstChild("AnimationController") and model.AnimationController:FindFirstChildOfClass("Animator"))
+    or model:FindFirstChildOfClass("AnimationController")
+  if not anim then return nil end
+
+  for _, track in ipairs(anim:GetPlayingAnimationTracks()) do
+    if track.Name == "CreakGraph" or (track.Animation and track.Animation.Name == "CreakGraph") then
+      local ok, val = pcall(track.GetParameter, track, "Aggression")
+      if ok and typeof(val) == "number" then
+        return math.clamp(val, 0, 1)
+      end
+    end
+  end
+  return nil
+end
+
+local function GetCreakLabel(model)
+  if not (toggles.CreakAggressionMeter and toggles.CreakAggressionMeter.Value) then
+    return "Creak"
+  end
+  local val = GetCreakAggressionValue(model)
+  return "Creak [" .. (val and tostring(math.floor(val * 100 + 0.5)) or "--") .. "% Aggression]"
+end
+
+-- 4. Scrap Dropped Items
+local function ScrapDroppedItemsFindGrinder()
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if not curRooms then return nil end
+  local root = humanoidRootPart or GetRoot()
+  local bestCF, minDst = nil, math.huge
+
+  for _, r in ipairs(curRooms:GetChildren()) do
+    local scrapper = r:FindFirstChild("StairwellScrapper", true)
+    if scrapper then
+      for _, d in ipairs(scrapper:GetDescendants()) do
+        if d.Name == "Grinder1" and (d:IsA("Model") or d:IsA("BasePart")) then
+          local ok, cf = pcall(function() return d:IsA("Model") and d:GetPivot() or d.CFrame end)
+          if ok and cf then
+            local dist = root and (cf.Position - root.Position).Magnitude or 0
+            if dist < minDst then
+              bestCF, minDst = cf, dist
+            end
+          end
+        end
+      end
+    end
+  end
+  return bestCF
+end
+
+function ScrapDroppedItems()
+  local drops = workspace:FindFirstChild("Drops")
+  if not drops then
+    library:Notify({ Title = "Scrap Dropped Items", Description = "No Drops folder found", Time = 4 })
+    return 0
+  end
+
+  local grinderCF = ScrapDroppedItemsFindGrinder()
+  if not grinderCF then
+    library:Notify({ Title = "Scrap Dropped Items", Description = "No scrapper grinder found in room", Time = 4 })
+    return 0
+  end
+
+  local count = 0
+  for _, item in ipairs(drops:GetChildren()) do
+    if item:IsA("Model") then
+      if pcall(function() item:PivotTo(grinderCF) end) then count = count + 1 end
+    elseif item:IsA("BasePart") then
+      if pcall(function() item.CFrame = grinderCF end) then count = count + 1 end
+    end
+  end
+  library:Notify({ Title = "Scrap Dropped Items", Description = "Scrapped " .. count .. " items", Time = 3 })
+  return count
+end
+
+Groupboxes.StairwellMain:AddButton({
+  Text = "Scrap Dropped Items",
+  Tooltip = "Puts all of your dropped items into a scrapper",
+  Callback = function() ScrapDroppedItems() end,
+}):AddKeyPicker("ScrapDroppedItemsKeybind", {
+  Text = "Scrap Dropped Items",
+  Default = "P",
+  Mode = "Press",
+  SyncToggleState = false,
+})
+
 Groupboxes.StairwellMain:AddToggle("StairwellChairFly", {
   Text = "Chair Anticheat Bypass", Default = false, Tooltip = "Allows you to bypass the anticheat by flying on a chair, allowing you to noclip and fly freely, drag an office chair, then sit in it and press the 'Start Bypass' button", })
 
@@ -10495,6 +11193,87 @@ Groupboxes.SubfloorsRooms:AddToggle("RoomsPickupGold", {
   Text = "Pickup Gold", Default = false, Tooltip = "Automatically pathfinds to gold piles in the current room", })
 
 Groupboxes.SubfloorsOutdoors = element3.Garden:AddLeftGroupbox("Outdoors")
+
+-- ─── Anti Monument (Защита от Монумента в Саду) ───
+MonumentParts = {}
+
+local function RefreshMonuments()
+  val85.IsMonument = false
+  table.clear(MonumentParts)
+
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if not curRooms then return end
+
+  local curRoomVal = v139 and tonumber(v139.Value)
+  local function CheckMon(roomInst)
+    if not roomInst then return end
+    local mon = roomInst:FindFirstChild("MonumentEntity", true)
+    if mon then
+      table.insert(MonumentParts, mon)
+      val85.IsMonument = true
+    end
+  end
+
+  if curRoomVal == nil then
+    for _, r in ipairs(curRooms:GetChildren()) do CheckMon(r) end
+  else
+    for i = math.max(0, curRoomVal - 4), curRoomVal do
+      CheckMon(curRooms:FindFirstChild(tostring(i)))
+    end
+  end
+end
+
+function GetMonumentLookAngle()
+  local root = humanoidRootPart or GetRoot()
+  if not root or not root.Parent then return nil end
+
+  local rPos = root.Position
+  local targetPos, minDst = nil, math.huge
+
+  for _, part in ipairs(MonumentParts) do
+    if part and part.Parent then
+      local base = part:IsA("BasePart") and part or (part.PrimaryPart or part:FindFirstChildWhichIsA("BasePart", true))
+      if base then
+        local dist = (base.Position - rPos).Magnitude
+        if dist < minDst then
+          minDst = dist
+          targetPos = base.Position
+        end
+      end
+    end
+  end
+
+  if not targetPos then return nil end
+  local delta = targetPos - rPos
+  if delta.Magnitude < 0.001 then return nil end
+  return math.deg(math.atan2(delta.X, delta.Z))
+end
+
+Groupboxes.SubfloorsMonument = element3.Garden:AddLeftGroupbox("Monument")
+Groupboxes.SubfloorsMonument:AddToggle("BypassMonument", {
+  Text = "Anti Monument " .. CheckMark(hasHookMeta) .. " (hookmetamethod)",
+  Default = false,
+  Tooltip = "Spoofs your look angle so that Monument cannot harm you",
+})
+
+toggles.BypassMonument:OnChanged(function()
+  RefreshMonuments()
+end)
+
+do
+  local curRooms = workspace:FindFirstChild("CurrentRooms")
+  if curRooms then
+    curRooms.ChildAdded:Connect(function()
+      task.spawn(function()
+        for _ = 1, 4 do
+          if val85.IsMonument then return end
+          RefreshMonuments()
+          task.wait(0.5)
+        end
+      end)
+    end)
+  end
+end
 
 Groupboxes.SubfloorsOutdoors:AddToggle("NoSurgeDamage", {
   Text = "No Surge Damage", Default = false, Tooltip = "Prevents Surge from hurting you", })
@@ -11517,92 +12296,95 @@ toggles.MinecartTeleport:OnChanged(function(p157)
 end)
 
 Groupboxes.MinesAutomation:AddButton({
-  Text = "Complete Door 200", Tooltip = "Automatically teleports to and interacts with each water pump to complete the Dam Seek", Callback = function()
+  Text = "Complete Door 200",
+  Tooltip = "Automatically teleports to and interacts with each water pump to complete the Dam Seek",
+  Callback = function()
     if not character then
       library:Notify({ Title = "Error", Description = "Character not found", Time = 3 })
       return
     end
 
-    library:Notify({
-      Title = "Door 200", Description = "Starting water pump automation...", Time = 3, })
+    if v139 and v139.Value < 99 then
+      library:Notify({ Title = "Door 200", Description = "You haven't reached door 200...", Time = 4 })
+      return
+    end
 
-    local val259 = false
+    library:Notify({ Title = "Door 200", Description = "Starting water pump automation...", Time = 3 })
 
-    local connect25 = remotesFolder2 and remotesFolder2:FindFirstChild("Cutscene") and remotesFolder2.Cutscene.OnClientEvent:Connect(function()
-      val259 = true
-      task.wait(7)
-      val259 = false
-    end)
+    local startCF = character:GetPivot()
+    local curRooms = workspace:FindFirstChild("CurrentRooms")
+    if not curRooms then
+      library:Notify({ Title = "Error", Description = "Could not find CurrentRooms", Time = 4 })
+      return
+    end
 
-    local function helper70()
-      local element37 = { Height = -69420, Object = nil }
-      local currentRooms8 = workspace:FindFirstChild("CurrentRooms")
+    local room200 = curRooms:FindFirstChild(v139 and tostring(v139.Value) or "200")
+    if not room200 then
+      library:Notify({ Title = "Error", Description = "Could not find room 200", Time = 4 })
+      return
+    end
 
-      if not currentRooms8 then
-        return nil
+    local function WaitCutscene(maxTicks)
+      for _ = 1, maxTicks or 40 do
+        if not character or character:GetAttribute("InCutscene") ~= true then return end
+        task.wait(0.25)
       end
+    end
 
-      for v452, v453 in currentRooms8:GetChildren() do
-        local waterPump = v453:FindFirstChild("WaterPump")
+    local function TpAndPrompt(targetPart, promptName)
+      if not targetPart or not character then return end
+      character:PivotTo(targetPart:IsA("Model") and targetPart:GetPivot() or targetPart.CFrame)
+      task.wait(0.25)
+      local prompt = targetPart:FindFirstChild(promptName, true)
+      if prompt then
+        Functions.ForceFirePrompt(prompt)
+      end
+      task.wait(0.25)
+    end
 
-        if waterPump and waterPump:GetAttribute("CH_Completed") ~= true then
-          local basePart3 = waterPump:FindFirstChildWhichIsA("BasePart")
+    WaitCutscene(40)
+    local damHandler = room200:FindFirstChild("_DamHandler")
+    local pumpCount = 0
 
-          if basePart3 and basePart3.Position.Y > element37.Height then
-            element37.Object = waterPump
-            element37.Height = basePart3.Position.Y
+    if damHandler then
+      for i = 1, 3 do
+        local barrier = damHandler:FindFirstChild("PlayerBarriers" .. i)
+        local flood = barrier and barrier:FindFirstChild("Flood" .. i)
+        local pumps = flood and flood:FindFirstChild("Pumps")
+
+        if pumps then
+          for _, pump in ipairs(pumps:GetChildren()) do
+            local wheel = pump:FindFirstChild("Wheel", true)
+            if wheel then
+              TpAndPrompt(wheel, "ValvePrompt")
+              pumpCount = pumpCount + 1
+            end
           end
         end
-      end
 
-      return element37.Object
-    end
-
-    local function waitLoop3(val260)
-      local count5 = 0
-
-      while task.wait(0.1) do
-        count5 = count5 + 1
-
-        if count5 > 600 then
-          break
-        end
-
-        if not val259 then
-          if character then
-            character:PivotTo(val260:GetPivot())
-          end
-
-          local findFirstChild14 = val260:FindFirstChild("ValvePrompt", true)
-
-          if findFirstChild14 then
-            Functions.ForceFirePrompt(findFirstChild14)
-          end
-
-          if val260:GetAttribute("CH_Completed") then
-            break
-          end
-        end
+        WaitCutscene(40)
+        task.wait(0.5)
       end
     end
 
-    while task.wait(0.1) do
-      local val261 = helper70()
-
-      if val261 then
-        waitLoop3(val261)
-      else
-        break
+    WaitCutscene(40)
+    local generator = room200:FindFirstChild("MinesGenerator", true)
+    if generator then
+      local lever = generator:FindFirstChild("Lever", true)
+      if lever then
+        TpAndPrompt(generator.PrimaryPart or lever, "LeverPrompt")
       end
     end
 
-    if connect25 then
-      connect25:Disconnect()
-    end
+    character:PivotTo(startCF)
 
-    library:Notify({
-      Title = "Door 200", Description = "Finished water pump automation", Time = 4, })
-  end, })
+    if pumpCount == 0 then
+      library:Notify({ Title = "Door 200", Description = "No pumps found, is dam loaded?", Time = 5 })
+    else
+      library:Notify({ Title = "Door 200", Description = "Finished " .. pumpCount .. " pumps & generator!", Time = 4 })
+    end
+  end,
+})
 
 toggles.AutoSolveAnchors:OnChanged(function()
   if AutoSolveAnchorsConnection then
