@@ -6005,13 +6005,7 @@ do
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
-        if state then
-          if obj.Name ~= "HumanoidRootPart" then
-            obj.CanCollide = false
-          end
-        else
-          obj.CanCollide = true
-        end
+        obj.CanCollide = not state
       end
     end
   end
@@ -6060,7 +6054,7 @@ do
 
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
       if distMoved > phantomTolerance then
-        if (KnobFarm and (KnobFarm.Active or KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
           or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
           lastSafeCFrame = currRoot.CFrame
         else
@@ -15080,7 +15074,7 @@ local function GetRoomTarget(room)
 
   if KnobFarm and KnobFarm.IgnoredDoors and KnobFarm.IgnoredDoors[exitDoor] then
     local otherDoor = nil
-    for _, d in ipairs(room:GetDescendants()) do
+    for _, d in ipairs(room:GetChildren()) do
       if d.Name == "Door" and d:IsA("Model") and not KnobFarm.IgnoredDoors[d] then
         otherDoor = d
         break
@@ -16145,6 +16139,43 @@ local function handleRoom50(room, door)
     end
     if curHum then curHum:Move(Vector3.zero, false) end
   end
+
+  -- 7. Идем к двери 52 через NavigateTo (обычный фарм пешком)
+  local door52 = nil
+  local findStart = tick()
+  while tick() - findStart < 3.0 and not door52 and KnobFarm.Active and not _Unloading do
+    door52 = findDoor52()
+    if door52 then break end
+    task.wait(0.15)
+  end
+
+  if door52 then
+    local d52Part = door52:FindFirstChild("Door") or door52.PrimaryPart
+      or door52:FindFirstChildWhichIsA("BasePart", true)
+    if d52Part and NavigateTo then
+      KnobFarm.SetStatus("Walking to Door 52...")
+      local d52Pos = d52Part.Position
+      local floorPos = GetFloorPosition(d52Pos) or d52Pos
+      NavigateTo(floorPos, d52Part, "Door 52", 10.0, "Door")
+
+      -- Открываем дверь 52
+      if OpenDoor then
+        pcall(function() OpenDoor(door52) end)
+      else
+        local pr52 = door52:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr52 then pcall(safeFirePrompt, pr52) end
+        local co52 = door52:FindFirstChild("ClientOpen")
+        if co52 then pcall(function() co52:FireServer() end) end
+      end
+      pcall(function()
+        for _, dp in ipairs(door52:GetDescendants()) do
+          if dp:IsA("BasePart") then dp.CanCollide = false end
+        end
+      end)
+      KnobFarm.OpenedDoors[door52] = true
+    end
+  end
+
   -- УДАЛЯЕМ ИЗ ПАМЯТИ 51-УЮ ДВЕРЬ
   KnobFarm.IgnoredDoors = KnobFarm.IgnoredDoors or setmetatable({}, { __mode = "k" })
   if door51 then
@@ -16152,26 +16183,30 @@ local function handleRoom50(room, door)
     KnobFarm.IgnoredDoors[door51] = true
   end
 
-  -- Переходим в комнату 51 (коридор перед магазином Джеффа)
-  KnobFarm.CurrentRoomNum = 51
-  KnobFarm.LastRoomNum = 51
+  -- Запоминаем текущую комнату как минимум 51/52, чтобы бот никогда не шел назад в 50
+  KnobFarm.CurrentRoomNum = 52
+  KnobFarm.LastRoomNum = 52
   KnobFarm.PassedFirstDoor = true
   SetCrouched(false)
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.Teleporting = false
 
-  -- Убеждаемся, что Godmode и Phantom Noclip активны
+  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке
   pcall(function()
     if toggles and toggles.Godmode and not toggles.Godmode.Value then
       toggles.Godmode:SetValue(true)
     end
-    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    else
+      KnobFarm.NoclipBeforeJeff = true
     end
   end)
   KnobFarm.SetStatus("Room 50 completed! Resuming Knob Farm...")
-  task.wait(0.3)
+  task.wait(0.5)
 end
 
 -- Комната 100: самоубийство ради быстрого Play Again (пока прохождение 100-й двери не сделано)
@@ -16720,7 +16755,7 @@ local function PullGateLever(room)
   task.wait(0.2)
 end
 
--- Комната 49: самоубийство ради быстрого Play Again (режим «Farm to Door 100» ВЫКЛ)
+-- Комната 49: самоубийство ради быстрого Play Again (быстрый цикл 1-49)
 local function ResetAtRoom49(char, hum)
   KnobFarm.SetStatus("Room 49 reached! Resetting character for Play Again...")
   pcall(function()
@@ -16729,13 +16764,20 @@ local function ResetAtRoom49(char, hum)
     end
   end)
   pcall(function()
-    hum.Health = 0
-    char:BreakJoints()
+    char = char or (localPlayer2 and localPlayer2.Character)
+    hum = hum or (char and char:FindFirstChildOfClass("Humanoid"))
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if hum then hum.Health = 0 end
+    if char then char:BreakJoints() end
     local underwater = (remotesFolder2 and remotesFolder2:FindFirstChild("Underwater"))
       or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder")
         and replicatedStorage.RemotesFolder:FindFirstChild("Underwater"))
     if underwater then
       underwater:FireServer(true)
+    end
+    if root then
+      KnobFarm.Teleporting = true
+      root.CFrame = CFrame.new(root.Position.X, -500, root.Position.Z)
     end
   end)
   task.wait(1.0)
@@ -16900,6 +16942,22 @@ local function Tick()
     end)
   end
 
+  -- Комнаты 51–55 (коридор перед магазином Джеффа и сам магазин): выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке. В комнате 56+ включаем обратно.
+  if roomNum and roomNum >= 51 and roomNum <= 55 then
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    end
+  elseif roomNum and roomNum >= 56 and KnobFarm.NoclipBeforeJeff then
+    KnobFarm.NoclipBeforeJeff = nil
+    pcall(function()
+      if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+        toggles.PhantomNoclip:SetValue(true)
+      end
+    end)
+  end
+
   -- Комнаты 60 и 89–99: полный игнор — ничего не лутаем, ничего не ждём, не тянем рычаги,
   -- просто летим к двери следующей комнаты
   local isIgnoredRoom = (roomNum == 60) or (roomNum >= 89 and roomNum <= 99)
@@ -16914,12 +16972,8 @@ local function Tick()
 
   local currentLatest = GetLatestRoomNum() or 0
   local curRooms = workspace:FindFirstChild("CurrentRooms")
-  local runTo100 = toggles and toggles.AutoFarmRunTo100 and toggles.AutoFarmRunTo100.Value
-
-  -- Комната 49: если фарм до 100-й выключен — умираем здесь и начинаем новый забег.
-  -- (Раньше это срабатывало ВСЕГДА, игнорируя тумбler, из-за чего код комнат 50 и 100
-  -- был недостижим.)
-  if not runTo100 and ((roomNum and roomNum >= 49) or currentLatest >= 49) then
+  -- Комната 49: ресет персонажа ради быстрого перезапуска (Play Again)
+  if (roomNum and roomNum >= 49) or currentLatest >= 49 then
     ResetAtRoom49(char, hum)
     return
   end
@@ -16929,18 +16983,6 @@ local function Tick()
     local room50 = (curRooms and curRooms:FindFirstChild("50")) or room
     handleRoom50(room50, room50 and room50:FindFirstChild("Door"))
     return
-  end
-
-  -- Зона магазина Джеффа (комнаты 51–53: коридор, магазин Джеффа и выход): скип 3 дверей
-  local isJeffZone = (roomNum and roomNum >= 51 and roomNum <= 53)
-    or (room and (room:GetAttribute("JeffShop") or room:FindFirstChild("JeffShop", true)))
-  if isJeffZone then
-    if SkipCurrentDoor(room, roomNum, "Jeff Corridor/Shop Skip") then
-      return
-    else
-      task.wait(0.2)
-      return
-    end
   end
 
   -- Ждём пролёта Rush/Ambush (только вне зоны Seek и вне 50)
