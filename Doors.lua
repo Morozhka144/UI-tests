@@ -6005,13 +6005,7 @@ do
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
-        if state then
-          if obj.Name ~= "HumanoidRootPart" then
-            obj.CanCollide = false
-          end
-        else
-          obj.CanCollide = true
-        end
+        obj.CanCollide = not state
       end
     end
   end
@@ -6059,13 +6053,8 @@ do
       end
 
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
-      local maxTol = phantomTolerance
-      local hum = c and c:FindFirstChildWhichIsA("Humanoid")
-      if hum and hum.WalkSpeed and hum.WalkSpeed > 16 then
-        maxTol = math.max(maxTol, (hum.WalkSpeed * 0.1) + 2)
-      end
-      if distMoved > maxTol then
-        if (KnobFarm and (KnobFarm.Active or KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+      if distMoved > phantomTolerance then
+        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
           or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
           lastSafeCFrame = currRoot.CFrame
         else
@@ -13214,6 +13203,7 @@ KnobFarm.RunGold = 0
 KnobFarm.Teleporting = false
 KnobFarm.InLobby = false
 KnobFarm.DisabledNoclipForSeek = false
+KnobFarm.NoclipBeforeJeff = false
 KnobFarm.IgnoredDoors = setmetatable({}, { __mode = "k" })
 KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
 
@@ -13413,6 +13403,7 @@ local function ResetFarmState()
   -- и античит-«страж» PhantomNoclip переставал откатывать подозрительные телепорты до перезапуска.
   KnobFarm.Teleporting = false
   KnobFarm.DisabledNoclipForSeek = false
+  KnobFarm.NoclipBeforeJeff = false
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
@@ -16192,23 +16183,26 @@ local function handleRoom50(room, door)
     KnobFarm.IgnoredDoors[door51] = true
   end
 
-  -- Запоминаем текущую комнату: если дверь 52 уже открыли — 52, иначе 51 (чтобы Tick корректно открыл дверь 52)
-  if door52 and KnobFarm.OpenedDoors[door52] then
-    KnobFarm.CurrentRoomNum = 52
-    KnobFarm.LastRoomNum = 52
-  else
-    KnobFarm.CurrentRoomNum = 51
-    KnobFarm.LastRoomNum = 51
-  end
+  -- Запоминаем текущую комнату как минимум 51/52, чтобы бот никогда не шел назад в 50
+  KnobFarm.CurrentRoomNum = 52
+  KnobFarm.LastRoomNum = 52
   KnobFarm.PassedFirstDoor = true
   SetCrouched(false)
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.Teleporting = false
 
+  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке
   pcall(function()
     if toggles and toggles.Godmode and not toggles.Godmode.Value then
       toggles.Godmode:SetValue(true)
+    end
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    else
+      KnobFarm.NoclipBeforeJeff = true
     end
   end)
   KnobFarm.SetStatus("Room 50 completed! Resuming Knob Farm...")
