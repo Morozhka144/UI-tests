@@ -10948,11 +10948,6 @@ Groupboxes.StairwellMain:AddButton({
   Text = "Scrap Dropped Items",
   Tooltip = "Puts all of your dropped items into a scrapper",
   Callback = function() ScrapDroppedItems() end,
-}):AddKeyPicker("ScrapDroppedItemsKeybind", {
-  Text = "Scrap Dropped Items",
-  Default = "P",
-  Mode = "Press",
-  SyncToggleState = false,
 })
 
 Groupboxes.StairwellMain:AddToggle("StairwellChairFly", {
