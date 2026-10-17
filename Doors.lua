@@ -1107,6 +1107,22 @@ local function HasActiveThreat()
     end
   end
 
+  for _, child in ipairs(workspace:GetChildren()) do
+    if child and child:IsA("Model") then
+      local nm = child.Name
+      if nm:find("Rush") or nm:find("Ambush") or nm:find("Blitz") or nm:find("A60") or nm:find("A120") or nm:find("A-60") or nm:find("A-120") then
+        return true, child
+      end
+    end
+  end
+
+  if Functions and Functions.GetNearestEntity then
+    local near = Functions.GetNearestEntity()
+    if near then
+      return true, near
+    end
+  end
+
   return false, nil
 end
 
@@ -1238,6 +1254,18 @@ local function UnsinkGodmode()
 
     if character then
       character:SetAttribute("Crouching", false)
+      local col = character:FindFirstChild("Collision")
+      local colPart = character:FindFirstChild("CollisionPart")
+      local colClone = character:FindFirstChild("CollisionClone")
+      if col then col.CanTouch = true end
+      if colPart then colPart.CanTouch = true end
+      if colClone then colClone.CanTouch = true end
+      if humanoidRootPart then humanoidRootPart.CanTouch = true end
+      for _, p in ipairs(character:GetChildren()) do
+        if p:IsA("BasePart") then
+          p.CanTouch = true
+        end
+      end
     end
   end)
 
@@ -6289,7 +6317,13 @@ do
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
-        obj.CanCollide = not state
+        if state then
+          if obj.Name ~= "HumanoidRootPart" then
+            obj.CanCollide = false
+          end
+        else
+          obj.CanCollide = true
+        end
       end
     end
   end
@@ -6323,10 +6357,11 @@ do
     end)
 
     local postSim = runService.PostSimulation or runService.Heartbeat
-    antiTpConn = postSim:Connect(function()
+    antiTpConn = postSim:Connect(function(dt)
       if not phantomEnabled then return end
       local c = localPlayer2.Character
       local currRoot = c and c:FindFirstChild("HumanoidRootPart")
+      local hum = c and c:FindFirstChildOfClass("Humanoid")
       if not currRoot then
         lastSafeCFrame = nil
         return
@@ -6336,15 +6371,20 @@ do
         return
       end
 
+      -- При активном автофарме (KnobFarm) или скипе дверей никогда не откатываем позицию
+      if (KnobFarm and (KnobFarm.Active or KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+        or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
+        lastSafeCFrame = currRoot.CFrame
+        return
+      end
+
+      local currentSpeed = hum and hum.WalkSpeed or 20
+      local dynamicTolerance = math.max(phantomTolerance, currentSpeed * (dt or 0.1) * 2.5)
+
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
-      if distMoved > phantomTolerance then
-        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
-          or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
-          lastSafeCFrame = currRoot.CFrame
-        else
-          currRoot.CFrame = lastSafeCFrame
-          currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        end
+      if distMoved > dynamicTolerance then
+        currRoot.CFrame = lastSafeCFrame
+        currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
       else
         lastSafeCFrame = currRoot.CFrame
       end
@@ -7275,18 +7315,19 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
     UnsinkGodmode()
   end
 
+  if isGodmodeActive and CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
+    if humanoid.HipHeight ~= 0.05 then
+      humanoid.HipHeight = 0.05
+    end
+  end
+
   if (isGodmodeActive or (toggles.CrouchSpoof and toggles.CrouchSpoof.Value)) and remotesFolder2
     and remotesFolder2:FindFirstChild("Crouch") then
     remotesFolder2.Crouch:FireServer(true, true)
   end
 
-  if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel"
-    and not (workspace.CurrentCamera and workspace.CurrentCamera:FindFirstChild("MinecartRig")) then
-    humanoidRootPart.CanCollide = false
-  end
-
   for _, childPart in character:GetChildren() do
-    if childPart:IsA("BasePart") then
+    if childPart:IsA("BasePart") and childPart.Name ~= "HumanoidRootPart" then
       childPart.CanCollide = false
     end
   end
@@ -7294,6 +7335,17 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
   local collision2 = character:FindFirstChild("Collision")
   local collisionPart3 = character:FindFirstChild("CollisionPart")
   local collisionClone6 = character:FindFirstChild("CollisionClone")
+
+  local disableTouch = isGodmodeActive
+  if collision2 then pcall(function() collision2.CanTouch = not disableTouch end) end
+  if collisionPart3 then pcall(function() collisionPart3.CanTouch = not disableTouch end) end
+  if collisionClone6 then pcall(function() collisionClone6.CanTouch = not disableTouch end) end
+  if humanoidRootPart then pcall(function() humanoidRootPart.CanTouch = not disableTouch end) end
+  for _, part in ipairs(character:GetChildren()) do
+    if part:IsA("BasePart") then
+      pcall(function() part.CanTouch = not disableTouch end)
+    end
+  end
 
   if CurrentFloor == "OldHotel" or CurrentFloor == "Fools" then
     local functions4 = isGodmodeActive and Functions.GetNearestEntity() and 200
@@ -7343,7 +7395,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
       root4.C1 = val85.OriginalC1 * CFrame.new(0, isGodmodeActive and -2.346 or 0, 0)
     end
 
-    local val156 = isGodmodeActive and 2.328 or 0.18
+    local val156 = isGodmodeActive and -12 or 0.18
 
     if collision2 then
       collision2.Position = humanoidRootPart.Position + Vector3.new(0, val156, 0)
@@ -7355,7 +7407,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
 
     if collision2 and collision2:FindFirstChild("CollisionCrouch") and collisionClone6
       and collisionClone6:FindFirstChild("CollisionCrouch") then
-      local val157 = isGodmodeActive and 1.328 or -0.982
+      local val157 = isGodmodeActive and -12 or -0.982
 
       collision2.CollisionCrouch.Position = humanoidRootPart.Position
         + Vector3.new(0, val157, 0)
@@ -7365,7 +7417,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
 
     if collisionClone6 and collisionClone6:FindFirstChild("CollisionCrouch") then
       collisionClone6.CollisionCrouch.Position = humanoidRootPart.Position
-        + Vector3.new(0, isGodmodeActive and 0.75 or -0.982, 0)
+        + Vector3.new(0, isGodmodeActive and -12 or -0.982, 0)
     end
   end
 
@@ -7373,7 +7425,7 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
     collisionClone6.CollisionGroup = collision2.CollisionGroup
 
     collisionClone6.Position = humanoidRootPart.Position
-      + Vector3.new(0, isGodmodeActive and 1.75 or 0.18, 0)
+      + Vector3.new(0, isGodmodeActive and -12 or 0.18, 0)
   end
 
   local crouch7 = remotesFolder2 and remotesFolder2:FindFirstChild("Crouch")
@@ -16969,8 +17021,13 @@ local function handleRoom50(room, door)
   end
 
   -- Запоминаем текущую комнату как минимум 51/52, чтобы бот никогда не шел назад в 50
-  KnobFarm.CurrentRoomNum = 52
-  KnobFarm.LastRoomNum = 52
+  if door52 and KnobFarm.OpenedDoors[door52] then
+    KnobFarm.CurrentRoomNum = 52
+    KnobFarm.LastRoomNum = 52
+  else
+    KnobFarm.CurrentRoomNum = 51
+    KnobFarm.LastRoomNum = 51
+  end
   KnobFarm.PassedFirstDoor = true
   SetCrouched(false)
   KnobFarm.DisableGodmodeForBoss = false
