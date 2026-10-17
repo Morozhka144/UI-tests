@@ -1683,10 +1683,9 @@ Executor = {
 
 Groupboxes.HomeFunctions = element3.Home:AddLeftGroupbox("Functions & Features")
 
-function CheckMark(val90)
-  return val90 and "✅" or "❌"
+local function helper20(val90)
+  return ""
 end
-local helper20 = CheckMark
 
 hasFirePrompt = Executor.fireproximityprompt ~= nil
 hasFireTouch = Executor.firetouchinterest ~= nil
@@ -3519,7 +3518,7 @@ end)
 Groupboxes.Exploits = element3.Exploits:AddLeftGroupbox("Exploits")
 
 Groupboxes.Exploits:AddToggle("CrouchSpoof", {
-  Text = "Crouch Spoof " .. (CheckMark and CheckMark(hasHookMeta) or (hasHookMeta and "✅" or "❌")) .. " (hookmetamethod)",
+  Text = "Crouch Spoof",
   Default = false,
   Tooltip = "Spoofs crouching without making you crouch, so you can walk at full speed while crouching",
 })
@@ -11260,7 +11259,7 @@ end
 
 Groupboxes.SubfloorsMonument = element3.Garden:AddLeftGroupbox("Monument")
 Groupboxes.SubfloorsMonument:AddToggle("BypassMonument", {
-  Text = "Anti Monument " .. (CheckMark and CheckMark(hasHookMeta) or (hasHookMeta and "✅" or "❌")) .. " (hookmetamethod)",
+  Text = "Anti Monument",
   Default = false,
   Tooltip = "Spoofs your look angle so that Monument cannot harm you",
 })
