@@ -16209,7 +16209,36 @@ local function handleRoom50(room, door)
   task.wait(0.5)
 end
 
+-- Комната 100: самоубийство ради быстрого Play Again (пока прохождение 100-й двери не сделано)
+local function ResetAtRoom100(char, hum)
+  KnobFarm.SetStatus("Door 100 reached! Resetting character for Play Again...")
+  pcall(function()
+    if toggles and toggles.Godmode and toggles.Godmode.Value then
+      toggles.Godmode:SetValue(false)
+    end
+  end)
+  pcall(function()
+    char = char or (localPlayer2 and localPlayer2.Character)
+    hum = hum or (char and char:FindFirstChildOfClass("Humanoid"))
+    if hum then hum.Health = 0 end
+    if char then char:BreakJoints() end
+    local underwater = (remotesFolder2 and remotesFolder2:FindFirstChild("Underwater"))
+      or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder")
+        and replicatedStorage.RemotesFolder:FindFirstChild("Underwater"))
+    if underwater then
+      underwater:FireServer(true)
+    end
+  end)
+  task.wait(1.0)
+end
+
 local function handleRoom100(room)
+  local char = localPlayer2 and localPlayer2.Character
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  ResetAtRoom100(char, hum)
+end
+
+local function solveRoom100_Legacy(room)
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
