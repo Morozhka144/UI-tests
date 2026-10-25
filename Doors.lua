@@ -6005,7 +6005,11 @@ do
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
-        obj.CanCollide = not state
+        if state and obj.Name == "HumanoidRootPart" then
+          -- оставляем HRP с коллизиями, иначе бот проваливается сквозь пол
+        else
+          obj.CanCollide = not state
+        end
       end
     end
   end
@@ -6054,7 +6058,7 @@ do
 
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
       if distMoved > phantomTolerance then
-        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+        if (KnobFarm and (KnobFarm.Active or KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
           or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
           lastSafeCFrame = currRoot.CFrame
         else
@@ -7308,6 +7312,22 @@ LockPromptNames = {
 local function helper53(val159)
   if element25.Blacklist[val159.Name] then
     return
+  end
+
+  -- В комнате 50 (библиотека Фигуры) авто-интеракт не трогает тумбочки/ящики:
+  -- открытие ящиков шумит и привлекает Фигуру
+  if KnobFarm and (KnobFarm.CurrentRoomNum == 50) then
+    local pName = val159.Parent and val159.Parent.Name or ""
+    local pNameLower = pName:lower()
+    local objText = (val159.ObjectText or ""):lower()
+    local actText = (val159.ActionText or ""):lower()
+    if pNameLower:find("drawer", 1, true) or pNameLower:find("nightstand", 1, true)
+      or pNameLower:find("dresser", 1, true) or pNameLower:find("chest", 1, true)
+      or objText:find("drawer", 1, true) or objText:find("nightstand", 1, true)
+      or objText:find("chest", 1, true)
+      or actText == "open" or actText == "search" or actText == "loot" then
+      return
+    end
   end
 
   if val159:FindFirstAncestor("ArchivesWaitingSeats") or val159:FindFirstAncestor("ArchivesTrashcan")
@@ -14467,6 +14487,20 @@ end
 
 local function IsLootablePrompt(prompt)
   if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
+  -- В комнате 50 (библиотека) тумбочки/ящики не лутаем — шум привлекает Фигуру
+  if KnobFarm and (KnobFarm.CurrentRoomNum == 50) then
+    local pp = prompt.Parent
+    local ppName = pp and pp.Name:lower() or ""
+    local obj50 = (prompt.ObjectText or ""):lower()
+    local act50 = (prompt.ActionText or ""):lower()
+    if ppName:find("drawer", 1, true) or ppName:find("nightstand", 1, true)
+      or ppName:find("dresser", 1, true) or ppName:find("chest", 1, true)
+      or obj50:find("drawer", 1, true) or obj50:find("nightstand", 1, true)
+      or obj50:find("chest", 1, true)
+      or act50 == "open" or act50 == "search" or act50 == "loot" then
+      return false
+    end
+  end
   local parent = prompt.Parent
   if not parent then return false end
   local pName = parent.Name
