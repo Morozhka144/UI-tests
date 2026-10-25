@@ -17156,7 +17156,6 @@ function KnobFarm.Stop()
   end
   ResetRecoveryState()
   ResetFarmState()
-  SetCrouched(false)
 
   pcall(function()
     if options and options.Walkspeed and KnobFarm.PreviousWalkSpeed then
