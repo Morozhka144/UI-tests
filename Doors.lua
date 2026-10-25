@@ -15795,6 +15795,102 @@ NavigateTo = function(targetPos, targetInstance, label, maxWaitTime, targetType)
   return (root.Position - floorPos).Magnitude <= 6
 end
 
+-- Полёт для комнаты 100 (лестницы, на которых ходьба проваливается под карту).
+-- Летим по прямой к цели на высоте FLY_CRUISE_HEIGHT над полом ПОД СОБОЙ (на лестнице высота
+-- сама следует за ступенями) и снижаемся только в последние FLY_LAND_DIST метров.
+-- Это отдельный BodyVelocity, а не тумблер FlyToggle (тот управляется камерой и клавишами).
+-- Всё хранится в полях KnobFarm: лимит в 200 локалей на функцию уже почти исчерпан.
+local FLY_CRUISE_HEIGHT = 5
+local FLY_LAND_DIST = 8
+
+function KnobFarm.StopFly()
+  if KnobFarm.FlyConn then
+    pcall(function() KnobFarm.FlyConn:Disconnect() end)
+    KnobFarm.FlyConn = nil
+  end
+  if KnobFarm.FlyBody then
+    pcall(function() KnobFarm.FlyBody:Destroy() end)
+    KnobFarm.FlyBody = nil
+  end
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if hum then hum.PlatformStand = false end
+  if root then
+    root.CanCollide = true   -- PhantomNoclip оставляет HRP с коллизиями, возвращаем как было
+    root.AssemblyLinearVelocity = Vector3.zero
+  end
+end
+
+-- Возвращает true, если долетели (до 6 студов по плоскости от цели).
+function KnobFarm.FlyTo(targetPos, label, timeout)
+  if not targetPos or not KnobFarm.Active or _Unloading then return false end
+  local char = localPlayer2 and localPlayer2.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not root or not hum or hum.Health <= 0 then return false end
+
+  KnobFarm.StopFly()
+  -- Обычный Noclip не нужен (он и роняет бота под карту), нужен только Phantom
+  pcall(function()
+    if toggles and toggles.Noclip and toggles.Noclip.Value then
+      toggles.Noclip:SetValue(false)
+    end
+    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+      toggles.PhantomNoclip:SetValue(true)
+    end
+  end)
+
+  local targetFloor = GetFloorPosition(targetPos)
+  local landY = (targetFloor and targetFloor.Y or (targetPos.Y - 2)) + 3   -- центр HRP стоящего персонажа
+  local speed = GetFarmSpeed()
+  KnobFarm.SetStatus("Flying to " .. (label or "target") .. "...")
+
+  local body = Instance.new("BodyVelocity")
+  body.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+  body.P = 1e5
+  body.Velocity = Vector3.zero
+  body.Parent = root
+  KnobFarm.FlyBody = body
+  hum.PlatformStand = true
+  KnobFarm.FlyConn = runService.Stepped:Connect(function()
+    root.CanCollide = false
+  end)
+
+  local started = tick()
+  local arrived = false
+  local flat = math.huge
+  while tick() - started < (timeout or 30) and KnobFarm.Active and not _Unloading
+    and hum.Health > 0 and body.Parent and root.Parent do
+    local pos = root.Position
+    local dx, dz = targetPos.X - pos.X, targetPos.Z - pos.Z
+    flat = math.sqrt(dx * dx + dz * dz)
+
+    local desiredY
+    if flat < FLY_LAND_DIST then
+      desiredY = landY
+    else
+      local hasFloor, floorHit = HasFloorUnder(pos, 40)
+      desiredY = ((hasFloor and floorHit) and floorHit.Y or (pos.Y - 3)) + FLY_CRUISE_HEIGHT
+    end
+
+    if flat <= 2.5 and math.abs(pos.Y - landY) <= 3 then
+      arrived = true
+      break
+    end
+
+    local vy = math.clamp((desiredY - pos.Y) * 5, -speed, speed)
+    local hs = math.min(speed, flat * 4 + 2)
+    local hx, hz = 0, 0
+    if flat > 0.1 then hx, hz = dx / flat * hs, dz / flat * hs end
+    body.Velocity = Vector3.new(hx, vy, hz)
+    task.wait()
+  end
+
+  KnobFarm.StopFly()
+  return arrived or flat <= 6
+end
+
 -- ═══════════════════════════════════════════════════════════════════
 -- BOSS ROOM SOLVERS (Room 50 and Room 100)
 -- ═══════════════════════════════════════════════════════════════════
@@ -16285,12 +16381,6 @@ local function ResetAtRoom100(char, hum)
   task.wait(1.0)
 end
 
-local function handleRoom100(room)
-  local char = localPlayer2 and localPlayer2.Character
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  ResetAtRoom100(char, hum)
-end
-
 local function solveRoom100_Legacy(room)
   local char = localPlayer2 and localPlayer2.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -16311,17 +16401,18 @@ local function solveRoom100_Legacy(room)
     task.wait(0.5)
   end
 
-  -- Подготовка: отключаем годмод для босса, включаем обычный Noclip (чтобы идти пешком сквозь объекты)
+  -- Подготовка: отключаем годмод для босса. Обычный Noclip выключен (на лестницах он ронял бота под карту),
+  -- сквозь объекты летим с PhantomNoclip.
   KnobFarm.DisableGodmodeForBoss = true
   pcall(function()
     if toggles and toggles.Godmode and toggles.Godmode.Value then
       toggles.Godmode:SetValue(false)
     end
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(false)
+    if toggles and toggles.Noclip and toggles.Noclip.Value then
+      toggles.Noclip:SetValue(false)
     end
-    if toggles and toggles.Noclip and not toggles.Noclip.Value then
-      toggles.Noclip:SetValue(true)
+    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
+      toggles.PhantomNoclip:SetValue(true)
     end
   end)
 
@@ -16402,9 +16493,7 @@ local function solveRoom100_Legacy(room)
       WaitFigureClear(fPos, 15)
       KnobFarm.SetStatus("Room 100: Walking to Fuse/Switch (avoiding Figure)...")
       local floorPos = GetFloorPosition(fPos) or fPos
-      if NavigateTo then
-        NavigateTo(floorPos, targetFuse, "Fuse", 8.0, "Loot")
-      end
+      KnobFarm.FlyTo(floorPos, "Fuse")
 
       local curChar = localPlayer2 and localPlayer2.Character
       local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
@@ -16430,9 +16519,7 @@ local function solveRoom100_Legacy(room)
     if kPos then
       WaitFigureClear(kPos, 20)
       local floorPos = GetFloorPosition(kPos) or kPos
-      if NavigateTo then
-        NavigateTo(floorPos, elecKey, "Electrical Key", 12.0, "Key")
-      end
+      KnobFarm.FlyTo(floorPos, "Electrical Key")
 
       local curChar = localPlayer2 and localPlayer2.Character
       local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
@@ -16463,9 +16550,7 @@ local function solveRoom100_Legacy(room)
     if lPos then
       WaitFigureClear(lPos, 15)
       local floorPos = GetFloorPosition(lPos) or lPos
-      if NavigateTo then
-        NavigateTo(floorPos, lever, "Gate Lever", 10.0, "Lever")
-      end
+      KnobFarm.FlyTo(floorPos, "Gate Lever")
       WaitFigureClear(lPos, 15)   -- Фигура подошла, пока шли — ждём, пока отойдёт
       local lPr = (lever:IsA("ProximityPrompt") and lever) or lever:FindFirstChildWhichIsA("ProximityPrompt", true)
       if lPr then
@@ -16503,9 +16588,7 @@ local function solveRoom100_Legacy(room)
       local lPos = lockPart.Position
       WaitFigureClear(lPos, 20)
       local floorPos = GetFloorPosition(lPos) or lPos
-      if NavigateTo then
-        NavigateTo(floorPos, elecDoor or lockPart, "Electrical Door", 10.0, "Door")
-      end
+      KnobFarm.FlyTo(floorPos, "Electrical Door")
       WaitFigureClear(lPos, 15)
       local lockPrompt = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
         or (elecDoor and elecDoor:FindFirstChildWhichIsA("ProximityPrompt", true))
@@ -16526,9 +16609,7 @@ local function solveRoom100_Legacy(room)
     if bPos then
       WaitFigureClear(bPos, 20)
       local floorPos = GetFloorPosition(bPos) or bPos
-      if NavigateTo then
-        NavigateTo(floorPos, breaker, "Breaker Panel", 12.0, "Loot")
-      end
+      KnobFarm.FlyTo(floorPos, "Breaker Panel")
 
       WaitFigureClear(bPos, 15)
       -- Вставляем собранные предохранители в щиток
@@ -16600,6 +16681,19 @@ local function solveRoom100_Legacy(room)
   KnobFarm.SetStatus("Game Completed! Waiting for Play Again...")
   task.wait(4.0)
   RequestPlayAgain()
+end
+
+-- Переключатель: true — проходим 100 комнату полётом, false — прежний быстрый ресет персонажа
+KnobFarm.SolveRoom100 = true
+
+local function handleRoom100(room)
+  if KnobFarm.SolveRoom100 then
+    solveRoom100_Legacy(room)
+    return
+  end
+  local char = localPlayer2 and localPlayer2.Character
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  ResetAtRoom100(char, hum)
 end
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -17192,6 +17286,7 @@ function KnobFarm.Stop()
   end
   ResetRecoveryState()
   ResetFarmState()
+  KnobFarm.StopFly()   -- task.cancel не снимает BodyVelocity полёта
 
   pcall(function()
     if options and options.Walkspeed and KnobFarm.PreviousWalkSpeed then
