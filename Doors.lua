@@ -6005,13 +6005,7 @@ do
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
-        if state then
-          if obj.Name ~= "HumanoidRootPart" then
-            obj.CanCollide = false
-          end
-        else
-          obj.CanCollide = true
-        end
+        obj.CanCollide = not state
       end
     end
   end
@@ -6045,7 +6039,7 @@ do
     end)
 
     local postSim = runService.PostSimulation or runService.Heartbeat
-    antiTpConn = postSim:Connect(function(dt)
+    antiTpConn = postSim:Connect(function()
       if not phantomEnabled then return end
       local c = localPlayer2.Character
       local currRoot = c and c:FindFirstChild("HumanoidRootPart")
@@ -6058,23 +6052,15 @@ do
         return
       end
 
-      -- Если активен автофарм (любое перемещение/ходьба/телепорт) или скип двери —
-      -- никогда не откатывать бота назад и не сбрасывать скорость
-      if (KnobFarm and (KnobFarm.Active or KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
-        or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
-        lastSafeCFrame = currRoot.CFrame
-        return
-      end
-
-      local hum = c:FindFirstChildOfClass("Humanoid")
-      local speed = (hum and hum.WalkSpeed) or 20
-      local stepDt = (typeof(dt) == "number" and dt > 0) and dt or 0.033
-      local dynamicTolerance = math.max(phantomTolerance, speed * stepDt * 2.5 + 4)
-
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
-      if distMoved > dynamicTolerance then
-        currRoot.CFrame = lastSafeCFrame
-        currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+      if distMoved > phantomTolerance then
+        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+          or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
+          lastSafeCFrame = currRoot.CFrame
+        else
+          currRoot.CFrame = lastSafeCFrame
+          currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        end
       else
         lastSafeCFrame = currRoot.CFrame
       end
@@ -16111,6 +16097,20 @@ local function handleRoom50(room, door)
       end
     end)
   end
+
+  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке
+  pcall(function()
+    if toggles and toggles.Godmode and not toggles.Godmode.Value then
+      toggles.Godmode:SetValue(true)
+    end
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    else
+      KnobFarm.NoclipBeforeJeff = true
+    end
+  end)
 
   -- Проходим сквозь дверной проем 51 строго вперед (к коридору 51, никогда не назад!)
   local curChar = localPlayer2 and localPlayer2.Character
