@@ -6005,11 +6005,7 @@ do
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
-        if state and obj.Name == "HumanoidRootPart" then
-          -- оставляем HRP с коллизиями, иначе бот проваливается сквозь пол
-        else
-          obj.CanCollide = not state
-        end
+        obj.CanCollide = not state
       end
     end
   end
@@ -6058,7 +6054,7 @@ do
 
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
       if distMoved > phantomTolerance then
-        if (KnobFarm and (KnobFarm.Active or KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
           or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
           lastSafeCFrame = currRoot.CFrame
         else
