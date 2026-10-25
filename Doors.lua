@@ -16378,8 +16378,10 @@ local function solveRoom100_Legacy(room)
       if dist <= 14.0 then
         CollectBossItem(targetFuse)
         task.wait(0.2)
+        KnobFarm.LootedObjects[targetFuse] = true
       end
-      KnobFarm.LootedObjects[targetFuse] = true
+      -- Если бот не дошёл до предохранителя (dist > 14), НЕ помечаем его как собранный:
+      -- следующая итерация while-цикла снова попытается подойти к нему
     end
   end
 
