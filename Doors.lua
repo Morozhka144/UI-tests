@@ -2296,7 +2296,7 @@ Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmLootDrawers", {
 
 Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmRunTo100", {
   Text = "Farm to Door 100",
-  Default = false,
+  Default = true,
   Tooltip = "OFF: фарм до комнаты 49, затем смерть и Play Again (быстрые заходы, для ночного AFK). ON: проходит Библиотеку (50) и доходит до лифта (100).",
 })
 
@@ -6005,7 +6005,13 @@ do
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
-        obj.CanCollide = not state
+        if state then
+          if obj.Name ~= "HumanoidRootPart" then
+            obj.CanCollide = false
+          end
+        else
+          obj.CanCollide = true
+        end
       end
     end
   end
@@ -6039,7 +6045,7 @@ do
     end)
 
     local postSim = runService.PostSimulation or runService.Heartbeat
-    antiTpConn = postSim:Connect(function()
+    antiTpConn = postSim:Connect(function(dt)
       if not phantomEnabled then return end
       local c = localPlayer2.Character
       local currRoot = c and c:FindFirstChild("HumanoidRootPart")
@@ -6052,15 +6058,23 @@ do
         return
       end
 
+      -- Если активен автофарм (любое перемещение/ходьба/телепорт) или скип двери —
+      -- никогда не откатывать бота назад и не сбрасывать скорость
+      if (KnobFarm and (KnobFarm.Active or KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
+        or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
+        lastSafeCFrame = currRoot.CFrame
+        return
+      end
+
+      local hum = c:FindFirstChildOfClass("Humanoid")
+      local speed = (hum and hum.WalkSpeed) or 20
+      local stepDt = (typeof(dt) == "number" and dt > 0) and dt or 0.033
+      local dynamicTolerance = math.max(phantomTolerance, speed * stepDt * 2.5 + 4)
+
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
-      if distMoved > phantomTolerance then
-        if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
-          or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
-          lastSafeCFrame = currRoot.CFrame
-        else
-          currRoot.CFrame = lastSafeCFrame
-          currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        end
+      if distMoved > dynamicTolerance then
+        currRoot.CFrame = lastSafeCFrame
+        currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
       else
         lastSafeCFrame = currRoot.CFrame
       end
@@ -16184,8 +16198,13 @@ local function handleRoom50(room, door)
   end
 
   -- Запоминаем текущую комнату как минимум 51/52, чтобы бот никогда не шел назад в 50
-  KnobFarm.CurrentRoomNum = 52
-  KnobFarm.LastRoomNum = 52
+  if door52 and KnobFarm.OpenedDoors and KnobFarm.OpenedDoors[door52] then
+    KnobFarm.CurrentRoomNum = 52
+    KnobFarm.LastRoomNum = 52
+  else
+    KnobFarm.CurrentRoomNum = 51
+    KnobFarm.LastRoomNum = 51
+  end
   KnobFarm.PassedFirstDoor = true
   SetCrouched(false)
   KnobFarm.DisableGodmodeForBoss = false
@@ -16972,14 +16991,16 @@ local function Tick()
 
   local currentLatest = GetLatestRoomNum() or 0
   local curRooms = workspace:FindFirstChild("CurrentRooms")
-  -- Комната 49: ресет персонажа ради быстрого перезапуска (Play Again)
-  if (roomNum and roomNum >= 49) or currentLatest >= 49 then
+  local runTo100 = not (toggles and toggles.AutoFarmRunTo100 and not toggles.AutoFarmRunTo100.Value)
+
+  -- Комната 49: самоубийство ради быстрого Play Again (только если «Farm to Door 100» явно выключен)
+  if not runTo100 and ((roomNum and roomNum >= 49) or currentLatest >= 49) then
     ResetAtRoom49(char, hum)
     return
   end
 
   -- Комната 50 (Фигура + библиотека)
-  if runTo100 and (roomNum == 50 or currentLatest == 50) then
+  if roomNum == 50 or currentLatest == 50 then
     local room50 = (curRooms and curRooms:FindFirstChild("50")) or room
     handleRoom50(room50, room50 and room50:FindFirstChild("Door"))
     return
@@ -16993,7 +17014,7 @@ local function Tick()
   -- Комната 100 (электрощит, лифт)
   -- Только когда бот реально В комнате 100. Раньше хватало LatestRoom >= 100: бот ещё стоял в 99-й,
   -- объекты 100-й не успевали загрузиться, список предохранителей был пуст, и он сразу шёл к рычагу.
-  if runTo100 and roomNum and roomNum >= 100 then
+  if roomNum and roomNum >= 100 then
     local room100 = (curRooms and curRooms:FindFirstChild("100")) or room
     handleRoom100(room100)
     return
