@@ -46,7 +46,9 @@ _G.LegitTagFOV = 0.6
 _G.LegitTagWallCheck = true
 _G.AuraLegitMode = false
 _G.AuraFaceTarget = false
+_G.AuraFaceSmooth = 0.6 -- 0 = мгновенный поворот, ближе к 1 = плавнее
 _G.AuraTagDelay = 0.35
+_G.Whitelist = {} -- [Player.Name] = true: этих игроков аура не трогает
 
 _G.AutoParryEnabled = false
 _G.AutoParryMode = "Smart" -- "Smart" (по анимации атаки) или "Proximity" (всегда рядом)
@@ -57,13 +59,20 @@ _G.ForceParrying = false
 _G.EspEnabled = false
 _G.EspMaxDistance = 600
 _G.ShowHighlights = true
-_G.HighlightFillTransparency = 0.5
+_G.HighlightFillTransparency = 0.75
 _G.HighlightOutlineTransparency = 0.0
+_G.EspBoxStyle = "Corners" -- "Corners" или "Full"
+_G.EspBoxFill = true
+_G.EspFillOpacity = 0.12
+_G.EspArrows = true
+_G.EspHealthBar = false
+_G.EspSkeleton = false
+_G.EspTextSize = 13
 _G.ShowNames = true
 _G.ShowRoles = true
 _G.ShowDistance = true
 _G.ShowShieldStatus = true
-_G.ShowBoxes = false
+_G.ShowBoxes = true
 _G.ShowTracers = false
 _G.TracerOrigin = "Bottom"
 _G.TracerThickness = 1.5
@@ -83,6 +92,10 @@ _G.ForceUnlockTagging = true
 local function getHRP()
     local char = LocalPlayer.Character
     return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function isWhitelisted(player)
+    return player ~= nil and _G.Whitelist[player.Name] == true
 end
 
 local function getModifiersRole()
@@ -383,6 +396,8 @@ local FFA_ROLES = {
 }
 
 local function shouldSkipTarget(char, targetPlayer, myRole)
+    if isWhitelisted(targetPlayer) then return true end
+
     local targetRole = targetPlayer and getRole(targetPlayer)
 
     -- Проверка неуязвимости / щита спавна
@@ -435,10 +450,24 @@ local function findAuraTarget(hrp, legit)
     return best
 end
 
+local lastFaceTick = os.clock()
+
 local function faceTarget(hrp, targetHRP)
+    local now = os.clock()
+    local dt = math.clamp(now - lastFaceTick, 0, 0.1)
+    lastFaceTick = now
+
     local flat = Vector3.new(targetHRP.Position.X - hrp.Position.X, 0, targetHRP.Position.Z - hrp.Position.Z)
     if flat.Magnitude < 0.05 then return end
-    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat)
+    local goal = CFrame.lookAt(hrp.Position, hrp.Position + flat)
+
+    local smooth = math.clamp(_G.AuraFaceSmooth or 0, 0, 0.98)
+    if smooth <= 0 then
+        hrp.CFrame = goal
+    else
+        -- не зависит от FPS: доля пути за кадр = 1 - smooth^(dt*60)
+        hrp.CFrame = hrp.CFrame:Lerp(goal, 1 - smooth ^ (dt * 60))
+    end
 end
 
 local function compressAngle(angle)
@@ -707,8 +736,34 @@ local function getRoleColor(role) return roleColors[role] or Color3.fromRGB(255,
 -- ============================================================
 -- [[ ESP SYSTEM ]] --
 -- ============================================================
-local selectedCategories = {"Enemies"}
+-- Drawing-based ESP. Slow data (role, shield, names, rig, chams) is refreshed ~7x/sec;
+-- only projection + drawing writes run per frame, and a write is skipped when the value did not change.
+local selectedCategories = {"Enemies", "Friends"}
 local espCache = {}
+local drawShadow = setmetatable({}, { __mode = "k" }) -- last value written to each Drawing property
+
+local HAS_DRAWING = Drawing ~= nil and Drawing.new ~= nil
+local ESP_BLACK = Color3.new(0, 0, 0)
+local ESP_WHITE = Color3.new(1, 1, 1)
+local ESP_DIM = Color3.fromRGB(190, 190, 200)
+local FRIEND_COLOR = Color3.fromRGB(90, 255, 170)
+local SHIELD_COLOR = Color3.fromRGB(255, 215, 0)
+local HP_LOW = Color3.fromRGB(255, 60, 60)
+local HP_HIGH = Color3.fromRGB(70, 255, 110)
+local ESP_FONT = (HAS_DRAWING and Drawing.Fonts and Drawing.Fonts.Plex) or 2
+local GROUP_KEYS = { "box", "corners", "fill", "text", "hp", "skel", "tracer", "arrow" }
+
+local R15_BONES = {
+    {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
+    {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"},
+    {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"},
+    {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"},
+    {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"},
+}
+local R6_BONES = {
+    {"Head", "Torso"}, {"Torso", "Left Arm"}, {"Torso", "Right Arm"},
+    {"Torso", "Left Leg"}, {"Torso", "Right Leg"},
+}
 
 local function shouldShowPlayer(player)
     if not player or player == LocalPlayer then return false end
@@ -720,6 +775,7 @@ local function shouldShowPlayer(player)
 
     for _, cat in ipairs(selectedCategories) do
         if cat == "All" then return true end
+        if cat == "Friends" and isWhitelisted(player) then return true end
         if cat == "Enemies" and isEnemy(player) then return true end
         if cat == "My Team" and isMyTeam(player) then return true end
         if cat == "Frozen" and isFrozen(player) then return true end
@@ -728,289 +784,538 @@ local function shouldShowPlayer(player)
     return false
 end
 
-local function getOrCreateEspCache(player)
-    if not espCache[player] then
-        espCache[player] = {}
+-- [[ drawing helpers ]] --
+local function newDraw(kind, props)
+    local d = Drawing.new(kind)
+    local shadow = {}
+    drawShadow[d] = shadow
+    for k, v in pairs(props) do
+        d[k] = v
+        shadow[k] = v
     end
-    return espCache[player]
+    return d
 end
 
-local function hidePlayerEsp(player)
-    local cache = espCache[player]
-    if not cache then return end
-    if cache.Highlight then cache.Highlight.Enabled = false end
-    if cache.Billboard then cache.Billboard.Enabled = false end
-    if cache.Box then cache.Box.Visible = false end
-    if cache.BoxOutline then cache.BoxOutline.Visible = false end
-    if cache.Tracer then cache.Tracer.Visible = false end
+local function put(d, k, v)
+    local shadow = drawShadow[d]
+    if shadow[k] ~= v then
+        shadow[k] = v
+        d[k] = v
+    end
+end
+
+local function newGroup(list)
+    return { list = list, shown = false }
+end
+
+local function showGroup(g, on)
+    if not g or g.shown == on then return end
+    g.shown = on
+    for _, d in ipairs(g.list) do put(d, "Visible", on) end
+end
+
+local function removeGroup(g)
+    if not g then return end
+    for _, d in ipairs(g.list) do
+        drawShadow[d] = nil
+        pcall(function() d:Remove() end)
+    end
+end
+
+local function ensureBox(c)
+    if c.box then return c.box end
+    if not HAS_DRAWING then return nil end
+    c.boxOut = newDraw("Square", { Thickness = 3, Filled = false, Color = ESP_BLACK, Transparency = 0.6, Visible = false })
+    c.boxMain = newDraw("Square", { Thickness = 1.5, Filled = false, Visible = false })
+    c.box = newGroup({ c.boxOut, c.boxMain })
+    return c.box
+end
+
+local function ensureFill(c)
+    if c.fill then return c.fill end
+    if not HAS_DRAWING then return nil end
+    c.fillSq = newDraw("Square", { Thickness = 0, Filled = true, Visible = false })
+    c.fill = newGroup({ c.fillSq })
+    return c.fill
+end
+
+local function ensureCorners(c)
+    if c.corners then return c.corners end
+    if not HAS_DRAWING then return nil end
+    local list, outs, mains = {}, {}, {}
+    for i = 1, 8 do
+        outs[i] = newDraw("Line", { Thickness = 3, Color = ESP_BLACK, Transparency = 0.6, Visible = false })
+        list[#list + 1] = outs[i]
+    end
+    for i = 1, 8 do
+        mains[i] = newDraw("Line", { Thickness = 1.5, Visible = false })
+        list[#list + 1] = mains[i]
+    end
+    c.cornerOuts, c.cornerMains = outs, mains
+    c.corners = newGroup(list)
+    return c.corners
+end
+
+local function ensureText(c)
+    if c.text then return c.text end
+    if not HAS_DRAWING then return nil end
+    local function mk()
+        return newDraw("Text", { Center = true, Outline = true, OutlineColor = ESP_BLACK, Font = ESP_FONT, Size = 13, Visible = false })
+    end
+    c.nameT, c.roleT, c.distT, c.shieldT = mk(), mk(), mk(), mk()
+    c.text = newGroup({ c.nameT, c.roleT, c.distT, c.shieldT })
+    return c.text
+end
+
+local function ensureHp(c)
+    if c.hp then return c.hp end
+    if not HAS_DRAWING then return nil end
+    c.hpBg = newDraw("Square", { Thickness = 0, Filled = true, Color = ESP_BLACK, Transparency = 0.7, Visible = false })
+    c.hpFill = newDraw("Square", { Thickness = 0, Filled = true, Visible = false })
+    c.hp = newGroup({ c.hpBg, c.hpFill })
+    return c.hp
+end
+
+local function ensureSkel(c, n)
+    if c.skel and #c.skel.list >= n then return c.skel end
+    removeGroup(c.skel)
+    if not HAS_DRAWING then return nil end
+    local list = {}
+    for i = 1, n do
+        list[i] = newDraw("Line", { Thickness = 1.2, Visible = false })
+    end
+    c.skel = newGroup(list)
+    return c.skel
+end
+
+local function ensureTracer(c)
+    if c.tracer then return c.tracer end
+    if not HAS_DRAWING then return nil end
+    c.tracerLine = newDraw("Line", { Thickness = 1.5, Visible = false })
+    c.tracer = newGroup({ c.tracerLine })
+    return c.tracer
+end
+
+local function ensureArrow(c)
+    if c.arrow then return c.arrow end
+    if not HAS_DRAWING then return nil end
+    c.arrowFill = newDraw("Triangle", { Filled = true, Thickness = 1, Visible = false })
+    c.arrowEdge = newDraw("Triangle", { Filled = false, Thickness = 1, Color = ESP_BLACK, Transparency = 0.8, Visible = false })
+    c.arrow = newGroup({ c.arrowFill, c.arrowEdge })
+    return c.arrow
+end
+
+local function hideEspDrawings(c)
+    for _, key in ipairs(GROUP_KEYS) do showGroup(c[key], false) end
+    if c.highlight then c.highlight.Enabled = false end
+end
+
+local function hideAllEsp()
+    for _, c in pairs(espCache) do hideEspDrawings(c) end
+end
+
+local function destroyEsp(c)
+    for _, key in ipairs(GROUP_KEYS) do removeGroup(c[key]) end
+    if c.highlight then pcall(function() c.highlight:Destroy() end) end
 end
 
 local function clearPlayerEsp(player)
-    local cache = espCache[player]
-    if not cache then return end
-    if cache.Highlight then pcall(function() cache.Highlight:Destroy() end) end
-    if cache.Billboard then pcall(function() cache.Billboard:Destroy() end) end
-    if cache.Box then pcall(function() cache.Box:Remove() end) end
-    if cache.BoxOutline then pcall(function() cache.BoxOutline:Remove() end) end
-    if cache.Tracer then pcall(function() cache.Tracer:Remove() end) end
+    local c = espCache[player]
+    if not c then return end
+    destroyEsp(c)
     espCache[player] = nil
 end
 
 local function clearAllEsp()
-    for player, _ in pairs(espCache) do
-        clearPlayerEsp(player)
-    end
+    for player in pairs(espCache) do clearPlayerEsp(player) end
 end
 
-local function updatePlayerEsp(player, myPos, tracerOrigin)
+-- [[ slow refresh (role / shield / names / chams / rig) ]] --
+local function refreshPlayerInfo(player)
+    local c = espCache[player]
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-    if not char or not hrp or not shouldShowPlayer(player) then
-        hidePlayerEsp(player)
+    if not hrp or not shouldShowPlayer(player) then
+        if c then
+            c.show = false
+            if c.highlight then c.highlight.Enabled = false end
+        end
         return
     end
 
-    local dist = (hrp.Position - myPos).Magnitude
-    if dist > _G.EspMaxDistance then
-        hidePlayerEsp(player)
-        return
+    if not c then
+        c = {}
+        espCache[player] = c
     end
+
+    c.show = true
+    c.char, c.hrp = char, hrp
+    c.hum = char:FindFirstChildOfClass("Humanoid")
+    c.scale = (char.GetScale and char:GetScale()) or 1
 
     local role = getRole(player) or "Unknown"
-    local color = getRoleColor(role)
-    local cache = getOrCreateEspCache(player)
-    local hasShield = char:GetAttribute("NoTagBack") or (player and player:GetAttribute("NoTagBack"))
+    local friend = isWhitelisted(player)
+    local shield = (char:GetAttribute("NoTagBack") or player:GetAttribute("NoTagBack")) and true or false
+    local base = friend and FRIEND_COLOR or getRoleColor(role)
 
-    -- 1. HIGHLIGHT (CHAMS)
+    c.shield = shield
+    c.friend = friend
+    c.roleColor = base
+    c.color = (shield and _G.ShowShieldStatus) and SHIELD_COLOR or base
+    c.nameText = player.DisplayName
+    c.roleText = (friend and "[FRIEND] " or "") .. string.upper(tostring(role))
+
+    -- skeleton joints (resolved once per character, retried until the rig is complete)
+    if _G.EspSkeleton and c.boneChar ~= char then
+        local defs = char:FindFirstChild("UpperTorso") and R15_BONES or R6_BONES
+        local bones = {}
+        for _, def in ipairs(defs) do
+            local a, b = char:FindFirstChild(def[1]), char:FindFirstChild(def[2])
+            if a and b then bones[#bones + 1] = { a, b } end
+        end
+        c.bones = bones
+        if #bones == #defs then c.boneChar = char end
+    end
+
+    -- chams
     if _G.EspEnabled and _G.ShowHighlights then
-        if not cache.Highlight or cache.Highlight.Parent ~= char then
-            if cache.Highlight then pcall(function() cache.Highlight:Destroy() end) end
-            local hl = Instance.new("Highlight")
+        local hl = c.highlight
+        if not hl or hl.Parent ~= char then
+            if hl then pcall(function() hl:Destroy() end) end
+            hl = Instance.new("Highlight")
             hl.Name = "MoroEspHighlight"
             hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             hl.Parent = char
-            cache.Highlight = hl
+            c.highlight = hl
         end
-        cache.Highlight.Enabled = true
-        cache.Highlight.FillColor = color
-        cache.Highlight.OutlineColor = (hasShield and _G.ShowShieldStatus) and Color3.fromRGB(255, 215, 0) or color
-        cache.Highlight.FillTransparency = _G.HighlightFillTransparency or 0.5
-        cache.Highlight.OutlineTransparency = _G.HighlightOutlineTransparency or 0.0
-    elseif cache.Highlight then
-        cache.Highlight.Enabled = false
-    end
-
-    -- 2. BILLBOARD GUI (NAME, ROLE, DISTANCE, SHIELD)
-    local showAnyText = _G.EspEnabled and (_G.ShowNames or _G.ShowRoles or _G.ShowDistance)
-    if showAnyText then
-        if not cache.Billboard or cache.Billboard.Parent ~= char then
-            if cache.Billboard then pcall(function() cache.Billboard:Destroy() end) end
-
-            local bb = Instance.new("BillboardGui")
-            bb.Name = "MoroEspBillboard"
-            bb.AlwaysOnTop = true
-            bb.Size = UDim2.new(0, 170, 0, 48)
-            bb.StudsOffset = Vector3.new(0, 3.2, 0)
-            bb.MaxDistance = _G.EspMaxDistance
-            bb.Parent = char
-
-            local layout = Instance.new("UIListLayout")
-            layout.SortOrder = Enum.SortOrder.LayoutOrder
-            layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-            layout.VerticalAlignment = Enum.VerticalAlignment.Center
-            layout.Padding = UDim.new(0, 1)
-            layout.Parent = bb
-
-            local nameLbl = Instance.new("TextLabel")
-            nameLbl.Name = "NameLabel"
-            nameLbl.LayoutOrder = 1
-            nameLbl.BackgroundTransparency = 1
-            nameLbl.Size = UDim2.new(1, 0, 0, 14)
-            nameLbl.Font = Enum.Font.GothamBold
-            nameLbl.TextSize = 13
-            nameLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-            nameLbl.TextStrokeTransparency = 0.2
-            nameLbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-            nameLbl.Parent = bb
-
-            local roleLbl = Instance.new("TextLabel")
-            roleLbl.Name = "RoleLabel"
-            roleLbl.LayoutOrder = 2
-            roleLbl.BackgroundTransparency = 1
-            roleLbl.Size = UDim2.new(1, 0, 0, 13)
-            roleLbl.Font = Enum.Font.GothamSemibold
-            roleLbl.TextSize = 12
-            roleLbl.TextStrokeTransparency = 0.2
-            roleLbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-            roleLbl.Parent = bb
-
-            local distLbl = Instance.new("TextLabel")
-            distLbl.Name = "DistLabel"
-            distLbl.LayoutOrder = 3
-            distLbl.BackgroundTransparency = 1
-            distLbl.Size = UDim2.new(1, 0, 0, 12)
-            distLbl.Font = Enum.Font.Gotham
-            distLbl.TextSize = 11
-            distLbl.TextColor3 = Color3.fromRGB(220, 220, 220)
-            distLbl.TextStrokeTransparency = 0.3
-            distLbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-            distLbl.Parent = bb
-
-            cache.Billboard = bb
-            cache.NameLabel = nameLbl
-            cache.RoleLabel = roleLbl
-            cache.DistLabel = distLbl
-        end
-
-        cache.Billboard.Adornee = hrp
-        cache.Billboard.Enabled = true
-        cache.Billboard.MaxDistance = _G.EspMaxDistance
-
-        if _G.ShowNames then
-            cache.NameLabel.Text = player.DisplayName ~= player.Name and (player.DisplayName .. " (@" .. player.Name .. ")") or player.Name
-            cache.NameLabel.Visible = true
-        else
-            cache.NameLabel.Visible = false
-        end
-
-        if _G.ShowRoles then
-            local roleStr = "[" .. tostring(role) .. "]"
-            if _G.ShowShieldStatus and hasShield then
-                roleStr = roleStr .. " [SHIELD]"
-                cache.RoleLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
-            else
-                cache.RoleLabel.TextColor3 = color
-            end
-            cache.RoleLabel.Text = roleStr
-            cache.RoleLabel.Visible = true
-        else
-            cache.RoleLabel.Visible = false
-        end
-
-        if _G.ShowDistance then
-            cache.DistLabel.Text = string.format("%d studs", math.floor(dist))
-            cache.DistLabel.Visible = true
-        else
-            cache.DistLabel.Visible = false
-        end
-    elseif cache.Billboard then
-        cache.Billboard.Enabled = false
-    end
-
-    -- 3. 2D BOX & TRACERS (Screen space)
-    local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-    local hrpCFrame = hrp.CFrame
-    local topPos, topOnScreen = Camera:WorldToViewportPoint((hrpCFrame * CFrame.new(0, 3, 0)).Position)
-    local bottomPos, bottomOnScreen = Camera:WorldToViewportPoint((hrpCFrame * CFrame.new(0, -3.5, 0)).Position)
-
-    local isVisibleOnScreen = (onScreen or topOnScreen or bottomOnScreen) and screenPos.Z > 0
-
-    if _G.EspEnabled and _G.ShowBoxes and isVisibleOnScreen and Drawing and Drawing.new then
-        local boxHeight = math.abs(bottomPos.Y - topPos.Y)
-        local boxWidth = boxHeight * 0.65
-        local boxPos = Vector2.new(topPos.X - (boxWidth / 2), math.min(topPos.Y, bottomPos.Y))
-
-        if not cache.Box then
-            local success, b = pcall(function()
-                local out = Drawing.new("Square")
-                out.Thickness = 2.5
-                out.Filled = false
-                out.Color = Color3.new(0, 0, 0)
-                out.Transparency = 0.8
-                out.Visible = false
-
-                local box = Drawing.new("Square")
-                box.Thickness = 1.2
-                box.Filled = false
-                box.Visible = false
-                return {Box = box, Outline = out}
-            end)
-            if success and b then
-                cache.Box = b.Box
-                cache.BoxOutline = b.Outline
-            end
-        end
-
-        if cache.Box and cache.BoxOutline then
-            cache.BoxOutline.Size = Vector2.new(boxWidth, boxHeight)
-            cache.BoxOutline.Position = boxPos
-            cache.BoxOutline.Visible = true
-
-            cache.Box.Size = Vector2.new(boxWidth, boxHeight)
-            cache.Box.Position = boxPos
-            cache.Box.Color = color
-            cache.Box.Visible = true
-        end
-    else
-        if cache.Box then cache.Box.Visible = false end
-        if cache.BoxOutline then cache.BoxOutline.Visible = false end
-    end
-
-    -- Tracers
-    if _G.ShowTracers and onScreen and screenPos.Z > 0 and Drawing and Drawing.new then
-        if not cache.Tracer then
-            local success, line = pcall(function()
-                local l = Drawing.new("Line")
-                l.Thickness = _G.TracerThickness or 1.5
-                l.Color = color
-                l.Visible = false
-                return l
-            end)
-            if success and line then
-                cache.Tracer = line
-            end
-        end
-
-        if cache.Tracer then
-            cache.Tracer.From = tracerOrigin
-            cache.Tracer.To = Vector2.new(screenPos.X, screenPos.Y)
-            cache.Tracer.Color = color
-            cache.Tracer.Thickness = _G.TracerThickness or 1.5
-            cache.Tracer.Visible = true
-        end
-    else
-        if cache.Tracer then cache.Tracer.Visible = false end
+        hl.Enabled = true
+        hl.FillColor = base
+        hl.OutlineColor = c.color
+        hl.FillTransparency = _G.HighlightFillTransparency or 0.75
+        hl.OutlineTransparency = _G.HighlightOutlineTransparency or 0
+    elseif c.highlight then
+        c.highlight.Enabled = false
     end
 end
 
-local function updateEspLoop()
-    if not _G.EspEnabled and not _G.ShowTracers then
-        if next(espCache) then
-            for p, _ in pairs(espCache) do
-                hidePlayerEsp(p)
+-- [[ per-frame drawing ]] --
+local function drawBoxes(c, bx, by, bw, bh, alpha)
+    local color = c.color
+    local wantBox = _G.ShowBoxes
+    local corners = _G.EspBoxStyle == "Corners"
+
+    if wantBox and not corners then
+        local g = ensureBox(c)
+        if g then
+            local size, pos = Vector2.new(bw, bh), Vector2.new(bx, by)
+            put(c.boxOut, "Size", size)
+            put(c.boxOut, "Position", pos)
+            put(c.boxOut, "Transparency", alpha * 0.6)
+            put(c.boxMain, "Size", size)
+            put(c.boxMain, "Position", pos)
+            put(c.boxMain, "Color", color)
+            put(c.boxMain, "Transparency", alpha)
+            showGroup(g, true)
+        end
+    else
+        showGroup(c.box, false)
+    end
+
+    if wantBox and corners then
+        local g = ensureCorners(c)
+        if g then
+            local l = math.max(4, math.floor(bw * 0.38))
+            local x2, y2 = bx + bw, by + bh
+            local function seg(i, x1, y1, xe, ye)
+                local a, b = Vector2.new(x1, y1), Vector2.new(xe, ye)
+                local o, m = c.cornerOuts[i], c.cornerMains[i]
+                put(o, "From", a) put(o, "To", b) put(o, "Transparency", alpha * 0.6)
+                put(m, "From", a) put(m, "To", b) put(m, "Color", color) put(m, "Transparency", alpha)
+            end
+            seg(1, bx, by, bx + l, by)     seg(2, bx, by, bx, by + l)
+            seg(3, x2, by, x2 - l, by)     seg(4, x2, by, x2, by + l)
+            seg(5, bx, y2, bx + l, y2)     seg(6, bx, y2, bx, y2 - l)
+            seg(7, x2, y2, x2 - l, y2)     seg(8, x2, y2, x2, y2 - l)
+            showGroup(g, true)
+        end
+    else
+        showGroup(c.corners, false)
+    end
+
+    if wantBox and _G.EspBoxFill then
+        local g = ensureFill(c)
+        if g then
+            put(c.fillSq, "Position", Vector2.new(bx, by))
+            put(c.fillSq, "Size", Vector2.new(bw, bh))
+            put(c.fillSq, "Color", color)
+            put(c.fillSq, "Transparency", (_G.EspFillOpacity or 0.12) * alpha)
+            showGroup(g, true)
+        end
+    else
+        showGroup(c.fill, false)
+    end
+end
+
+local function drawText(c, cx, by, bh, dist, alpha)
+    local g = ensureText(c)
+    if not g then return end
+    g.shown = true
+
+    local size = _G.EspTextSize or 13
+
+    if _G.ShowNames then
+        put(c.nameT, "Text", c.nameText)
+        put(c.nameT, "Size", size)
+        put(c.nameT, "Position", Vector2.new(cx, by - size - 4))
+        put(c.nameT, "Color", ESP_WHITE)
+        put(c.nameT, "Transparency", alpha)
+        put(c.nameT, "Visible", true)
+    else
+        put(c.nameT, "Visible", false)
+    end
+
+    local y = by + bh + 2
+
+    if _G.ShowRoles then
+        put(c.roleT, "Text", c.roleText)
+        put(c.roleT, "Size", size - 1)
+        put(c.roleT, "Position", Vector2.new(cx, y))
+        put(c.roleT, "Color", c.roleColor)
+        put(c.roleT, "Transparency", alpha)
+        put(c.roleT, "Visible", true)
+        y = y + size
+    else
+        put(c.roleT, "Visible", false)
+    end
+
+    if _G.ShowDistance then
+        local di = math.floor(dist)
+        if c.distInt ~= di then
+            c.distInt = di
+            c.distStr = di .. "m"
+        end
+        put(c.distT, "Text", c.distStr)
+        put(c.distT, "Size", size - 2)
+        put(c.distT, "Position", Vector2.new(cx, y))
+        put(c.distT, "Color", ESP_DIM)
+        put(c.distT, "Transparency", alpha)
+        put(c.distT, "Visible", true)
+        y = y + size - 1
+    else
+        put(c.distT, "Visible", false)
+    end
+
+    if _G.ShowShieldStatus and c.shield then
+        put(c.shieldT, "Text", "SHIELD")
+        put(c.shieldT, "Size", size - 2)
+        put(c.shieldT, "Position", Vector2.new(cx, y))
+        put(c.shieldT, "Color", SHIELD_COLOR)
+        put(c.shieldT, "Transparency", alpha)
+        put(c.shieldT, "Visible", true)
+    else
+        put(c.shieldT, "Visible", false)
+    end
+end
+
+local function drawHealth(c, bx, by, bh)
+    local hum = c.hum
+    if not (_G.EspHealthBar and hum and hum.Parent and hum.MaxHealth > 0) then
+        showGroup(c.hp, false)
+        return
+    end
+    local g = ensureHp(c)
+    if not g then return end
+    local f = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+    local fillH = math.max(1, math.floor(bh * f + 0.5))
+    put(c.hpBg, "Position", Vector2.new(bx - 6, by - 1))
+    put(c.hpBg, "Size", Vector2.new(4, bh + 2))
+    put(c.hpFill, "Position", Vector2.new(bx - 5, by + bh - fillH))
+    put(c.hpFill, "Size", Vector2.new(2, fillH))
+    put(c.hpFill, "Color", HP_LOW:Lerp(HP_HIGH, f))
+    showGroup(g, true)
+end
+
+local function drawSkeleton(c, alpha, dist)
+    local bones = c.bones
+    if not (_G.EspSkeleton and bones and #bones > 0 and dist < 250) then
+        showGroup(c.skel, false)
+        return
+    end
+    local g = ensureSkel(c, #bones)
+    if not g then return end
+    g.shown = true
+    local color = c.color
+    for i = 1, #bones do
+        local a, b = bones[i][1], bones[i][2]
+        local line = g.list[i]
+        local visible = false
+        if a.Parent and b.Parent then
+            local pa = Camera:WorldToViewportPoint(a.Position)
+            local pb = Camera:WorldToViewportPoint(b.Position)
+            if pa.Z > 0 and pb.Z > 0 then
+                put(line, "From", Vector2.new(pa.X, pa.Y))
+                put(line, "To", Vector2.new(pb.X, pb.Y))
+                put(line, "Color", color)
+                put(line, "Transparency", alpha)
+                visible = true
             end
         end
+        put(line, "Visible", visible)
+    end
+end
+
+local function drawTracer(c, origin, cx, footY, alpha)
+    local g = ensureTracer(c)
+    if not g then return end
+    put(c.tracerLine, "From", origin)
+    put(c.tracerLine, "To", Vector2.new(cx, footY))
+    put(c.tracerLine, "Color", c.color)
+    put(c.tracerLine, "Thickness", _G.TracerThickness or 1.5)
+    put(c.tracerLine, "Transparency", alpha)
+    showGroup(g, true)
+end
+
+local function drawArrow(c, pos, vp, alpha)
+    local g = ensureArrow(c)
+    if not g then return end
+    local rel = Camera.CFrame:PointToObjectSpace(pos)
+    local dir = Vector2.new(rel.X, rel.Z)
+    if dir.Magnitude < 0.001 then
+        showGroup(g, false)
         return
+    end
+    dir = dir.Unit
+    local radius = math.min(vp.X, vp.Y) * 0.34
+    local p = Vector2.new(vp.X / 2, vp.Y / 2) + dir * radius
+    local perp = Vector2.new(-dir.Y, dir.X)
+    local a = p + dir * 11
+    local b = p - dir * 7 + perp * 8
+    local d = p - dir * 7 - perp * 8
+    for _, tri in ipairs({ c.arrowFill, c.arrowEdge }) do
+        put(tri, "PointA", a)
+        put(tri, "PointB", b)
+        put(tri, "PointC", d)
+    end
+    put(c.arrowFill, "Color", c.color)
+    put(c.arrowFill, "Transparency", alpha)
+    showGroup(g, true)
+end
+
+local function drawPlayerEsp(c, myPos, tracerOrigin, vp)
+    local hrp = c.hrp
+    if not hrp or not hrp.Parent then
+        hideEspDrawings(c)
+        return
+    end
+
+    local pos = hrp.Position
+    local dist = (pos - myPos).Magnitude
+    local maxDist = _G.EspMaxDistance or 600
+    if dist > maxDist then
+        hideEspDrawings(c)
+        return
+    end
+
+    local s = c.scale or 1
+    local top, topOn = Camera:WorldToViewportPoint(pos + Vector3.new(0, 2.9 * s, 0))
+    local bot, botOn = Camera:WorldToViewportPoint(pos - Vector3.new(0, 3.1 * s, 0))
+    local inFront = top.Z > 0 and bot.Z > 0
+    local onScreen = inFront and (topOn or botOn)
+    local alpha = math.floor((1 - (dist / maxDist) ^ 2 * 0.55) * 10 + 0.5) / 10
+
+    local master = _G.EspEnabled
+
+    if master and onScreen then
+        local bh = math.max(8, math.floor(bot.Y - top.Y + 0.5))
+        local bw = math.floor(bh * 0.55 + 0.5)
+        local cx = math.floor((top.X + bot.X) / 2 + 0.5)
+        local bx = cx - math.floor(bw / 2)
+        local by = math.floor(top.Y + 0.5)
+
+        drawBoxes(c, bx, by, bw, bh, alpha)
+        drawText(c, cx, by, bh, dist, alpha)
+        drawHealth(c, bx, by, bh)
+        drawSkeleton(c, alpha, dist)
+    else
+        showGroup(c.box, false)
+        showGroup(c.corners, false)
+        showGroup(c.fill, false)
+        showGroup(c.text, false)
+        showGroup(c.hp, false)
+        showGroup(c.skel, false)
+    end
+
+    if master and _G.EspArrows and not onScreen then
+        drawArrow(c, pos, vp, alpha)
+    else
+        showGroup(c.arrow, false)
+    end
+
+    if _G.ShowTracers and inFront then
+        drawTracer(c, tracerOrigin, math.floor((top.X + bot.X) / 2 + 0.5), bot.Y, alpha)
+    else
+        showGroup(c.tracer, false)
+    end
+end
+
+local lastEspRefresh = 0
+local espWasActive = false
+
+local function updateEspLoop()
+    if not _G.EspEnabled and not _G.ShowTracers then
+        if espWasActive then
+            espWasActive = false
+            hideAllEsp()
+        end
+        return
+    end
+    espWasActive = true
+
+    local now = os.clock()
+    if now - lastEspRefresh >= 0.15 then
+        lastEspRefresh = now
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then refreshPlayerInfo(player) end
+        end
     end
 
     local myHRP = getHRP()
     local myPos = myHRP and myHRP.Position or Camera.CFrame.Position
-    local mousePos = UserInputService:GetMouseLocation()
-    local viewportSize = Camera.ViewportSize
-    local originPos
+    local vp = Camera.ViewportSize
+    local origin
     if _G.TracerOrigin == "Center" then
-        originPos = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+        origin = Vector2.new(vp.X / 2, vp.Y / 2)
     elseif _G.TracerOrigin == "Mouse" then
-        originPos = mousePos
+        origin = UserInputService:GetMouseLocation()
     else
-        originPos = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+        origin = Vector2.new(vp.X / 2, vp.Y)
     end
 
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        updatePlayerEsp(player, myPos, originPos)
+    for _, c in pairs(espCache) do
+        if c.show then
+            drawPlayerEsp(c, myPos, origin, vp)
+        else
+            hideEspDrawings(c)
+        end
     end
 end
 
 local function setupPlayerListeners(player)
     if player == LocalPlayer then return end
-    player.CharacterAdded:Connect(function()
-        clearPlayerEsp(player)
-    end)
-    player.CharacterRemoving:Connect(function()
-        clearPlayerEsp(player)
-    end)
+    local function resetChar()
+        local c = espCache[player]
+        if not c then return end
+        hideEspDrawings(c)
+        c.show = false
+        c.boneChar, c.bones = nil, nil
+        if c.highlight then
+            pcall(function() c.highlight:Destroy() end)
+            c.highlight = nil
+        end
+    end
+    player.CharacterAdded:Connect(resetChar)
+    player.CharacterRemoving:Connect(resetChar)
 end
 
 for _, player in ipairs(Players:GetPlayers()) do
@@ -1749,6 +2054,11 @@ auraSec:AddToggle({
     Callback = function(state) _G.AuraFaceTarget = state end,
 })
 auraSec:AddSlider({
+    Name = "Rotation Smoothness", Icon = "sliders",
+    Min = 0, Max = 0.95, Default = 0.6, Decimals = 2,
+    Callback = function(val) _G.AuraFaceSmooth = val end,
+})
+auraSec:AddSlider({
     Name = "Tag Delay (aura cooldown)", Icon = "clock",
     Min = 0, Max = 2, Default = 0.35, Decimals = 2, Suffix = " s",
     Callback = function(val) _G.AuraTagDelay = val end,
@@ -1781,8 +2091,52 @@ auraSec:AddToggle({
     Callback = function(state) _G.ShowKillAuraRing = state end,
 })
 
+local wlSec = combatTab:CreateSection({ Name = "Whitelist", Icon = "users" })
+
+local function playerNameList()
+    local names = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then table.insert(names, p.Name) end
+    end
+    table.sort(names)
+    return names
+end
+
+local wlDrop = wlSec:AddMultiDropdown({
+    Name = "Never Tag / Show as Friend", Icon = "users",
+    Options = playerNameList(), Default = {}, Placeholder = "None",
+    Callback = function(values)
+        local w = {}
+        for _, n in ipairs(values or {}) do w[n] = true end
+        _G.Whitelist = w
+    end,
+})
+wlSec:AddButton({
+    Name = "Add Roblox Friends In Server", Icon = "users",
+    Callback = function()
+        local names = wlDrop.Get() or {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                local ok, isFriend = pcall(LocalPlayer.IsFriendsWith, LocalPlayer, p.UserId)
+                if ok and isFriend then table.insert(names, p.Name) end
+            end
+        end
+        wlDrop.Set(names)
+    end,
+})
+wlSec:AddButton({
+    Name = "Clear Whitelist", Icon = "x",
+    Callback = function() wlDrop.ClearAll() end,
+})
+
+local function refreshWhitelistList()
+    wlDrop.Refresh(playerNameList(), true)
+end
+Players.PlayerAdded:Connect(function() task.defer(refreshWhitelistList) end)
+Players.PlayerRemoving:Connect(function() task.defer(refreshWhitelistList) end)
+
 combatTab:Column("right")
-local parrySec = combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
+local parrySec =combatTab:CreateSection({ Name = "Auto Parry", Icon = "shield" })
 local parryToggle = parrySec:AddToggle({
     Name = "Auto Parry", Icon = "shield", Default = false,
     Callback = function(state)
@@ -2061,17 +2415,15 @@ local espToggle = espSec:AddToggle({
     Name = "Enable ESP", Icon = "eye", Default = false,
     Callback = function(state)
         _G.EspEnabled = state
-        if not state and not _G.ShowTracers then
-            clearAllEsp()
-        end
+        if not state then hideAllEsp() end
     end,
 })
 espToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
 
 espSec:AddMultiDropdown({
     Name = "Filter Categories", Icon = "users",
-    Options = {"Enemies", "My Team", "Frozen", "OOF", "All"},
-    Default = {"Enemies"},
+    Options = {"Enemies", "Friends", "My Team", "Frozen", "OOF", "All"},
+    Default = {"Enemies", "Friends"},
     Callback = function(values) selectedCategories = values or {} end,
 })
 espSec:AddSlider({
@@ -2080,21 +2432,34 @@ espSec:AddSlider({
     Callback = function(val) _G.EspMaxDistance = val end,
 })
 
+local boxSec = visualsTab:CreateSection({ Name = "Boxes", Icon = "box" })
+boxSec:AddToggle({
+    Name = "Show Boxes", Icon = "box", Default = true,
+    Callback = function(state) _G.ShowBoxes = state end,
+})
+boxSec:AddDropdown({
+    Name = "Box Style", Icon = "layout",
+    Options = {"Corners", "Full"}, Default = "Corners",
+    Callback = function(val) _G.EspBoxStyle = val end,
+})
+boxSec:AddToggle({
+    Name = "Box Fill", Icon = "layers", Default = true,
+    Callback = function(state) _G.EspBoxFill = state end,
+})
+boxSec:AddSlider({
+    Name = "Fill Opacity", Icon = "sun",
+    Min = 0.02, Max = 0.5, Default = 0.12, Decimals = 2,
+    Callback = function(val) _G.EspFillOpacity = val end,
+})
+
 local chamsSec = visualsTab:CreateSection({ Name = "Highlights / Chams", Icon = "layers" })
 chamsSec:AddToggle({
     Name = "Enable Chams", Icon = "layers", Default = true,
-    Callback = function(state)
-        _G.ShowHighlights = state
-        if not state then
-            for _, cache in pairs(espCache) do
-                if cache.Highlight then cache.Highlight.Enabled = false end
-            end
-        end
-    end,
+    Callback = function(state) _G.ShowHighlights = state end,
 })
 chamsSec:AddSlider({
     Name = "Fill Transparency", Icon = "sun",
-    Min = 0, Max = 1, Default = 0.5, Decimals = 2,
+    Min = 0, Max = 1, Default = 0.75, Decimals = 2,
     Callback = function(val) _G.HighlightFillTransparency = val end,
 })
 chamsSec:AddSlider({
@@ -2108,6 +2473,10 @@ visualAidSec:AddToggle({
     Name = "Show Kill Aura Ring", Icon = "circle", Default = false,
     Callback = function(state) _G.ShowKillAuraRing = state end,
 })
+visualAidSec:AddToggle({
+    Name = "Off-screen Arrows", Icon = "navigation", Default = true,
+    Callback = function(state) _G.EspArrows = state end,
+})
 
 visualsTab:Column("right")
 local infoSec = visualsTab:CreateSection({ Name = "ESP Elements", Icon = "layout" })
@@ -2115,30 +2484,18 @@ infoSec:AddToggle({ Name = "Show Names", Icon = "user", Default = true, Callback
 infoSec:AddToggle({ Name = "Show Roles", Icon = "tag", Default = true, Callback = function(s) _G.ShowRoles = s end })
 infoSec:AddToggle({ Name = "Show Distance", Icon = "map-pin", Default = true, Callback = function(s) _G.ShowDistance = s end })
 infoSec:AddToggle({ Name = "Show Shield Status [SHIELD]", Icon = "shield", Default = true, Callback = function(s) _G.ShowShieldStatus = s end })
-infoSec:AddToggle({
-    Name = "Show 2D Boxes", Icon = "box", Default = false,
-    Callback = function(state)
-        _G.ShowBoxes = state
-        if not state then
-            for _, cache in pairs(espCache) do
-                if cache.Box then cache.Box.Visible = false end
-                if cache.BoxOutline then cache.BoxOutline.Visible = false end
-            end
-        end
-    end,
+infoSec:AddToggle({ Name = "Health Bar", Icon = "heart", Default = false, Callback = function(s) _G.EspHealthBar = s end })
+infoSec:AddToggle({ Name = "Skeleton", Icon = "user", Default = false, Callback = function(s) _G.EspSkeleton = s end })
+infoSec:AddSlider({
+    Name = "Text Size", Icon = "type",
+    Min = 10, Max = 20, Default = 13, Decimals = 0,
+    Callback = function(val) _G.EspTextSize = val end,
 })
 
 local tracerSec = visualsTab:CreateSection({ Name = "Tracers", Icon = "crosshair" })
 local tracerToggle = tracerSec:AddToggle({
     Name = "Enable Tracers", Icon = "crosshair", Default = false,
-    Callback = function(state)
-        _G.ShowTracers = state
-        if not state then
-            for _, cache in pairs(espCache) do
-                if cache.Tracer then cache.Tracer.Visible = false end
-            end
-        end
-    end,
+    Callback = function(state) _G.ShowTracers = state end,
 })
 tracerToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
 
