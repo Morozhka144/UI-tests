@@ -44,6 +44,9 @@ _G.LegitTagEnabled = false
 _G.LegitTagRange = 12
 _G.LegitTagFOV = 0.6
 _G.LegitTagWallCheck = true
+_G.AuraLegitMode = false
+_G.AuraFaceTarget = false
+_G.AuraTagDelay = 0.35
 
 _G.AutoParryEnabled = false
 _G.AutoParryMode = "Smart" -- "Smart" (по анимации атаки) или "Proximity" (всегда рядом)
@@ -379,167 +382,102 @@ local FFA_ROLES = {
     FFATagger = true, SlapFFATagger = true,
 }
 
+local function shouldSkipTarget(char, targetPlayer, myRole)
+    local targetRole = targetPlayer and getRole(targetPlayer)
+
+    -- Проверка неуязвимости / щита спавна
+    if _G.IgnoreNoTagBack ~= false then
+        if char:GetAttribute("NoTagBack") or (targetPlayer and targetPlayer:GetAttribute("NoTagBack")) then
+            return true
+        end
+    end
+
+    if FFA_ROLES[myRole] then
+        return targetRole and IGNORED_ROLES[targetRole] or false
+    end
+    if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then return true end
+    if (myRole == "Chiller" or myRole == "Freezer") and targetRole == "Frozen" then return true end
+    if myRole == "Runner" and targetRole == "Chiller" then return true end
+    if myRole and targetRole and myRole == targetRole then return true end
+    if targetRole and IGNORED_ROLES[targetRole] then return true end
+    return false
+end
+
+-- Rage: ближайший в радиусе. Legit: в конусе перед камерой, приоритет тому кто ближе к центру прицела.
+local function findAuraTarget(hrp, legit)
+    local myRole = getRole(LocalPlayer)
+    local myChar = LocalPlayer.Character
+    local range = legit and _G.LegitTagRange or _G.KillAuraRange
+    local aimDir = Camera.CFrame.LookVector
+    local bestDot = _G.LegitTagFOV
+
+    local best, bestDist = nil, range
+
+    for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
+        local targetHRP = char ~= myChar and char:FindFirstChild("HumanoidRootPart")
+        if targetHRP and not shouldSkipTarget(char, Players:GetPlayerFromCharacter(char), myRole) then
+            local delta = targetHRP.Position - hrp.Position
+            local dist = delta.Magnitude
+            if dist < bestDist and dist > 0 then
+                local ok = true
+                if legit then
+                    local dot = aimDir:Dot(delta.Unit)
+                    ok = dot > bestDot
+                    if ok then bestDot = dot end
+                end
+                if ok and ((not _G.KillAuraWallCheck) or isPlayerVisible(char)) then
+                    bestDist = dist
+                    best = char
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function faceTarget(hrp, targetHRP)
+    local flat = Vector3.new(targetHRP.Position.X - hrp.Position.X, 0, targetHRP.Position.Z - hrp.Position.Z)
+    if flat.Magnitude < 0.05 then return end
+    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat)
+end
+
+local function compressAngle(angle)
+    return math.floor((angle + math.pi) / (math.pi * 2) * 65535 + 0.5)
+end
+
+local lastAuraTag = 0
+
 local function autoTagLoop()
     if not _G.AutoTagEnabled then return end
     local hrp = getHRP()
     if not hrp then return end
 
-    local myRole = getRole(LocalPlayer)
-    local closestTarget, closestDist = nil, _G.KillAuraRange
-    local myChar = LocalPlayer.Character
+    local target = findAuraTarget(hrp, _G.AuraLegitMode)
+    if not target then return end
+    local targetHRP = target.HumanoidRootPart
 
-    for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
-        local targetHRP = char ~= myChar and char:FindFirstChild("HumanoidRootPart")
-        if targetHRP then
-            local targetPlayer = Players:GetPlayerFromCharacter(char)
-            local targetRole = targetPlayer and getRole(targetPlayer)
-            local skip = false
-
-            -- Проверка неуязвимости / щита спавна
-            if _G.IgnoreNoTagBack ~= false then
-                if char:GetAttribute("NoTagBack") or (targetPlayer and targetPlayer:GetAttribute("NoTagBack")) then
-                    skip = true
-                end
-            end
-
-            if not skip then
-                if FFA_ROLES[myRole] then
-                    skip = targetRole and IGNORED_ROLES[targetRole]
-                else
-                    if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then skip = true
-                    elseif (myRole == "Chiller" or myRole == "Freezer") and targetRole == "Frozen" then skip = true
-                    elseif myRole == "Runner" and targetRole == "Chiller" then skip = true
-                    elseif myRole and targetRole and myRole == targetRole then skip = true
-                    elseif targetRole and IGNORED_ROLES[targetRole] then skip = true
-                    end
-                end
-            end
-
-            if not skip then
-                local dist = (targetHRP.Position - hrp.Position).Magnitude
-                if dist < closestDist then
-                    if (not _G.KillAuraWallCheck) or isPlayerVisible(char) then
-                        closestDist = dist
-                        closestTarget = char
-                    end
-                end
-            end
-        end
+    if _G.AuraFaceTarget then
+        faceTarget(hrp, targetHRP)
     end
 
-    if not closestTarget then return end
+    -- Собственный кулдаун ауры (отдельно от TagCooldown бустера)
+    if tick() - lastAuraTag < (_G.AuraTagDelay or 0) then return end
 
-    local targetPlayer = Players:GetPlayerFromCharacter(closestTarget)
+    local targetPlayer = Players:GetPlayerFromCharacter(target)
     if not targetPlayer then return end
 
     local success, targetID = pcall(SerialisedData.getPlayer, targetPlayer)
     if not (success and targetID) then return end
 
-    local targetHRP = closestTarget.HumanoidRootPart
-    local lookCFrame = CFrame.new(hrp.Position, targetHRP.Position)
-    local a1, a2, a3 = lookCFrame:ToEulerAnglesYXZ()
-
-    local function compress(angle)
-        return math.floor((angle + math.pi) / (math.pi * 2) * 65535 + 0.5)
-    end
+    local a1, a2, a3 = CFrame.new(hrp.Position, targetHRP.Position):ToEulerAnglesYXZ()
 
     local buf = buffer.create(7)
     buffer.writeu8(buf, 0, targetID)
-    buffer.writeu16(buf, 1, compress(a1))
-    buffer.writeu16(buf, 3, compress(a2))
-    buffer.writeu16(buf, 5, compress(a3))
+    buffer.writeu16(buf, 1, compressAngle(a1))
+    buffer.writeu16(buf, 3, compressAngle(a2))
+    buffer.writeu16(buf, 5, compressAngle(a3))
 
-    local s, res = pcall(function() return TagPlayerEvent:InvokeServer(buf) end)
-    if s and res then
-        pcall(function() SoundEvent:Fire("Tag", hrp, 0.25, true) end)
-        local cd = boosters.TagCooldown
-        local tagSpeed = 1 / (cd.enabled and (cd.base * cd.mult) or cd.base)
-        pcall(function() AnimateEvent:Fire("Tag", 0.1, tagSpeed) end)
-        pcall(function() TagSwing:Fire() end)
-    end
-end
-
--- ============================================================
--- [[ AUTO-TAG LEGIT (только цели перед тобой) ]] --
--- ============================================================
-local function legitTagLoop()
-    if not _G.LegitTagEnabled then return end
-    local hrp = getHRP()
-    if not hrp then return end
-
-    local myRole = getRole(LocalPlayer)
-    local myChar = LocalPlayer.Character
-    local aimDir = Camera.CFrame.LookVector
-
-    local closestTarget, closestDist = nil, _G.LegitTagRange
-    local bestDot = _G.LegitTagFOV
-
-    for _, char in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
-        local targetHRP = char ~= myChar and char:FindFirstChild("HumanoidRootPart")
-        if targetHRP then
-            local targetPlayer = Players:GetPlayerFromCharacter(char)
-            local targetRole = targetPlayer and getRole(targetPlayer)
-            local skip = false
-
-            -- Проверка неуязвимости / щита спавна
-            if _G.IgnoreNoTagBack ~= false then
-                if char:GetAttribute("NoTagBack") or (targetPlayer and targetPlayer:GetAttribute("NoTagBack")) then
-                    skip = true
-                end
-            end
-
-            if not skip then
-                if FFA_ROLES[myRole] then
-                    skip = targetRole and IGNORED_ROLES[targetRole]
-                else
-                    if myRole == "Crown" and (targetRole == "Peasant" or targetRole == "Knight") then skip = true
-                    elseif (myRole == "Chiller" or myRole == "Freezer") and targetRole == "Frozen" then skip = true
-                    elseif myRole == "Runner" and targetRole == "Chiller" then skip = true
-                    elseif myRole and targetRole and myRole == targetRole then skip = true
-                    elseif targetRole and IGNORED_ROLES[targetRole] then skip = true
-                    end
-                end
-            end
-
-            if not skip then
-                local delta = targetHRP.Position - hrp.Position
-                local dist = delta.Magnitude
-                if dist < closestDist and dist > 0 then
-                    local dot = aimDir:Dot(delta.Unit)
-                    if dot > bestDot then
-                        if (not _G.LegitTagWallCheck) or isPlayerVisible(char) then
-                            bestDot = dot
-                            closestDist = dist
-                            closestTarget = char
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if not closestTarget then return end
-
-    local targetPlayer = Players:GetPlayerFromCharacter(closestTarget)
-    if not targetPlayer then return end
-
-    local success, targetID = pcall(SerialisedData.getPlayer, targetPlayer)
-    if not (success and targetID) then return end
-
-    local targetHRP = closestTarget.HumanoidRootPart
-    local lookCFrame = CFrame.new(hrp.Position, targetHRP.Position)
-    local a1, a2, a3 = lookCFrame:ToEulerAnglesYXZ()
-
-    local function compress(angle)
-        return math.floor((angle + math.pi) / (math.pi * 2) * 65535 + 0.5)
-    end
-
-    local buf = buffer.create(7)
-    buffer.writeu8(buf, 0, targetID)
-    buffer.writeu16(buf, 1, compress(a1))
-    buffer.writeu16(buf, 3, compress(a2))
-    buffer.writeu16(buf, 5, compress(a3))
-
+    lastAuraTag = tick()
     local s, res = pcall(function() return TagPlayerEvent:InvokeServer(buf) end)
     if s and res then
         pcall(function() SoundEvent:Fire("Tag", hrp, 0.25, true) end)
@@ -1795,17 +1733,40 @@ local Window = Lumina:CreateWindow({ Title = "MoroLumina | Tag Game" })
 local combatTab = Window:CreateTab({ Name = "Combat", Icon = "crosshair" })
 
 combatTab:Column("left")
-local auraSec = combatTab:CreateSection({ Name = "Kill Aura (Rage)", Icon = "zap" })
+local auraSec = combatTab:CreateSection({ Name = "Tag Aura", Icon = "zap" })
 local auraToggle = auraSec:AddToggle({
-    Name = "Auto Tag (Kill Aura)", Icon = "zap", Default = false,
+    Name = "Auto Tag (Aura)", Icon = "zap", Default = false,
     Callback = function(state) _G.AutoTagEnabled = state end,
 })
 auraToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
 
+auraSec:AddToggle({
+    Name = "Legit Mode (cone in front of camera)", Icon = "target", Default = false,
+    Callback = function(state) _G.AuraLegitMode = state end,
+})
+auraSec:AddToggle({
+    Name = "Face Target", Icon = "rotate-cw", Default = false,
+    Callback = function(state) _G.AuraFaceTarget = state end,
+})
 auraSec:AddSlider({
-    Name = "Aura Radius", Icon = "maximize",
+    Name = "Tag Delay (aura cooldown)", Icon = "clock",
+    Min = 0, Max = 2, Default = 0.35, Decimals = 2, Suffix = " s",
+    Callback = function(val) _G.AuraTagDelay = val end,
+})
+auraSec:AddSlider({
+    Name = "Aura Radius (Rage)", Icon = "maximize",
     Min = 5, Max = 25, Default = 15, Decimals = 0, Suffix = " studs",
     Callback = function(val) _G.KillAuraRange = val end,
+})
+auraSec:AddSlider({
+    Name = "Legit Range", Icon = "maximize",
+    Min = 5, Max = 20, Default = 12, Decimals = 0, Suffix = " studs",
+    Callback = function(val) _G.LegitTagRange = val end,
+})
+auraSec:AddSlider({
+    Name = "Legit Cone FOV", Icon = "triangle",
+    Min = 0.1, Max = 0.95, Default = 0.6, Decimals = 2,
+    Callback = function(val) _G.LegitTagFOV = val end,
 })
 auraSec:AddToggle({
     Name = "Wall Check", Icon = "shield", Default = true,
@@ -1818,32 +1779,6 @@ auraSec:AddToggle({
 auraSec:AddToggle({
     Name = "Show Range Ring", Icon = "circle", Default = false,
     Callback = function(state) _G.ShowKillAuraRing = state end,
-})
-
-local legitSec = combatTab:CreateSection({ Name = "Auto Tag (Legit)", Icon = "target" })
-local legitToggle = legitSec:AddToggle({
-    Name = "Auto Tag (Legit)", Icon = "target", Default = false,
-    Callback = function(state) _G.LegitTagEnabled = state end,
-})
-legitToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
-
-legitSec:AddSlider({
-    Name = "Legit Range", Icon = "maximize",
-    Min = 5, Max = 20, Default = 12, Decimals = 0, Suffix = " studs",
-    Callback = function(val) _G.LegitTagRange = val end,
-})
-legitSec:AddSlider({
-    Name = "Cone FOV", Icon = "triangle",
-    Min = 0.1, Max = 0.95, Default = 0.6, Decimals = 2,
-    Callback = function(val) _G.LegitTagFOV = val end,
-})
-legitSec:AddToggle({
-    Name = "Wall Check", Icon = "shield", Default = true,
-    Callback = function(state) _G.LegitTagWallCheck = state end,
-})
-legitSec:AddToggle({
-    Name = "Ignore Shield (NoTagBack)", Icon = "shield-check", Default = true,
-    Callback = function(state) _G.IgnoreNoTagBack = state end,
 })
 
 combatTab:Column("right")
@@ -2457,7 +2392,6 @@ Window:AddSettingsTab()
 -- ============================================================
 RunService.Heartbeat:Connect(function()
     autoTagLoop()
-    legitTagLoop()
     autoParryLoop()
     applyAllBoosts()
 end)
