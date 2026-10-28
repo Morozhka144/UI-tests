@@ -1776,7 +1776,19 @@ end)
 -- ============================================================
 -- [[ UI (LUMINA) ]] --
 -- ============================================================
-local Lumina = loadstring(game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"))()
+-- MoroElite from GitHub (cached to MoroElite.lua); the cache is only used when GitHub is unreachable
+local Lumina
+do
+    local okGet, src = pcall(function() return game:HttpGet("https://raw.githubusercontent.com/Morozhka144/GUI2222/main/MoroElite.lua") end)
+    local fn = okGet and type(src) == "string" and #src > 1000 and loadstring(src)
+    if fn then
+        Lumina = fn()
+        if Lumina and writefile then pcall(writefile, "MoroElite.lua", src) end
+    elseif isfile and isfile("MoroElite.lua") then
+        Lumina = loadstring(readfile("MoroElite.lua"))()
+    end
+    assert(Lumina, "[Moro] Failed to load MoroElite UI library")
+end
 local Window = Lumina:CreateWindow({ Title = "MoroLumina | Tag Game" })
 
 -- ===================== COMBAT TAB =====================

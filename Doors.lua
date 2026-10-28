@@ -38,24 +38,38 @@ local function safeLoad(src, chunkName)
     return result
 end
 
-local RAW_URL = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
+-- MoroElite from GitHub (cached to MoroElite.lua); the cache is only used when GitHub is unreachable
+local RAW_URL = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/MoroElite.lua"
+local CACHE_FILE = "MoroElite.lua"
 local Lumina
 
 local ok, res = pcall(function()
     local src = game:HttpGet(RAW_URL)
-    return safeLoad(src, "MoroLumina")
+    local lib = safeLoad(src, "MoroElite")
+    if lib and writefile then pcall(writefile, CACHE_FILE, src) end
+    return lib
 end)
 if ok and res then
     Lumina = res
 else
     pcall(function()
-        if readfile and isfile and isfile("Lumina.lua") then
-            Lumina = safeLoad(readfile("Lumina.lua"), "MoroLuminaLocal")
+        if readfile and isfile and isfile(CACHE_FILE) then
+            Lumina = safeLoad(readfile(CACHE_FILE), "MoroEliteCache")
         end
     end)
 end
 if not Lumina then
-    error("[Moro] Failed to load MoroLumina UI library! Check your internet connection or GitHub access.")
+    error("[Moro] Failed to load MoroElite UI library! Check your internet connection or GitHub access.")
+end
+
+-- calls every listener; elements notify through their Callback so OnChanged works for every element type
+local function fireListeners(list, ...)
+    for _, fn in ipairs(list) do pcall(fn, ...) end
+end
+local function toSet(arr)
+    local set = {}
+    for _, v in ipairs(arr or {}) do set[v] = true end
+    return set
 end
 
 local library = {}
@@ -175,15 +189,19 @@ local function wrapSection(luminaSec, tab, colName)
             end,
             AddColorPicker = function(self, cpFlag, cpCfg)
                 cpCfg = cpCfg or {}
+                local cpListeners = {}
                 local luminaCP = luminaTgl:AddColorPicker({
                     Default = cpCfg.Default or Color3.fromRGB(255, 255, 255),
                     Flag = cpFlag,
-                    Callback = cpCfg.Callback,
+                    Callback = function(col)
+                        if cpCfg.Callback then pcall(cpCfg.Callback, col) end
+                        fireListeners(cpListeners, col)
+                    end,
                 })
                 local cpProxy = {
                     _raw = luminaCP,
                     _flag = cpFlag,
-                    _listeners = {},
+                    _listeners = cpListeners,
                     SetValue = function(self, col)
                         if luminaCP and luminaCP.Set then luminaCP.Set(col) end
                     end,
@@ -191,8 +209,7 @@ local function wrapSection(luminaSec, tab, colName)
                         if luminaCP and luminaCP.Set then luminaCP.Set(col) end
                     end,
                     OnChanged = function(self, fn)
-                        table.insert(self._listeners, fn)
-                        if luminaCP and luminaCP.AddListener then luminaCP.AddListener(fn) end
+                        table.insert(cpListeners, fn)
                     end,
                 }
                 setmetatable(cpProxy, {
@@ -265,6 +282,7 @@ local function wrapSection(luminaSec, tab, colName)
 
     function secProxy:AddSlider(flag, cfg)
         cfg = cfg or {}
+        local sliderListeners = {}
         local luminaSlider = luminaSec:AddSlider({
             Name = cfg.Text or flag,
             Min = cfg.Min or 0,
@@ -273,18 +291,20 @@ local function wrapSection(luminaSec, tab, colName)
             Decimals = cfg.Rounding or 0,
             Suffix = cfg.Suffix or "",
             Flag = flag,
-            Callback = cfg.Callback,
+            Callback = function(val)
+                if cfg.Callback then pcall(cfg.Callback, val) end
+                fireListeners(sliderListeners, val)
+            end,
         })
         local sliderProxy = {
             _raw = luminaSlider,
             _flag = flag,
-            _listeners = {},
+            _listeners = sliderListeners,
             SetValue = function(self, val)
                 if luminaSlider and luminaSlider.Set then luminaSlider.Set(val) end
             end,
             OnChanged = function(self, fn)
-                table.insert(self._listeners, fn)
-                if luminaSlider and luminaSlider.AddListener then luminaSlider.AddListener(fn) end
+                table.insert(sliderListeners, fn)
             end,
         }
         setmetatable(sliderProxy, {
@@ -334,7 +354,7 @@ local function wrapSection(luminaSec, tab, colName)
                 _flag = flag,
                 _listeners = {},
                 GetState = function(self)
-                    return (luminaMulti and luminaMulti.GetSet and luminaMulti.GetSet()) or {}
+                    return (luminaMulti and luminaMulti.Get and toSet(luminaMulti.Get())) or {}
                 end,
                 SetValue = function(self, val)
                     if luminaMulti and luminaMulti.Set then
@@ -361,7 +381,7 @@ local function wrapSection(luminaSec, tab, colName)
             setmetatable(multiProxy, {
                 __index = function(t, k)
                     if k == "Value" then
-                        return (luminaMulti and luminaMulti.GetSet and luminaMulti.GetSet()) or {}
+                        return (luminaMulti and luminaMulti.Get and toSet(luminaMulti.Get())) or {}
                     end
                     return rawget(t, k)
                 end,
@@ -449,11 +469,13 @@ local function wrapSection(luminaSec, tab, colName)
                 if type(defKey) == "string" then
                     defKey = Enum.KeyCode[defKey] or Enum.KeyCode.RightShift
                 end
+                local kbListeners = {}
                 local luminaKB = luminaSec:AddKeybind({
                     Name = kpCfg.Text or cleanText or kpFlag,
                     Default = defKey,
                     Mode = kpCfg.Mode or "Toggle",
                     Flag = kpFlag,
+                    ChangedCallback = function(key) fireListeners(kbListeners, key) end,
                 })
                 local kbProxy = {
                     _raw = luminaKB,
@@ -463,7 +485,7 @@ local function wrapSection(luminaSec, tab, colName)
                         if mode and luminaKB and luminaKB.SetMode then luminaKB.SetMode(mode) end
                     end,
                     OnChanged = function(self, fn)
-                        if luminaKB and luminaKB.AddListener then luminaKB.AddListener(fn) end
+                        table.insert(kbListeners, fn)
                     end,
                 }
                 setmetatable(kbProxy, {
@@ -485,13 +507,17 @@ local function wrapSection(luminaSec, tab, colName)
 
     function secProxy:AddInput(flag, cfg)
         cfg = cfg or {}
+        local inputListeners = {}
         local luminaBox = luminaSec:AddTextbox({
             Name = cfg.Text or flag,
             Placeholder = cfg.Placeholder or "",
             Default = cfg.Default or "",
             Numeric = cfg.Numeric or false,
             Flag = flag,
-            Callback = cfg.Callback,
+            Callback = function(text)
+                if cfg.Callback then pcall(cfg.Callback, text) end
+                fireListeners(inputListeners, text)
+            end,
         })
         local inputProxy = {
             _raw = luminaBox,
@@ -499,7 +525,9 @@ local function wrapSection(luminaSec, tab, colName)
             SetValue = function(self, v)
                 if luminaBox and luminaBox.Set then luminaBox.Set(v) end
             end,
-            OnChanged = function(self, fn) end,
+            OnChanged = function(self, fn)
+                table.insert(inputListeners, fn)
+            end,
         }
         setmetatable(inputProxy, {
             __index = function(t, k)
@@ -574,8 +602,9 @@ local function wrapTab(luminaTab, tabName)
     end
 
     function tabProxy:SetVisible(vis)
-        if luminaTab and luminaTab._btn then
-            luminaTab._btn.Visible = (vis == true or vis == nil)
+        local btn = luminaTab and (luminaTab._btn or luminaTab.Button)
+        if btn then
+            btn.Visible = (vis == true or vis == nil)
         end
         if not vis and library.ActiveTab == tabProxy then
             if element3 and element3.Main and element3.Main.Show then
@@ -585,7 +614,9 @@ local function wrapTab(luminaTab, tabName)
     end
 
     function tabProxy:Show()
-        if luminaTab and luminaTab._activate then
+        if luminaTab and luminaTab.Select then
+            luminaTab:Select()
+        elseif luminaTab and luminaTab._activate then
             luminaTab._activate()
         end
         library.ActiveTab = tabProxy
@@ -680,13 +711,25 @@ function library:Toggle(v)
 end
 
 local _unloadCallbacks = {}
+local _unloaded = false
 function library:OnUnload(fn)
     table.insert(_unloadCallbacks, fn)
 end
 
-function library:Unload()
+local function runUnloadCallbacks()
+    if _unloaded then return end
+    _unloaded = true
     for _, fn in ipairs(_unloadCallbacks) do
         pcall(fn)
+    end
+end
+-- MoroElite's own "Unload Menu" (and re-running the script) must stop the Doors features too
+if Lumina.OnUnload then Lumina:OnUnload(runUnloadCallbacks) end
+
+function library:Unload()
+    runUnloadCallbacks()
+    if Lumina.Unload then
+        pcall(function() Lumina:Unload() end)
     end
     if library.ScreenGui then
         pcall(function() library.ScreenGui:Destroy() end)
