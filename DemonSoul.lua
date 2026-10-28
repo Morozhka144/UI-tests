@@ -95,6 +95,8 @@ if Library then
     local states = {attack = false, skill1 = false, skill2 = false, skill3 = false}
     -- features that need the attack loop without touching the "Fast General Attack" toggle state
     local extraAttack = { spring = false, quest = false }
+    -- set while a quest needs the character to stay somewhere (prayer platform); Kill Aura does not teleport then
+    local questTeleportHold = false
     local speeds = {attack = 20} 
     local killAuraActive = false
     local priorityHighHP = false 
@@ -896,7 +898,7 @@ if Library then
                                 
                                 if tHrp and tHum and tHum.Health > 0 then
                                     local currentDist = (hrp.Position - tHrp.Position).Magnitude
-                                    if target ~= lastTarget or currentDist > 12 then
+                                    if not questTeleportHold and (target ~= lastTarget or currentDist > 12) then
                                         lastTarget = target
                                         local targetCF = tHrp.CFrame * CFrame.new(0, tpHeight or 2, 2)
                                         hrp.CFrame = CFrame.lookAt(targetCF.Position, tHrp.Position)
@@ -1193,7 +1195,7 @@ if Library then
     do
     local autoTrain = false
     local autoTrainV2 = false
-    _G.TrainSkillNumber = 2
+    _G.TrainSkillNumber = 3
 
     local function AdvanceTrainLevel()
         local it = workspace:FindFirstChild("InfinityTrain")
@@ -1593,7 +1595,7 @@ if Library then
 
     local HwQuestSec = wrapSection(HalloweenTab:CreateSection({ Name = "Cauldron Quests Automation", Collapsible = true }))
     local HwPumpkinSec = wrapSection(HalloweenTab:CreateSection({ Name = "Pumpkin Gathering", Collapsible = true }))
-    local HwBossSec = wrapSection(HalloweenTab:CreateSection({ Name = "Halloween Bosses & Teleports", Collapsible = true }))
+    local HwBossSec = wrapSection(HalloweenTab:CreateSection({ Name = "Halloween Teleports", Collapsible = true }))
 
     local autoCauldronTasks = false
     local cauldronQuestKill = true
@@ -1674,17 +1676,20 @@ if Library then
         return false
     end
 
-    local function hwBuyExpCrystal()
-        local ok = pcall(function()
-            local eb = EventBus
-            if not eb then
-                pcall(function() eb = require(rs:WaitForChild("Packages"):WaitForChild("EventBus")) end)
-            end
-            if eb and eb.FireServer then
-                eb.FireServer("购买经验水晶", "经验水晶1", 1)
-            end
-        end)
-        return ok
+    -- 经验水晶1 is the cheapest crystal (10K souls). The quest counts purchases ("Buy EXP crystals 5 times"),
+    -- so it is bought as `count` separate purchases in a row
+    local function hwBuyExpCrystal(count)
+        local eb = EventBus
+        if not eb then
+            pcall(function() eb = require(rs:WaitForChild("Packages"):WaitForChild("EventBus")) end)
+        end
+        if not (eb and eb.FireServer) then return 0 end
+        local bought = 0
+        for _ = 1, count or 5 do
+            if pcall(eb.FireServer, "购买经验水晶", "经验水晶1", 1) then bought += 1 end
+            task.wait(0.15)
+        end
+        return bought
     end
 
     local function hwOpenChest()
@@ -1699,13 +1704,47 @@ if Library then
         end)
     end
 
-    local function hwDrawGacha()
-        pcall(function()
-            local drawRemote = remoteFolder and remoteFolder:FindFirstChild("DrawRole")
-            if drawRemote then
-                drawRemote:FireServer(1, 1)
-            end
-        end)
+    -- Stands on the first prayer platform (LuckyDraw.d1.StageRange), draws `count` times the way the game's
+    -- draw button does (DrawRole:FireServer(false) = one manual draw), then returns to where it started
+    local function hwDrawGacha(count)
+        local drawRemote = remoteFolder and remoteFolder:FindFirstChild("DrawRole")
+        local lucky = workspace:FindFirstChild("LuckyDraw")
+        local stage = lucky and lucky:FindFirstChild("d1") and lucky.d1:FindFirstChild("StageRange")
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not (drawRemote and stage and hrp) then return 0 end
+
+        local stageCF = stage:IsA("Model") and stage:GetBoundingBox() or stage.CFrame
+        local back = hrp.CFrame
+        questTeleportHold = true
+        hrp.CFrame = CFrame.new(stageCF.Position)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        task.wait(1) -- TouchZoneCtrl has to register that we entered the stage
+
+        local done = 0
+        for _ = 1, count or 1 do
+            if not scriptActive or not cauldronQuestGacha then break end
+            local answered = false
+            local conn = drawRemote.OnClientEvent:Connect(function() answered = true end)
+            drawRemote:FireServer(false)
+            local t0 = os.clock()
+            repeat task.wait(0.1) until answered or os.clock() - t0 > 3
+            conn:Disconnect()
+            if not answered then break end -- not enough gold, or the server refused the draw
+            done += 1
+            task.wait(0.4)
+        end
+
+        hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.CFrame = back
+            hrp.AssemblyLinearVelocity = Vector3.zero
+        end
+        -- each draw plays the game's reveal scene (scriptable camera, controls off); undo it the same way
+        -- the game does when its draw window closes, otherwise the camera stays stuck in the prayer hall
+        pcall(function() rs.ClientEvents.SetPlayerCtrl:Fire(true) end)
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+        questTeleportHold = false
+        return done
     end
 
     -- Quest worker loop
@@ -1733,15 +1772,19 @@ if Library then
                                         end
                                         task.wait(1.5)
                                     elseif tId == "crystal" and cauldronQuestCrystal then
-                                        hwBuyExpCrystal()
-                                        Notify("Moro Soul", "Cauldron Quest: Bought 1 EXP crystal", 2, "Success")
+                                        local bought = hwBuyExpCrystal(math.min(5, need - cur))
+                                        Notify("Moro Soul", ("Cauldron Quest: Bought %d cheapest EXP crystals"):format(bought), 2, "Success")
                                         task.wait(1.5)
                                     elseif tId == "chest" and cauldronQuestChest then
                                         hwOpenChest()
                                         task.wait(0.8)
                                     elseif tId == "gacha" and cauldronQuestGacha then
-                                        hwDrawGacha()
-                                        Notify("Moro Soul", "Cauldron Quest: Drew 1 prayer role", 2, "Success")
+                                        local drawn = hwDrawGacha(need - cur)
+                                        if drawn > 0 then
+                                            Notify("Moro Soul", ("Cauldron Quest: Prayed %d times at the platform"):format(drawn), 2, "Success")
+                                        else
+                                            Notify("Moro Soul", "Cauldron Quest: prayer failed (not enough gold?)", 3, "Warning")
+                                        end
                                         task.wait(1.5)
                                     elseif tId == "kill" and cauldronQuestKill then
                                         questWantsKill = true
@@ -1837,7 +1880,7 @@ if Library then
         end
     end)
 
-    -- Halloween Bosses & Teleports
+    -- Halloween Teleports (fixed map points; the 2026 event has no Halloween boss)
     local HwLocations = {
         ["Cauldron NPC (Mitsuri)"] = Vector3.new(34, 36, -474),
         ["Wisteria Village"] = Vector3.new(-304, 79, -322),
@@ -1886,32 +1929,6 @@ if Library then
         end
     })
 
-    HwBossSec:AddButton({
-        Name = "Scan for Spawned Event Bosses",
-        Callback = function()
-            local foundBosses = {}
-            local monsters = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
-            if monsters then
-                for _, m in ipairs(monsters:GetChildren()) do
-                    local n = m.Name:lower()
-                    if n:find("halloween") or n:find("pumpkin") or n:find("ghost") or n:find("vampire") or n:find("boss") then
-                        local hum = m:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.Health > 0 then
-                            table.insert(foundBosses, m.Name .. " (" .. math.floor(hum.Health) .. " HP)")
-                        end
-                    end
-                end
-            end
-            if #foundBosses > 0 then
-                Notify("Moro Soul", "Active Event Bosses: " .. table.concat(foundBosses, ", "), 5, "Success")
-            else
-                Notify("Moro Soul", "No active Halloween Bosses found right now", 3, "Info")
-            end
-        end
-    })
-
-    HwBossSec:AddLabel("⏰ Boss Refresh Windows (UTC): 10:00 | 12:00 | 15:00 | 21:00")
-
     TrainTab:Column("left")
 
     local TrainSec = wrapSection(TrainTab:CreateSection({ Name = "Infinity Train Farming", Collapsible = true }))
@@ -1939,7 +1956,7 @@ if Library then
     TrainSec:AddDropdown({
         Name = "Train V2 Skill",
         Options = {"Skill 1", "Skill 2", "Skill 3"},
-        Default = "Skill 2",
+        Default = "Skill 3",
         Callback = function(selected)
             if selected == "Skill 1" then
                 _G.TrainSkillNumber = 1
@@ -1955,6 +1972,27 @@ if Library then
     TrainTab:Column("right")
 
     local TrainTpSec = wrapSection(TrainTab:CreateSection({ Name = "Train Teleports", Collapsible = true }))
+
+    -- Teleports straight into the train like the auto-train loops do. Skipping the EnterTrain remote
+    -- means the server never starts the train timer.
+    TrainTpSec:AddButton({
+        Name = "Enter Without Timer",
+        Icon = "timer-off",
+        Primary = true,
+        Tooltip = "Puts you inside the Infinity Train without the EnterTrain remote, so no timer starts",
+        Callback = function()
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local it = workspace:FindFirstChild("InfinityTrain")
+            local trainPoint = it and it:FindFirstChild("Train")
+            if hrp and trainPoint then
+                hrp.CFrame = trainPoint.CFrame * CFrame.new(0, 2, 0)
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                Notify("Moro Soul", "Inside the train, no timer", 2, "Success")
+            else
+                Notify("Moro Soul", "Infinity Train not found", 2, "Error")
+            end
+        end
+    })
 
     TrainTpSec:AddButton({
         Name = "Teleport to Train Entrance 1",
