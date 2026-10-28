@@ -37,6 +37,7 @@ end
 _G.AutoTagEnabled = false
 _G.KillAuraRange = 15
 _G.KillAuraWallCheck = true
+_G.KillAuraStrictWall = true -- не салить, если ни одной части тела цели не видно (строже обычного Wall Check)
 _G.ShowKillAuraRing = false
 _G.IgnoreNoTagBack = true
 
@@ -360,6 +361,63 @@ local function isPointVisible(origin, targetPos, targetChar)
     return false
 end
 
+-- Строгая проверка: цель считается видимой, только если до ЛЮБОЙ её части тела есть прямой луч.
+-- В отличие от isPlayerVisible, непрозрачные части без коллизии (декор, меши) тоже блокируют обзор,
+-- а игнорируются только почти прозрачные (Transparency >= 0.85) и другие игроки.
+local STRICT_PARTS = {
+    "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "Torso",
+    "LeftHand", "RightHand", "LeftFoot", "RightFoot", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
+}
+local strictParams = RaycastParams.new()
+strictParams.FilterType = Enum.RaycastFilterType.Exclude
+strictParams.IgnoreWater = true
+local strictCache = setmetatable({}, { __mode = "k" })
+
+local function isFullyVisibleStrict(targetChar)
+    local now = os.clock()
+    local cached = strictCache[targetChar]
+    if cached and now - cached.t < 0.08 then return cached.v end
+
+    local result = false
+    local myChar = LocalPlayer.Character
+    local myHead = myChar and (myChar:FindFirstChild("Head") or myChar:FindFirstChild("HumanoidRootPart"))
+    if myHead then
+        local origin = myHead.Position
+        local baseFilter = { myChar }
+        for _, other in ipairs(CollectionService:GetTagged("TaggablePlayer")) do
+            if other ~= targetChar and other ~= myChar then table.insert(baseFilter, other) end
+        end
+
+        for _, name in ipairs(STRICT_PARTS) do
+            local part = targetChar:FindFirstChild(name)
+            if part and part:IsA("BasePart") then
+                local filter = table.clone(baseFilter)
+                strictParams.FilterDescendantsInstances = filter
+                local from = origin
+                local goal = part.Position
+                for _ = 1, 4 do
+                    local hit = workspace:Raycast(from, goal - from, strictParams)
+                    if not hit or hit.Instance:IsDescendantOf(targetChar) then
+                        result = true
+                        break
+                    end
+                    if hit.Instance.Transparency >= 0.85 then
+                        table.insert(filter, hit.Instance)
+                        strictParams.FilterDescendantsInstances = filter
+                        from = hit.Position
+                    else
+                        break
+                    end
+                end
+                if result then break end
+            end
+        end
+    end
+
+    strictCache[targetChar] = { t = now, v = result }
+    return result
+end
+
 local function isPlayerVisible(targetChar)
     local myChar = LocalPlayer.Character
     if not myChar then return false end
@@ -440,7 +498,8 @@ local function findAuraTarget(hrp, legit)
                     ok = dot > bestDot
                     if ok then bestDot = dot end
                 end
-                if ok and ((not _G.KillAuraWallCheck) or isPlayerVisible(char)) then
+                if ok and ((not _G.KillAuraWallCheck) or isPlayerVisible(char))
+                    and ((not _G.KillAuraStrictWall) or isFullyVisibleStrict(char)) then
                     bestDist = dist
                     best = char
                 end
@@ -2081,6 +2140,10 @@ auraSec:AddSlider({
 auraSec:AddToggle({
     Name = "Wall Check", Icon = "shield", Default = true,
     Callback = function(state) _G.KillAuraWallCheck = state end,
+})
+auraSec:AddToggle({
+    Name = "Strict Wall Check (no tag through walls)", Icon = "shield-alert", Default = true,
+    Callback = function(state) _G.KillAuraStrictWall = state end,
 })
 auraSec:AddToggle({
     Name = "Ignore Shield (NoTagBack)", Icon = "shield-check", Default = true,
