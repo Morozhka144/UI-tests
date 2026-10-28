@@ -1,52 +1,33 @@
 --[[
-    Demon Soul Simulator - Lumina UI Edition
-    Fully ported to MoroLumina UI Framework v2.0 (Emerald Edition)
+    Demon Soul Simulator - MoroElite UI Edition
 --]]
 
+-- GitHub first (always the newest library), cached to MoroElite.lua; the cache is used only when GitHub is unreachable
 local function SafeLoad()
-    local path = "MoroLumina.lua"
-    local path2 = "Lumina.lua"
-
-    if isfile and isfile(path2) then 
-        local ok, res = pcall(function()
-            local src = readfile(path2)
-            local fn, err = loadstring(src)
-            if not fn then error(err or "loadstring error") end
-            return fn()
-        end)
-        if ok and res then return res end
+    local cache = "MoroElite.lua"
+    local function run(src, origin)
+        local fn, err = loadstring(src)
+        if not fn then warn("[Moro Soul] MoroElite compile error (" .. origin .. "): " .. tostring(err)) return nil end
+        local ok, lib = pcall(fn)
+        if not ok or not lib then warn("[Moro Soul] MoroElite init error (" .. origin .. "): " .. tostring(lib)) return nil end
+        return lib
     end
 
-    if isfile and isfile(path) then 
-        local ok, res = pcall(function()
-            local src = readfile(path)
-            local fn, err = loadstring(src)
-            if not fn then error(err or "loadstring error") end
-            return fn()
-        end)
-        if ok and res then return res end
-    end
-    
-    local url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/refs/heads/main/Lumina.lua"
+    local url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/MoroElite.lua"
     local ok, content = pcall(function() return game:HttpGet(url) end)
-    if ok and content and #content > 0 then
-        local func, err = loadstring(content)
-        if func then
-            local success, lib = pcall(func)
-            if success and lib then
-                if writefile then pcall(function() writefile(path, content) end) end
-                return lib
-            else
-                warn("[Moro Soul] Ошибка инициализации Lumina: " .. tostring(lib))
-            end
-        else
-            warn("[Moro Soul] Ошибка компиляции Lumina: " .. tostring(err))
+    if ok and type(content) == "string" and #content > 1000 then
+        local lib = run(content, "GitHub")
+        if lib then
+            if writefile then pcall(writefile, cache, content) end
+            return lib
         end
     else
-        warn("[Moro Soul] Ошибка загрузки Lumina с GitHub: " .. tostring(content))
+        warn("[Moro Soul] Could not download MoroElite: " .. tostring(content))
     end
-    
-    warn("[Moro Soul] Не удалось загрузить библиотеку Lumina!")
+
+    if isfile and isfile(cache) then
+        return run(readfile(cache), "local cache")
+    end
     return nil
 end
 
@@ -57,22 +38,32 @@ if Library then
     if _G.__MoroSoulCleanup then
         pcall(_G.__MoroSoulCleanup)
     end
-    pcall(function()
-        local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
-        for _, c in ipairs(parentGui:GetChildren()) do
-            if c.Name == "MoroLumina" then
-                pcall(function() c:Destroy() end)
-            end
-        end
-    end)
     local scriptActive = true
     local cleanupHandlers = {}
+    local cleanedUp = false
     _G.__MoroSoulCleanup = function()
+        if cleanedUp then return end
+        cleanedUp = true
+        -- switch every enabled toggle off first: their callbacks already know how to stop
+        -- their feature (restore speed, unhook, end their while-loop)
+        for _, e in pairs(Library.Flags or {}) do
+            local ok, v = pcall(e.Get)
+            if ok and v == true then pcall(e.Set, false) end
+        end
         scriptActive = false
         for _, fn in ipairs(cleanupHandlers) do
             pcall(fn)
         end
     end
+    -- connection that is disconnected when the script is unloaded
+    local function track(conn)
+        table.insert(cleanupHandlers, function() pcall(function() conn:Disconnect() end) end)
+        return conn
+    end
+    -- loop switches kept in _G survive a re-run; start them off so nothing farms while its toggle shows off
+    _G.ChristmasAuraV2, _G.SpringFarm, _G.AutoRerollActive, _G.AutoUpgradeHero, _G.AutoBuyCrystals = false, false, false, false, false
+    -- "Unload Menu" (and re-running the script) must also stop every loop of this script
+    Library:OnUnload(_G.__MoroSoulCleanup)
 
     local rs = game:GetService("ReplicatedStorage")
     local players = game:GetService("Players")
@@ -84,6 +75,7 @@ if Library then
     local teleportService = game:GetService("TeleportService")
     local guiService = game:GetService("GuiService")
     local uis = game:GetService("UserInputService")
+    local httpService = game:GetService("HttpService")
     
     local remoteFolder = rs:WaitForChild("RemoteEvents", 10) or rs:FindFirstChild("RemoteEvents")
     local attackRemote = remoteFolder and (remoteFolder:FindFirstChild("GeneralAttack") or remoteFolder:WaitForChild("GeneralAttack", 5))
@@ -101,6 +93,8 @@ if Library then
 
     -- Settings & State
     local states = {attack = false, skill1 = false, skill2 = false, skill3 = false}
+    -- features that need the attack loop without touching the "Fast General Attack" toggle state
+    local extraAttack = { spring = false, quest = false }
     local speeds = {attack = 20} 
     local killAuraActive = false
     local priorityHighHP = false 
@@ -235,7 +229,10 @@ if Library then
     -- Window Creation (Lumina API)
     local Win = Library:CreateWindow({
         Title = "Moro Soul",
+        Subtitle = "Demon Soul Simulator",
+        Icon = "flame",
         ToggleKey = Enum.KeyCode.RightShift,
+        TeleportFile = "DemonSoul.lua",
         LoaderSound = true,
         NotifySound = true
     })
@@ -260,13 +257,15 @@ if Library then
     end
 
     -- Tabs Creation (Lumina API)
-    local MainTab     = Win:CreateTab({ Name = "Attacks", Icon = "swords" })
-    local TrainTab    = Win:CreateTab({ Name = "Train", Icon = "train" })
+    local MainTab      = Win:CreateTab({ Name = "Attacks", Icon = "swords" })
+    local HalloweenTab = Win:CreateTab({ Name = "Halloween", Icon = "ghost" })
+    local TrainTab     = Win:CreateTab({ Name = "Train", Icon = "train-front" })
     local FishTab     = Win:CreateTab({ Name = "Fishing & Food", Icon = "fish" })
     local UpgradeTab  = Win:CreateTab({ Name = "Upgrade", Icon = "sparkles" })
     local DispatchTab = Win:CreateTab({ Name = "Dispatch", Icon = "send" })
     local RewardsTab  = Win:CreateTab({ Name = "Rewards", Icon = "gift" })
     local ExploitsTab = Win:CreateTab({ Name = "Exploits", Icon = "shield" })
+    local ExtrasTab   = Win:CreateTab({ Name = "Pets & Boss", Icon = "paw-print" })
     local SettingsTab = Win:AddSettingsTab()
 
     -- Compatibility aliases for Section methods
@@ -279,8 +278,8 @@ if Library then
 
     -- === 1. ULTRA OPTIMIZED TARGET SEARCH (Direct workspace.Monsters check) ===
     task.spawn(function()
-        while task.wait(0.15) do
-            if killAuraActive or states.attack or states.skill1 or states.skill2 or states.skill3 then
+        while scriptActive and task.wait(0.15) do
+            if killAuraActive or states.attack or extraAttack.spring or extraAttack.quest or states.skill1 or states.skill2 or states.skill3 then
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then
@@ -349,7 +348,7 @@ if Library then
     -- === 3. FAST ATTACK ===
     task.spawn(function()
         while scriptActive do
-            if states.attack then
+            if states.attack or killAuraActive or extraAttack.spring or extraAttack.quest then
                 if monsterNearby or killAuraActive then
                     pcall(function()
                         if attackRemote then
@@ -455,10 +454,10 @@ if Library then
         if player.Character then
             hookCharCanAttack(player.Character)
         end
-        player.CharacterAdded:Connect(function(newChar)
+        track(player.CharacterAdded:Connect(function(newChar)
             task.wait(0.5)
             hookCharCanAttack(newChar)
-        end)
+        end))
 
         table.insert(cleanupHandlers, function()
             if origApPlayAnimation and AnimationPlayer then
@@ -536,7 +535,7 @@ if Library then
     -- === 5. MONSTER NEARBY CHECK ===
     task.spawn(function()
         while scriptActive do
-            if states.attack or states.skill1 or states.skill2 or states.skill3 or killAuraActive then
+            if states.attack or extraAttack.spring or extraAttack.quest or states.skill1 or states.skill2 or states.skill3 or killAuraActive then
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 local found = false
@@ -585,24 +584,16 @@ if Library then
             AntiGameplayPaused:Disconnect()
             AntiGameplayPaused = nil
         end
-        AntiGameplayPaused = CoreGui.ChildAdded:Connect(function(child)
+        AntiGameplayPaused = track(CoreGui.ChildAdded:Connect(function(child)
             if child.Name == "RobloxGui" then
                 task.wait(0.1)
                 destroyNetworkPause()
             end
-        end)
+        end))
     end)
 
     -- === 7. ANTI AFK ===
-    local xAFKx = nil
-    pcall(function()
-        xAFKx = player.Idled:Connect(function()
-            local vu = game:GetService("VirtualUser")
-            vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-            task.wait(1)
-            vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-        end)
-    end)
+    -- handled by MoroElite: Settings > Actions > Anti-AFK (on by default)
 
     -- === 8. AUTO REJOIN ===
     local currentPlace = game.PlaceId
@@ -610,7 +601,7 @@ if Library then
     local autoReconnectEnabled = true
     
     local function reconnect()
-        if player and autoReconnectEnabled then
+        if player and autoReconnectEnabled and scriptActive then
             pcall(function()
                 teleportService:TeleportToPlaceInstance(currentPlace, currentServer, player)
             end)
@@ -622,13 +613,13 @@ if Library then
     end
     
     pcall(function()
-        guiService.ErrorMessageChanged:Connect(function()
+        track(guiService.ErrorMessageChanged:Connect(function()
             local errorMsg = guiService:GetErrorMessage()
             if errorMsg and errorMsg ~= "" and autoReconnectEnabled then
                 task.wait(5)
                 reconnect()
             end
-        end)
+        end))
     end)
 
     -- =====================================================================
@@ -850,20 +841,25 @@ if Library then
     MainTab:Column("right")
 
     local AuraSec = wrapSection(MainTab:CreateSection({ Name = "Kill Aura V67 (Ultra)", Collapsible = true }))
+    local auraGeneration = 0
 
     AuraSec:AddToggle({
         Name = "Kill Aura V67 (Ultra)",
         Default = false,
         Callback = function(state)
+            -- the fast-attack loop also runs while killAuraActive, so states.attack (the
+            -- "Fast General Attack" toggle) is left alone here
             killAuraActive = state
-            states.attack = state
-            
+            auraGeneration += 1
+            local myGeneration = auraGeneration
+
             if killAuraActive then
                 task.spawn(function()
                     local target = nil
                     local lastTarget = nil
-                    
-                    while killAuraActive do
+
+                    -- a newer generation means the toggle was flipped again: this loop retires
+                    while killAuraActive and myGeneration == auraGeneration and scriptActive do
                         local char = player.Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
                         
@@ -1011,7 +1007,7 @@ if Library then
             z2 = {p = Vector3.new(28, 147, -36), l = Vector3.new(28, 0, -36)}
         }
 
-        while true do
+        while scriptActive do
             if _G.ChristmasAuraV2 then
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -1104,7 +1100,7 @@ if Library then
         Default = false,
         Callback = function(state)
             _G.SpringFarm = state
-            states.attack = state 
+            extraAttack.spring = state
             if state then
                 Notify("Moro Soul", "Priority Patrol Started", 2, "Info")
             else
@@ -1127,7 +1123,7 @@ if Library then
     task.spawn(function()
         local lastFoundTime = tick()
 
-        while task.wait(0.15) do
+        while scriptActive and task.wait(0.15) do
             if _G.SpringFarm then
                 local monsters = workspace:FindFirstChild("Monsters")
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -1231,7 +1227,7 @@ if Library then
 
     -- Train Mode V1 (General Attack)
     task.spawn(function()
-        while true do
+        while scriptActive do
             task.wait(0.15)
             if autoTrain then
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -1295,7 +1291,7 @@ if Library then
 
     -- Train Mode V2 (Attack + Selected Skill)
     task.spawn(function()
-        while true do
+        while scriptActive do
             task.wait(0.15)
             if autoTrainV2 then
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -1359,6 +1355,562 @@ if Library then
             end
         end
     end)
+
+    --=====================================================================--
+    --                        HALLOWEEN EVENT TAB                          --
+    --=====================================================================--
+
+    HalloweenTab:Column("left")
+
+    local HwStatusSec = wrapSection(HalloweenTab:CreateSection({ Name = "Event Status & Currencies", Collapsible = true }))
+    local HwCauldronSec = wrapSection(HalloweenTab:CreateSection({ Name = "Auto Halloween Cauldron", Collapsible = true }))
+
+    -- Status Labels
+    local hwPointsLabel = HwStatusSec:AddLabel("🎃 Halloween Points: Loading...")
+    local hwShadowLabel = HwStatusSec:AddLabel("🦇 Shadow Pumpkins: Loading...")
+    local hwStageLabel  = HwStatusSec:AddLabel("🍲 Cauldron Stage: Loading...")
+    local hwTimerLabel  = HwStatusSec:AddLabel("⏳ Cooking Timer: Loading...")
+    local hwDailyLabel  = HwStatusSec:AddLabel("🎁 Daily Points Rounds: Loading...")
+    local hwTasksLabel  = HwStatusSec:AddLabel("📜 Tasks: Loading...")
+    local hwTrainLabel  = HwStatusSec:AddLabel("🚂 Train Season: Loading...")
+
+    local function refreshHalloweenStats()
+        pcall(function()
+            local wk = WuKong
+            if not wk then
+                pcall(function() wk = require(rs:WaitForChild("WuKong", 2)) end)
+            end
+            if wk and wk.ExecuteQuery then
+                local pts = wk:ExecuteQuery("/活动/万圣活动/2026万圣节属性/2026万圣积分?获取元素数量") or 0
+                local shd = wk:ExecuteQuery("/活动/万圣活动/2026万圣节属性/2026万圣幽影南瓜?获取元素数量") or 0
+                hwPointsLabel.Set("🎃 Halloween Points: " .. tostring(pts))
+                hwShadowLabel.Set("🦇 Shadow Pumpkins: " .. tostring(shd))
+            end
+        end)
+        pcall(function()
+            local stage = tonumber(player:GetAttribute("H26Cook_Stage")) or 0
+            local round = tonumber(player:GetAttribute("H26Cook_Round")) or 1
+            local dailyRounds = tonumber(player:GetAttribute("H26Cook_PointRounds")) or 0
+            local assists = tonumber(player:GetAttribute("H26Cook_Assists")) or 0
+            local endTime = tonumber(player:GetAttribute("H26Cook_EndTime")) or 0
+
+            local stageName = "Preparation (0)"
+            if stage == 1 then
+                stageName = "Cooking (1)"
+            elseif stage == 2 then
+                stageName = "READY TO CLAIM (2)"
+            end
+            hwStageLabel.Set(string.format("🍲 Stage: %s | Round %d | Assists: %d/10", stageName, round, assists))
+            hwDailyLabel.Set(string.format("🎁 Daily Rounds: %d/4 (resets 00:00 UTC)", dailyRounds))
+
+            if stage == 1 and endTime > 0 then
+                local remain = math.max(0, endTime - os.time())
+                local h = math.floor(remain / 3600)
+                local m = math.floor((remain % 3600) / 60)
+                local s = remain % 60
+                hwTimerLabel.Set(string.format("⏳ Cooking Timer: %02d:%02d:%02d left", h, m, s))
+            elseif stage == 2 then
+                hwTimerLabel.Set("⏳ Cooking Timer: Cooked! Ready to claim!")
+            else
+                hwTimerLabel.Set("⏳ Cooking Timer: In Preparation")
+            end
+
+            local rawTasks = player:GetAttribute("H26Cook_Tasks")
+            if typeof(rawTasks) == "string" and #rawTasks > 0 then
+                local ok, tasks = pcall(function() return httpService:JSONDecode(rawTasks) end)
+                if ok and typeof(tasks) == "table" and #tasks > 0 then
+                    local tParts = {}
+                    for idx, t in ipairs(tasks) do
+                        local cur = tonumber(t.cur) or 0
+                        local need = tonumber(t.need) or 1
+                        local doneTag = (cur >= need) and "✓" or ""
+                        table.insert(tParts, string.format("%s: %d/%d %s", tostring(t.id), cur, need, doneTag))
+                    end
+                    hwTasksLabel.Set("📜 Tasks: " .. table.concat(tParts, " | "))
+                else
+                    hwTasksLabel.Set("📜 Tasks: None")
+                end
+            else
+                hwTasksLabel.Set("📜 Tasks: None")
+            end
+        end)
+        pcall(function()
+            local trainModHelper = rs:FindFirstChild("Helpers") and rs.Helpers:FindFirstChild("Halloween2026TrainSeasonMods")
+            if trainModHelper then
+                local modObj = require(trainModHelper)
+                if modObj and modObj.DISPLAY then
+                    hwTrainLabel.Set("🚂 Train Mods: Active (" .. #modObj.DISPLAY .. " modifiers)")
+                end
+            end
+        end)
+    end
+
+    HwStatusSec:AddButton({
+        Name = "Refresh Stats",
+        Primary = true,
+        Callback = function()
+            refreshHalloweenStats()
+            Notify("Moro Soul", "Halloween Stats Refreshed", 1.5, "Info")
+        end
+    })
+
+    -- Auto Cauldron section
+    local autoCauldronStart = false
+    local autoCauldronClaim = false
+    local autoCauldronAssist = false
+
+    HwCauldronSec:AddToggle({
+        Name = "Auto Start Cooking (When 3/3 Tasks Complete)",
+        Default = false,
+        Callback = function(val)
+            autoCauldronStart = val
+            Notify("Moro Soul", val and "Auto Start Cooking Enabled" or "Auto Start Cooking Disabled", 2, "Info")
+        end
+    })
+
+    HwCauldronSec:AddToggle({
+        Name = "Auto Claim Rewards (When Ready)",
+        Default = false,
+        Callback = function(val)
+            autoCauldronClaim = val
+            Notify("Moro Soul", val and "Auto Claim Rewards Enabled" or "Auto Claim Rewards Disabled", 2, "Info")
+        end
+    })
+
+    HwCauldronSec:AddToggle({
+        Name = "Auto Query Friends Assist",
+        Default = false,
+        Callback = function(val)
+            autoCauldronAssist = val
+        end
+    })
+
+    HwCauldronSec:AddButton({
+        Name = "Start Cooking Now (Manual)",
+        Callback = function()
+            local cookRE = rs:FindFirstChild("Halloween2026CookingRE")
+            if cookRE then
+                cookRE:FireServer("start")
+                Notify("Moro Soul", "Sent Start Cooking Request", 2, "Info")
+                task.delay(1, refreshHalloweenStats)
+            else
+                Notify("Moro Soul", "Halloween Cooking Remote not found", 2, "Error")
+            end
+        end
+    })
+
+    HwCauldronSec:AddButton({
+        Name = "Claim Rewards Now (Manual)",
+        Callback = function()
+            local cookRE = rs:FindFirstChild("Halloween2026CookingRE")
+            if cookRE then
+                cookRE:FireServer("claim")
+                Notify("Moro Soul", "Sent Claim Rewards Request", 2, "Info")
+                task.delay(1, refreshHalloweenStats)
+            else
+                Notify("Moro Soul", "Halloween Cooking Remote not found", 2, "Error")
+            end
+        end
+    })
+
+    HwCauldronSec:AddButton({
+        Name = "Request Friends Assist (Manual)",
+        Callback = function()
+            local cookRE = rs:FindFirstChild("Halloween2026CookingRE")
+            if cookRE then
+                cookRE:FireServer("queryassist")
+                Notify("Moro Soul", "Queried Friends Assist", 2, "Info")
+            end
+        end
+    })
+
+    -- Background loop for Cauldron Auto-Start/Claim/Assist
+    task.spawn(function()
+        local assistTimer = 0
+        while scriptActive do
+            if autoCauldronStart or autoCauldronClaim or autoCauldronAssist then
+                local stage = tonumber(player:GetAttribute("H26Cook_Stage")) or 0
+                local cookRE = rs:FindFirstChild("Halloween2026CookingRE")
+
+                if cookRE then
+                    -- 1. Auto Claim
+                    if autoCauldronClaim then
+                        local endTime = tonumber(player:GetAttribute("H26Cook_EndTime")) or 0
+                        local isTimeUp = (stage == 1 and endTime > 0 and os.time() >= endTime)
+                        if stage == 2 or isTimeUp then
+                            cookRE:FireServer("claim")
+                            Notify("Moro Soul", "Cauldron Rewards Claimed!", 2.5, "Success")
+                            task.wait(2)
+                            refreshHalloweenStats()
+                        end
+                    end
+
+                    -- 2. Auto Start
+                    if autoCauldronStart and stage == 0 then
+                        local rawTasks = player:GetAttribute("H26Cook_Tasks")
+                        if typeof(rawTasks) == "string" and #rawTasks > 0 then
+                            local ok, tasks = pcall(function() return httpService:JSONDecode(rawTasks) end)
+                            if ok and typeof(tasks) == "table" and #tasks >= 3 then
+                                local allDone = true
+                                for _, t in ipairs(tasks) do
+                                    if (tonumber(t.cur) or 0) < (tonumber(t.need) or 1) then
+                                        allDone = false
+                                        break
+                                    end
+                                end
+                                if allDone then
+                                    cookRE:FireServer("start")
+                                    Notify("Moro Soul", "Tasks 3/3 done! Started cooking in cauldron!", 3, "Success")
+                                    task.wait(2)
+                                    refreshHalloweenStats()
+                                end
+                            end
+                        end
+                    end
+
+                    -- 3. Auto Assist
+                    if autoCauldronAssist and stage == 1 then
+                        assistTimer = assistTimer + 3
+                        if assistTimer >= 30 then
+                            assistTimer = 0
+                            cookRE:FireServer("queryassist")
+                        end
+                    end
+                end
+            end
+            task.wait(3)
+        end
+    end)
+
+    -- Initial load of stats
+    task.spawn(function()
+        task.wait(1)
+        refreshHalloweenStats()
+    end)
+
+    -- Right Column
+    HalloweenTab:Column("right")
+
+    local HwQuestSec = wrapSection(HalloweenTab:CreateSection({ Name = "Cauldron Quests Automation", Collapsible = true }))
+    local HwPumpkinSec = wrapSection(HalloweenTab:CreateSection({ Name = "Pumpkin Gathering", Collapsible = true }))
+    local HwBossSec = wrapSection(HalloweenTab:CreateSection({ Name = "Halloween Bosses & Teleports", Collapsible = true }))
+
+    local autoCauldronTasks = false
+    local cauldronQuestKill = true
+    local cauldronQuestChest = true
+    local cauldronQuestEat = false
+    local cauldronQuestCrystal = false
+    local cauldronQuestGacha = false
+
+    HwQuestSec:AddToggle({
+        Name = "Auto Complete Cauldron Quests (Master)",
+        Default = false,
+        Callback = function(val)
+            autoCauldronTasks = val
+            Notify("Moro Soul", val and "Cauldron Quest Bot Active" or "Cauldron Quest Bot Disabled", 2, "Info")
+        end
+    })
+
+    HwQuestSec:AddToggle({
+        Name = "Task: Defeat Monsters (Attack/Kill Aura)",
+        Default = true,
+        Callback = function(val)
+            cauldronQuestKill = val
+        end
+    })
+
+    HwQuestSec:AddToggle({
+        Name = "Task: Open Chests (Auto Open Menu Chest)",
+        Default = true,
+        Callback = function(val)
+            cauldronQuestChest = val
+        end
+    })
+
+    HwQuestSec:AddToggle({
+        Name = "Task: Eat Food (Optional)",
+        Default = false,
+        Callback = function(val)
+            cauldronQuestEat = val
+            Notify("Moro Soul", val and "Eat Food for Quest Enabled" or "Disabled", 2, "Info")
+        end
+    })
+
+    HwQuestSec:AddToggle({
+        Name = "Task: Buy EXP Crystals (Optional)",
+        Default = false,
+        Callback = function(val)
+            cauldronQuestCrystal = val
+            Notify("Moro Soul", val and "Buy Crystals for Quest Enabled" or "Disabled", 2, "Info")
+        end
+    })
+
+    HwQuestSec:AddToggle({
+        Name = "Task: Prayer Platform Gacha (Optional)",
+        Default = false,
+        Callback = function(val)
+            cauldronQuestGacha = val
+            Notify("Moro Soul", val and "Prayer Gacha for Quest Enabled" or "Disabled", 2, "Info")
+        end
+    })
+
+    -- Helper functions for quest actions
+    local function hwEatAnyFood()
+        local foods = { "食物5", "食物1", "食物2", "食物3", "食物4", "食物6", "食物25", "食物24", "食物26" }
+        for _, fId in ipairs(foods) do
+            local ok, res = pcall(function()
+                local wk = WuKong
+                if not wk then
+                    pcall(function() wk = require(rs:WaitForChild("WuKong", 2)) end)
+                end
+                if wk and wk.ExecuteAction then
+                    return wk:ExecuteAction(("/食物系统/使用食物/使用%s?购买"):format(fId))
+                end
+            end)
+            if ok and res and not res.HasError then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function hwBuyExpCrystal()
+        local ok = pcall(function()
+            local eb = EventBus
+            if not eb then
+                pcall(function() eb = require(rs:WaitForChild("Packages"):WaitForChild("EventBus")) end)
+            end
+            if eb and eb.FireServer then
+                eb.FireServer("购买经验水晶", "经验水晶1", 1)
+            end
+        end)
+        return ok
+    end
+
+    local function hwOpenChest()
+        pcall(function()
+            local wk = rs:FindFirstChild("WuKong")
+            local raf = wk and wk:FindFirstChild("RemoteActionFunction")
+            if raf then
+                raf:InvokeServer("/\229\174\157\231\174\177\231\179\187\231\187\159/\229\188\128\229\174\157\231\174\177/\229\188\128\229\174\157\231\174\1771?\229\164\154\230\172\161\232\180\173\228\185\176", 1)
+            elseif WuKong and WuKong.ExecuteAction then
+                WuKong:ExecuteAction("/\229\174\157\231\174\177\231\179\187\231\187\159/\229\188\128\229\174\157\231\174\177/\229\188\128\229\174\157\231\174\1771?\229\164\154\230\172\161\232\180\173\228\185\176", 1)
+            end
+        end)
+    end
+
+    local function hwDrawGacha()
+        pcall(function()
+            local drawRemote = remoteFolder and remoteFolder:FindFirstChild("DrawRole")
+            if drawRemote then
+                drawRemote:FireServer(1, 1)
+            end
+        end)
+    end
+
+    -- Quest worker loop
+    task.spawn(function()
+        while scriptActive do
+            -- attack only while an unfinished "kill" task exists (cleared once it is done or the feature is off)
+            local questWantsKill = false
+            if autoCauldronTasks then
+                local stage = tonumber(player:GetAttribute("H26Cook_Stage")) or 0
+                if stage == 0 then
+                    local rawTasks = player:GetAttribute("H26Cook_Tasks")
+                    if typeof(rawTasks) == "string" and #rawTasks > 0 then
+                        local ok, tasks = pcall(function() return httpService:JSONDecode(rawTasks) end)
+                        if ok and typeof(tasks) == "table" then
+                            for _, t in ipairs(tasks) do
+                                local cur = tonumber(t.cur) or 0
+                                local need = tonumber(t.need) or 1
+                                if cur < need then
+                                    local tId = tostring(t.id)
+
+                                    if tId == "food" and cauldronQuestEat then
+                                        local ate = hwEatAnyFood()
+                                        if ate then
+                                            Notify("Moro Soul", "Cauldron Quest: Ate 1 food", 2, "Success")
+                                        end
+                                        task.wait(1.5)
+                                    elseif tId == "crystal" and cauldronQuestCrystal then
+                                        hwBuyExpCrystal()
+                                        Notify("Moro Soul", "Cauldron Quest: Bought 1 EXP crystal", 2, "Success")
+                                        task.wait(1.5)
+                                    elseif tId == "chest" and cauldronQuestChest then
+                                        hwOpenChest()
+                                        task.wait(0.8)
+                                    elseif tId == "gacha" and cauldronQuestGacha then
+                                        hwDrawGacha()
+                                        Notify("Moro Soul", "Cauldron Quest: Drew 1 prayer role", 2, "Success")
+                                        task.wait(1.5)
+                                    elseif tId == "kill" and cauldronQuestKill then
+                                        questWantsKill = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            extraAttack.quest = questWantsKill
+            task.wait(2.5)
+        end
+        extraAttack.quest = false
+    end)
+
+    -- Pumpkin Gathering
+    local autoFarmPumpkins = false
+
+    local function collectAllPumpkins()
+        local container = workspace:FindFirstChild("FoodMaterialContainer")
+        local g5 = container and container:FindFirstChild("Group_5")
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+
+        if not hrp or not g5 then
+            Notify("Moro Soul", "Pumpkins (Group_5) not found", 2, "Error")
+            return 0
+        end
+
+        local prompts = {}
+        for _, item in ipairs(g5:GetDescendants()) do
+            if item:IsA("ProximityPrompt") and item.Parent and item.Parent:IsA("BasePart") then
+                table.insert(prompts, item)
+            end
+        end
+
+        if #prompts == 0 then
+            Notify("Moro Soul", "No pumpkins available right now", 2, "Warning")
+            return 0
+        end
+
+        Notify("Moro Soul", "Gathering " .. #prompts .. " pumpkins...", 2, "Info")
+        local savedCF = hrp.CFrame
+
+        for _, prompt in ipairs(prompts) do
+            if prompt.Parent and prompt.Parent:IsA("BasePart") and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                hrp.CFrame = prompt.Parent.CFrame
+                hrp.AssemblyLinearVelocity = Vector3.zero
+
+                if fireproximityprompt then
+                    fireproximityprompt(prompt)
+                else
+                    vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                    task.wait(0.04)
+                    vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                end
+                task.wait(0.06)
+            end
+        end
+
+        if hrp and player.Character then
+            hrp.CFrame = savedCF
+        end
+        Notify("Moro Soul", "Collected all map pumpkins!", 2, "Success")
+        return #prompts
+    end
+
+    HwPumpkinSec:AddButton({
+        Name = "Collect All Pumpkins (Fast TP)",
+        Primary = true,
+        Callback = function()
+            task.spawn(collectAllPumpkins)
+        end
+    })
+
+    HwPumpkinSec:AddToggle({
+        Name = "Auto Farm Pumpkins (Loop)",
+        Default = false,
+        Callback = function(val)
+            autoFarmPumpkins = val
+            Notify("Moro Soul", val and "Auto Farm Pumpkins Active" or "Auto Farm Pumpkins Disabled", 2, "Info")
+        end
+    })
+
+    task.spawn(function()
+        while scriptActive do
+            if autoFarmPumpkins then
+                pcall(collectAllPumpkins)
+                task.wait(15)
+            else
+                task.wait(2)
+            end
+        end
+    end)
+
+    -- Halloween Bosses & Teleports
+    local HwLocations = {
+        ["Cauldron NPC (Mitsuri)"] = Vector3.new(34, 36, -474),
+        ["Wisteria Village"] = Vector3.new(-304, 79, -322),
+        ["Wisteria Peak"] = Vector3.new(17275, 28, -7),
+        ["Wilderness"] = Vector3.new(179, 69, 431),
+        ["Farmland"] = Vector3.new(411, 32, -353),
+        ["Train Station"] = Vector3.new(9, 25, 7),
+        ["Ubuyashiki Residence"] = Vector3.new(508, 24, 893),
+    }
+
+    local HwLocNames = {
+        "Cauldron NPC (Mitsuri)",
+        "Wisteria Village",
+        "Wisteria Peak",
+        "Wilderness",
+        "Farmland",
+        "Train Station",
+        "Ubuyashiki Residence"
+    }
+
+    local selectedHwLoc = HwLocNames[1]
+
+    HwBossSec:AddDropdown({
+        Name = "Select Halloween Location / Spawn",
+        Options = HwLocNames,
+        Default = HwLocNames[1],
+        Callback = function(val)
+            selectedHwLoc = val
+        end
+    })
+
+    HwBossSec:AddButton({
+        Name = "Teleport to Selected Location",
+        Primary = true,
+        Callback = function()
+            local targetPos = HwLocations[selectedHwLoc]
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp and targetPos then
+                hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                Notify("Moro Soul", "Teleported to " .. selectedHwLoc, 2, "Success")
+            else
+                Notify("Moro Soul", "Character or target position not found", 2, "Error")
+            end
+        end
+    })
+
+    HwBossSec:AddButton({
+        Name = "Scan for Spawned Event Bosses",
+        Callback = function()
+            local foundBosses = {}
+            local monsters = workspace:FindFirstChild("Monsters") or workspace:FindFirstChild("Enemies")
+            if monsters then
+                for _, m in ipairs(monsters:GetChildren()) do
+                    local n = m.Name:lower()
+                    if n:find("halloween") or n:find("pumpkin") or n:find("ghost") or n:find("vampire") or n:find("boss") then
+                        local hum = m:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 then
+                            table.insert(foundBosses, m.Name .. " (" .. math.floor(hum.Health) .. " HP)")
+                        end
+                    end
+                end
+            end
+            if #foundBosses > 0 then
+                Notify("Moro Soul", "Active Event Bosses: " .. table.concat(foundBosses, ", "), 5, "Success")
+            else
+                Notify("Moro Soul", "No active Halloween Bosses found right now", 3, "Info")
+            end
+        end
+    })
+
+    HwBossSec:AddLabel("⏰ Boss Refresh Windows (UTC): 10:00 | 12:00 | 15:00 | 21:00")
 
     TrainTab:Column("left")
 
@@ -1464,7 +2016,7 @@ if Library then
         local pullRemote = remoteFolder:WaitForChild("PullFish")
         local autoFishRemote = remoteFolder:FindFirstChild("AutoFishing")
         
-        while true do
+        while scriptActive do
             if autoFishing then
                 local fishingRoot = workspace:FindFirstChild("Fishing")
                 local targetPoint = fishingRoot and fishingRoot:FindFirstChild(fishingArea) and fishingRoot[fishingArea]:FindFirstChild("FishingPoint")
@@ -1570,6 +2122,9 @@ if Library then
         { id = "食物15", craftId = "食物合成15", name = "Steamed Tilapia", buff = "+15% Boss Dmg", props = { BossDamageAddition = 0.15 } },
         { id = "食物24", craftId = "食物合成24", name = "Green Salad", buff = "+100% Move Speed", props = { MoveSpeedRatio = 1.0 } },
         { id = "食物27", craftId = nil,            name = "Halloween Candy", buff = "+100% Drops", props = { DropRateAddition = 1.0 } },
+        { id = "食物29", craftId = nil,            name = "Golden Caramel Apple", buff = "Event Special (+50% Atk/Crit)", props = { AttackDamageRatio = 0.5, CriticalStrikeRate = 0.5 } },
+        { id = "食物30", craftId = nil,            name = "Caramel Apple", buff = "Event Special (+30% Atk)", props = { AttackDamageRatio = 0.3 } },
+        { id = "食物31", craftId = nil,            name = "Green Tea", buff = "Event Special (+50% Energy)", props = { EnergyRecoverySpeedRatio = 0.5 } },
         { id = "食物28", craftId = nil,            name = "Gingerbread Man", buff = "+100% Drops", props = { DropRateAddition = 1.0 } },
         { id = "食物16", craftId = "食物合成16", name = "Steamed Snapper", buff = "+60% Atk, +15% Dbl", props = { AttackDamageRatio = 0.6, DoubleAttackPercent = 1 } },
         { id = "食物17", craftId = "食物合成17", name = "Cod Sushi", buff = "+15% Atk, +15% Crit", props = { AttackDamageRatio = 0.15, CriticalStrikeRate = 0.15 } },
@@ -2035,7 +2590,7 @@ if Library then
     -- Auto-eat loop for top 3 foods: 食物22 (Tuna), 食物20 (Koi), 食物15 (Tilapia)
     task.spawn(function()
         local bestFoods = { "食物22", "食物20", "食物15" }
-        while task.wait(3) do
+        while scriptActive and task.wait(3) do
             if autoEatBestFoods and WuKong then
                 for _, fId in ipairs(bestFoods) do
                     local isAct = false
@@ -2229,19 +2784,8 @@ if Library then
     end
     ApplySlotCountBypass(true)
 
-    local initialHeroName = "Iguro Obanai"
-    if not heroData[initialHeroName] then
-        for _, n in ipairs(heroNames) do
-            if n:find("Iguro") or n:find("Obanai") then
-                initialHeroName = n
-                break
-            end
-        end
-        if not heroData[initialHeroName] and heroNames[1] then
-            initialHeroName = heroNames[1]
-        end
-    end
-    local initialHeroPath = heroData[initialHeroName] or "伊黑小芭内"
+    local initialHeroName = heroNames[1] or "Sakonji Urokodaki"
+    local initialHeroPath = heroData[initialHeroName] or "左近次"
     local initialTalents = GetTalentsForHero(initialHeroPath)
     local initialTalent = initialTalents[1] or { id = initialHeroPath .. "_1", name = "Talent 1" }
 
@@ -2250,21 +2794,20 @@ if Library then
     _G.RerollTalentId = initialTalent.id
     _G.RerollTalentName = initialTalent.name
     _G.TargetBonusStats = {
-        ["Shield Damage"] = true,
         ["Skill3 Damage"] = true,
-        ["Critical Chance"] = true
+        ["Shield Damage"] = true
     }
-    _G.TargetBonusStat = "Shield Damage"
+    _G.TargetBonusStat = "Skill3 Damage"
     _G.TargetMinRank = "S (81-100)"
     _G.AutoLockMatching = true
     _G.AutoRerollActive = false
     _G.RerollDelay = 0.25
 
-    _G.InjectSlot1Stat = "Shield Damage"
+    _G.InjectSlot1Stat = "Critical Damage"
     _G.InjectSlot1Level = 100
-    _G.InjectSlot2Stat = "Skill3 Damage"
+    _G.InjectSlot2Stat = "Attack"
     _G.InjectSlot2Level = 100
-    _G.InjectSlot3Stat = "Critical Chance"
+    _G.InjectSlot3Stat = "Boss Damage Boost"
     _G.InjectSlot3Level = 100
     _G.BypassSlotUnlock = true
 
@@ -2767,7 +3310,7 @@ if Library then
     TalentInjectSec:AddDropdown({
         Name = "Slot 1 Bonus",
         Options = attrOptions,
-        Default = "Shield Damage",
+        Default = "Critical Damage",
         Callback = function(val)
             _G.InjectSlot1Stat = val
         end
@@ -2786,7 +3329,7 @@ if Library then
     TalentInjectSec:AddDropdown({
         Name = "Slot 2 Bonus",
         Options = attrOptions,
-        Default = "Skill3 Damage",
+        Default = "Attack",
         Callback = function(val)
             _G.InjectSlot2Stat = val
         end
@@ -2805,7 +3348,7 @@ if Library then
     TalentInjectSec:AddDropdown({
         Name = "Slot 3 Bonus",
         Options = attrOptions,
-        Default = "Critical Chance",
+        Default = "Boss Damage Boost",
         Callback = function(val)
             _G.InjectSlot3Stat = val
         end
@@ -2994,24 +3537,18 @@ if Library then
                 pcall(function()
                     local roleCtrl = require(rs:WaitForChild("UI"):WaitForChild("Role"))
                     if roleCtrl and roleCtrl.Panel then
-                        local curS1Id = attrNameToId[_G.InjectSlot1Stat] or 13
-                        local curS1Lv = _G.InjectSlot1Level or 100
-                        local curS2Id = attrNameToId[_G.InjectSlot2Stat] or 10
-                        local curS2Lv = _G.InjectSlot2Level or 100
-                        local curS3Id = attrNameToId[_G.InjectSlot3Stat] or 1
-                        local curS3Lv = _G.InjectSlot3Level or 100
                         roleCtrl.Panel.AttrSlots = {
-                            Attr1 = { Id = curS1Id, Level = curS1Lv },
-                            Attr2 = { Id = curS2Id, Level = curS2Lv },
-                            Attr3 = { Id = curS3Id, Level = curS3Lv }
+                            Attr1 = { Id = s1Id, Level = s1Lv },
+                            Attr2 = { Id = s2Id, Level = s2Lv },
+                            Attr3 = { Id = s3Id, Level = s3Lv }
                         }
                     end
                 end)
 
                 -- 6. Inject into in-game UI facade and container
                 pcall(function()
-                    local heroPath = _G.RerollHeroPath or "伊黑小芭内"
-                    local targetTalentId = _G.RerollTalentId or "伊黑小芭内_1"
+                    local heroPath = _G.RerollHeroPath or "左近次"
+                    local targetTalentId = _G.RerollTalentId or "左近次_1"
                     local child = nil
                     if WuKongHelper and WuKongHelper.GetFacade then
                         local facade = WuKongHelper.GetFacade(player.UserId)
@@ -3022,18 +3559,12 @@ if Library then
                         child = c
                     end
                     if child and WuKongHelper then
-                        local curS1Id = attrNameToId[_G.InjectSlot1Stat] or 13
-                        local curS1Lv = _G.InjectSlot1Level or 100
-                        local curS2Id = attrNameToId[_G.InjectSlot2Stat] or 10
-                        local curS2Lv = _G.InjectSlot2Level or 100
-                        local curS3Id = attrNameToId[_G.InjectSlot3Stat] or 1
-                        local curS3Lv = _G.InjectSlot3Level or 100
-                        WuKongHelper.SetPluginValue(child, "Attr1Id", curS1Id)
-                        WuKongHelper.SetPluginValue(child, "Attr1Level", curS1Lv)
-                        WuKongHelper.SetPluginValue(child, "Attr2Id", curS2Id)
-                        WuKongHelper.SetPluginValue(child, "Attr2Level", curS2Lv)
-                        WuKongHelper.SetPluginValue(child, "Attr3Id", curS3Id)
-                        WuKongHelper.SetPluginValue(child, "Attr3Level", curS3Lv)
+                        WuKongHelper.SetPluginValue(child, "Attr1Id", s1Id)
+                        WuKongHelper.SetPluginValue(child, "Attr1Level", s1Lv)
+                        WuKongHelper.SetPluginValue(child, "Attr2Id", s2Id)
+                        WuKongHelper.SetPluginValue(child, "Attr2Level", s2Lv)
+                        WuKongHelper.SetPluginValue(child, "Attr3Id", s3Id)
+                        WuKongHelper.SetPluginValue(child, "Attr3Level", s3Lv)
                     end
                 end)
 
@@ -3063,16 +3594,10 @@ if Library then
                                 end
                                 local roleCtrl = require(rs:WaitForChild("UI"):WaitForChild("Role"))
                                 if roleCtrl and roleCtrl.Panel and realTalentBuffsActive then
-                                    local curS1Id = attrNameToId[_G.InjectSlot1Stat] or 13
-                                    local curS1Lv = _G.InjectSlot1Level or 100
-                                    local curS2Id = attrNameToId[_G.InjectSlot2Stat] or 10
-                                    local curS2Lv = _G.InjectSlot2Level or 100
-                                    local curS3Id = attrNameToId[_G.InjectSlot3Stat] or 1
-                                    local curS3Lv = _G.InjectSlot3Level or 100
                                     roleCtrl.Panel.AttrSlots = {
-                                        Attr1 = { Id = curS1Id, Level = curS1Lv },
-                                        Attr2 = { Id = curS2Id, Level = curS2Lv },
-                                        Attr3 = { Id = curS3Id, Level = curS3Lv }
+                                        Attr1 = { Id = s1Id, Level = s1Lv },
+                                        Attr2 = { Id = s2Id, Level = s2Lv },
+                                        Attr3 = { Id = s3Id, Level = s3Lv }
                                     }
                                 end
                             end)
@@ -3142,7 +3667,7 @@ if Library then
 
     realBuffToggleRef = TalentInjectSec:AddToggle({
         Name = "Activate Real Combat Buffs",
-        Default = true,
+        Default = false,
         Callback = function(state)
             applyRealTalentBuffsState(state)
             if state then
@@ -3211,8 +3736,8 @@ if Library then
                 pcall(function() realBuffToggleRef.Set(true) end)
             end
 
-            local s1 = _G.InjectSlot1Stat or "Shield Damage"
-            local s2 = _G.InjectSlot2Stat or "Skill3 Damage"
+            local s1 = _G.InjectSlot1Stat or "Skill3 Damage"
+            local s2 = _G.InjectSlot2Stat or "Critical Damage"
             local s3 = _G.InjectSlot3Stat or "Critical Chance"
             local s1Lv = _G.InjectSlot1Level or 100
             Notify("Moro Soul", ("Injected: %s, %s, %s (Lv%d) into UI & Combat!"):format(s1, s2, s3, s1Lv), 4, "Success")
@@ -3232,8 +3757,8 @@ if Library then
                     talentId = roleCtrl.Panel.SelectedTalent or talentId
                 end
             end)
-            heroPath = heroPath or "伊黑小芭内"
-            talentId = talentId or "伊黑小芭内_1"
+            heroPath = heroPath or "左近次"
+            talentId = talentId or "左近次_1"
 
             local currentAttrs = {}
             if RerollM and RerollM.GetTalentAttr then
@@ -3258,14 +3783,6 @@ if Library then
             Notify("Current Bonuses", statusTag .. summary, 6, realTalentBuffsActive and "Success" or "Info")
         end
     })
-
-    -- Auto-activate on startup for Obanai with Shield Damage, Skill3, Crit Chance
-    task.spawn(function()
-        task.wait(0.5)
-        pcall(function()
-            applyRealTalentBuffsState(true)
-        end)
-    end)
 
     table.insert(cleanupHandlers, function()
         talentLoopActive = false
@@ -4604,6 +5121,19 @@ if Library then
         end
     })
 
+    TeleportSec:AddButton({
+        Name = "Teleport to Wisteria Peak",
+        Primary = false,
+        Callback = function()
+            if remoteFolder:FindFirstChild("ToWisteriaPeak") then
+                remoteFolder.ToWisteriaPeak:FireServer()
+                Notify("Moro Soul", "Teleporting to Wisteria Peak...", 2, "Success")
+            else
+                Notify("Moro Soul", "ToWisteriaPeak remote not found", 2, "Warning")
+            end
+        end
+    })
+
     ExploitsTab:Column("right")
 
     -- 3. GamePass & VIP Exploits
@@ -4939,6 +5469,218 @@ if Library then
     end
 
     -- =====================================================================
+    --                     PETS & BOSS TAB (session stats, boss alerts, pets)
+    -- =====================================================================
+    do
+        local playerData = rs:FindFirstChild("PlayerData") and rs.PlayerData:FindFirstChild(player.Name)
+        local MathManager = nil
+        pcall(function() MathManager = require(rs:WaitForChild("Packages"):WaitForChild("MathManager")) end)
+
+        local function stat(name)
+            local v = playerData and playerData:FindFirstChild(name)
+            return v and tonumber(v.Value) or 0
+        end
+        local function short(n)
+            local a = math.abs(n)
+            for _, s in ipairs({ { 1e12, "T" }, { 1e9, "B" }, { 1e6, "M" }, { 1e3, "K" } }) do
+                if a >= s[1] then return ("%.2f%s"):format(n / s[1], s[2]) end
+            end
+            return tostring(math.floor(n))
+        end
+        local function clock(sec)
+            sec = math.floor(sec)
+            return ("%d:%02d:%02d"):format(sec // 3600, sec % 3600 // 60, sec % 60)
+        end
+
+        -- ---------- Session stats ----------
+        ExtrasTab:Column("left")
+        local SessSec = wrapSection(ExtrasTab:CreateSection({ Name = "Session Stats", Icon = "trending-up" }))
+        local statLabel = SessSec:AddLabel("Collecting data...")
+        local base
+        local function resetSession()
+            base = {
+                souls = stat("Statistics_SoulEarned"),
+                kills = stat("Statistics_KilledDemonCount"),
+                bosses = stat("Statistics_KilledBossCount"),
+                t = os.clock(),
+            }
+        end
+        resetSession()
+        task.spawn(function()
+            while scriptActive do
+                local elapsed = os.clock() - base.t
+                local souls = stat("Statistics_SoulEarned") - base.souls
+                local perHour = elapsed > 1 and souls / elapsed * 3600 or 0
+                pcall(statLabel.Set, ("Session: <b>%s</b>\nSouls earned: <b>%s</b>  (%s / hour)\nDemons killed: <b>%d</b>   Bosses: <b>%d</b>\nTotal souls: <b>%s</b>"):format(
+                    clock(elapsed), short(souls), short(perHour),
+                    stat("Statistics_KilledDemonCount") - base.kills, stat("Statistics_KilledBossCount") - base.bosses,
+                    short(stat("SoulCount"))))
+                task.wait(1)
+            end
+        end)
+        SessSec:AddButton({ Name = "Reset Session", Icon = "rotate-ccw", NoFastMenu = true, Callback = function()
+            resetSession()
+            Notify("Moro Soul", "Session stats reset", 2, "Info")
+        end })
+
+        -- ---------- Boss alerts ----------
+        -- the game's own banner (MainUi.RefreshBossTip): Bg is shown while a boss is up, BossCoolDown counts down to the next one
+        local BossSec = wrapSection(ExtrasTab:CreateSection({ Name = "Boss Alerts", Icon = "skull" }))
+        local bossLabel = BossSec:AddLabel("Next boss: --:--")
+        local notifyBoss, autoTpBoss = true, false
+        BossSec:AddToggle({ Name = "Notify When Boss Spawns", Default = true, Callback = function(v) notifyBoss = v end })
+        BossSec:AddToggle({ Name = "Auto Teleport to Boss Area", Tooltip = "Fires the game's ToBossArea teleport as soon as the boss appears", Callback = function(v) autoTpBoss = v end })
+        task.spawn(function()
+            local wasUp = nil
+            while scriptActive do
+                local mainUi = player:FindFirstChild("PlayerGui") and player.PlayerGui:FindFirstChild("MainUi")
+                local tip = mainUi and mainUi:FindFirstChild("RefreshBossTip")
+                local bg = tip and tip:FindFirstChild("Bg")
+                local cd = tip and tip:FindFirstChild("BossCoolDown")
+                local timeLbl = cd and cd:FindFirstChild("Time")
+                local up = bg ~= nil and bg.Visible
+                if up then
+                    pcall(bossLabel.Set, '<font color="#FF4D5F"><b>Boss is up!</b></font>  Teleport door to Mugen City is open')
+                elseif timeLbl then
+                    pcall(bossLabel.Set, "Next boss in <b>" .. timeLbl.Text .. "</b>")
+                end
+                -- react only on the moment it appears (wasUp == nil on the first pass, so no alert at startup)
+                if up and wasUp == false then
+                    if notifyBoss then Notify("Boss", "Boss appeared! Teleport door to Mugen City is open", 5, "Warning") end
+                    if autoTpBoss and remoteFolder and remoteFolder:FindFirstChild("ToBossArea") then
+                        remoteFolder.ToBossArea:FireServer()
+                    end
+                end
+                wasUp = up
+                task.wait(1)
+            end
+        end)
+
+        -- ---------- Pets ----------
+        ExtrasTab:Column("right")
+        local PetSec = wrapSection(ExtrasTab:CreateSection({ Name = "Pets", Icon = "paw-print" }))
+        local STAT_NAMES = {
+            AttackRatio = "Attack", EnergyAdditionRatio = "Energy", GoldDropAddition = "Gold Drop", CriticalPercent = "Crit Chance",
+            Skill1Addition = "Skill 1 Damage", Skill2Addition = "Skill 2 Damage", Skill3Addition = "Skill 3 Damage",
+        }
+
+        local function ownedPets()
+            local raw = playerData and playerData:FindFirstChild("OwnPetInfo")
+            if not raw or raw.Value == "" then return {} end
+            local ok, list = pcall(function() return httpService:JSONDecode(raw.Value) end)
+            return (ok and type(list) == "table") and list or {}
+        end
+        local function petStats(p)
+            if not MathManager then return {} end
+            local ok, props = pcall(function()
+                return MathManager.GetConfigPropertyTribe("Pet", tostring(p.PetId), nil, nil, nil, { Level = p.Level }):GetAllProperties()
+            end)
+            return (ok and type(props) == "table") and props or {}
+        end
+        local function equippedKey()
+            local e = playerData and playerData:FindFirstChild("EquippedPetInfo")
+            return e and e.Value or ""
+        end
+        -- stat names offered = whatever the owned pets actually give
+        local function statOptions()
+            local seen, opts, map = {}, {}, {}
+            for _, p in ipairs(ownedPets()) do
+                for key in pairs(petStats(p)) do
+                    if not seen[key] then
+                        seen[key] = true
+                        local label = STAT_NAMES[key] or key
+                        table.insert(opts, label)
+                        map[label] = key
+                    end
+                end
+            end
+            table.sort(opts)
+            return opts, map
+        end
+
+        local statMap = {}
+        local priorityLabel = nil
+        local equippedLabel = PetSec:AddLabel("Equipped: -")
+        local function refreshEquipped()
+            local id, lv = equippedKey():match("^(%d+)_(%d+)$")
+            if not id then pcall(equippedLabel.Set, "Equipped: <b>none</b>") return end
+            local parts = {}
+            for key, v in pairs(petStats({ PetId = tonumber(id), Level = tonumber(lv) })) do
+                table.insert(parts, ("%s %.2f"):format(STAT_NAMES[key] or key, tonumber(v) or 0))
+            end
+            pcall(equippedLabel.Set, ("Equipped: <b>Pet #%s</b> (Lv %s)  %s"):format(id, lv, table.concat(parts, ", ")))
+        end
+
+        local function equipBest(silent)
+            local key = priorityLabel and statMap[priorityLabel]
+            if not key then
+                if not silent then Notify("Pets", "Choose a priority stat first", 2, "Warning") end
+                return
+            end
+            local best, bestVal
+            for _, p in ipairs(ownedPets()) do
+                local v = tonumber(petStats(p)[key])
+                if v and (not bestVal or v > bestVal) then best, bestVal = p, v end
+            end
+            if not best then
+                if not silent then Notify("Pets", "No owned pet gives " .. priorityLabel, 2, "Warning") end
+                return
+            end
+            if equippedKey() == (best.PetId .. "_" .. best.Level) then
+                if not silent then Notify("Pets", "Best " .. priorityLabel .. " pet is already equipped", 2, "Info") end
+                return
+            end
+            local eq = remoteFolder and remoteFolder:FindFirstChild("EquipPet")
+            if not eq then
+                if not silent then Notify("Pets", "EquipPet remote not found", 2, "Error") end
+                return
+            end
+            -- same call the game's pet window makes: EquipPet(true, petId, level)
+            eq:FireServer(true, best.PetId, best.Level)
+            Notify("Pets", ("Equipped pet #%d (Lv %d): %s %.2f"):format(best.PetId, best.Level, priorityLabel, bestVal), 3, "Success")
+            task.delay(1, refreshEquipped)
+        end
+
+        local opts
+        opts, statMap = statOptions()
+        local statDropdown = PetSec:AddDropdown({
+            Name = "Priority Stat",
+            Options = opts,
+            Default = table.find(opts, "Attack") and "Attack" or opts[1],
+            Callback = function(v) priorityLabel = v end,
+        })
+        priorityLabel = statDropdown.Get()
+        PetSec:AddButton({ Name = "Equip Best Pet", Icon = "sparkles", Primary = true, Callback = function() equipBest(false) end })
+
+        local autoPetGen = 0
+        PetSec:AddToggle({
+            Name = "Auto Equip Best",
+            Tooltip = "Re-checks every 15 seconds, e.g. after you get a new pet",
+            Callback = function(state)
+                autoPetGen += 1
+                local myGen = autoPetGen
+                if not state then return end
+                task.spawn(function()
+                    while scriptActive and myGen == autoPetGen do
+                        pcall(equipBest, true)
+                        task.wait(15)
+                    end
+                end)
+            end,
+        })
+        PetSec:AddButton({ Name = "Rescan Pets", Icon = "refresh-cw", NoFastMenu = true, Callback = function()
+            opts, statMap = statOptions()
+            statDropdown.Refresh(opts, true)
+            refreshEquipped()
+            Notify("Pets", #ownedPets() .. " pets scanned", 2, "Info")
+        end })
+
+        local eqValue = playerData and playerData:FindFirstChild("EquippedPetInfo")
+        if eqValue then track(eqValue:GetPropertyChangedSignal("Value"):Connect(refreshEquipped)) end
+        refreshEquipped()
+    end
+
+    -- =====================================================================
     --                           SETTINGS TAB (Custom Extras)
     -- =====================================================================
     do
@@ -4946,49 +5688,7 @@ if Library then
 
         local GameOptSec = wrapSection(SettingsTab:CreateSection({ Name = "Game Optimizations", Collapsible = true }))
 
-        GameOptSec:AddButton({
-            Name = "FPS Booster (Ultra)",
-            Primary = true,
-            Callback = function()
-                local terrain = workspace:FindFirstChildOfClass("Terrain")
-                if terrain then
-                    terrain.WaterWaveSize = 0
-                    terrain.WaterWaveSpeed = 0
-                    terrain.WaterReflectance = 0
-                    terrain.WaterTransparency = 0
-                end
-                
-                lighting.GlobalShadows = false
-                lighting.FogEnd = 9e9
-                lighting.Brightness = 1
-                
-                for _, obj in ipairs(lighting:GetChildren()) do
-                    if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") 
-                    or obj:IsA("SunRaysEffect") or obj:IsA("DepthOfFieldEffect") then
-                        obj.Enabled = false
-                    end
-                end
-            
-                pcall(function()
-                    settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-                end)
-                
-                for _, obj in ipairs(workspace:GetDescendants()) do
-                    if obj:IsA("BasePart") then
-                        obj.Material = Enum.Material.Plastic
-                        obj.Reflectance = 0
-                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                        obj.Transparency = 1
-                    elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
-                        obj.Enabled = false
-                    elseif obj:IsA("Explosion") then
-                        obj.Visible = false
-                    end
-                end
-                
-                Notify("Moro Soul", "FPS Has Been Boosted!", 2, "Success")
-            end
-        })
+        -- FPS booster lives in MoroElite: Settings > Actions > Anti-Lag
 
         GameOptSec:AddToggle({
             Name = "Animation Cancel",
