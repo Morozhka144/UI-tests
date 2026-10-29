@@ -45,7 +45,8 @@ _G.LegitTagEnabled = false
 _G.LegitTagRange = 12
 _G.LegitTagFOV = 0.6
 _G.LegitTagWallCheck = true
-_G.AuraLegitMode = false
+_G.AuraMode = "Rage" -- "Rage" (ближайший в радиусе) или "Legit" (только в конусе перед тобой)
+_G.AuraAimSource = "Character" -- для Legit: конус от направления "Character" или "Camera"
 _G.AuraFaceTarget = false
 _G.AuraFaceSmooth = 0.6 -- 0 = мгновенный поворот, ближе к 1 = плавнее
 _G.AuraTagDelay = 0.35
@@ -476,12 +477,20 @@ local function shouldSkipTarget(char, targetPlayer, myRole)
     return false
 end
 
--- Rage: ближайший в радиусе. Legit: в конусе перед камерой, приоритет тому кто ближе к центру прицела.
+-- Rage: ближайший в радиусе. Legit: в конусе (по горизонтали, без учёта наклона камеры) перед персонажем
+-- или камерой (_G.AuraAimSource), приоритет тому кто ближе к центру конуса.
 local function findAuraTarget(hrp, legit)
     local myRole = getRole(LocalPlayer)
     local myChar = LocalPlayer.Character
     local range = legit and _G.LegitTagRange or _G.KillAuraRange
-    local aimDir = Camera.CFrame.LookVector
+
+    local aimFlat
+    if legit then
+        local look = (_G.AuraAimSource == "Camera") and Camera.CFrame.LookVector or hrp.CFrame.LookVector
+        aimFlat = Vector3.new(look.X, 0, look.Z)
+        if aimFlat.Magnitude < 0.01 then return nil end
+        aimFlat = aimFlat.Unit
+    end
     local bestDot = _G.LegitTagFOV
 
     local best, bestDist = nil, range
@@ -492,16 +501,19 @@ local function findAuraTarget(hrp, legit)
             local delta = targetHRP.Position - hrp.Position
             local dist = delta.Magnitude
             if dist < bestDist and dist > 0 then
+                local dot = 1
                 local ok = true
                 if legit then
-                    local dot = aimDir:Dot(delta.Unit)
+                    local flat = Vector3.new(delta.X, 0, delta.Z)
+                    -- почти вплотную (сверху/снизу) направление не определено: считаем что цель прямо перед нами
+                    dot = flat.Magnitude < 0.5 and 1 or aimFlat:Dot(flat.Unit)
                     ok = dot > bestDot
-                    if ok then bestDot = dot end
                 end
                 if ok and ((not _G.KillAuraWallCheck) or isPlayerVisible(char))
                     and ((not _G.KillAuraStrictWall) or isFullyVisibleStrict(char)) then
                     bestDist = dist
                     best = char
+                    if legit then bestDot = dot end
                 end
             end
         end
@@ -509,12 +521,33 @@ local function findAuraTarget(hrp, legit)
     return best
 end
 
-local lastFaceTick = os.clock()
+-- Поворот персонажа к цели. Делается в конце RenderStepped (после игрового контроллера и камеры), а
+-- Humanoid.AutoRotate на это время выключается: на телефоне стик и AutoRotate иначе перебивают поворот.
+local auraFaceChar = nil
+local autoRotateSaved = nil
 
-local function faceTarget(hrp, targetHRP)
-    local now = os.clock()
-    local dt = math.clamp(now - lastFaceTick, 0, 0.1)
-    lastFaceTick = now
+local function restoreAutoRotate()
+    if autoRotateSaved == nil then return end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.AutoRotate = autoRotateSaved end
+    autoRotateSaved = nil
+end
+
+local function auraFaceStep(dt)
+    local target = auraFaceChar
+    local hrp = getHRP()
+    local targetHRP = target and target.Parent and target:FindFirstChild("HumanoidRootPart")
+    if not (_G.AutoTagEnabled and _G.AuraFaceTarget and hrp and targetHRP) then
+        restoreAutoRotate()
+        return
+    end
+
+    local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum and autoRotateSaved == nil then
+        autoRotateSaved = hum.AutoRotate
+        hum.AutoRotate = false
+    end
 
     local flat = Vector3.new(targetHRP.Position.X - hrp.Position.X, 0, targetHRP.Position.Z - hrp.Position.Z)
     if flat.Magnitude < 0.05 then return end
@@ -525,9 +558,13 @@ local function faceTarget(hrp, targetHRP)
         hrp.CFrame = goal
     else
         -- не зависит от FPS: доля пути за кадр = 1 - smooth^(dt*60)
-        hrp.CFrame = hrp.CFrame:Lerp(goal, 1 - smooth ^ (dt * 60))
+        hrp.CFrame = hrp.CFrame:Lerp(goal, 1 - smooth ^ (math.clamp(dt, 0, 0.1) * 60))
     end
+    hrp.AssemblyAngularVelocity = Vector3.zero
 end
+
+pcall(function() RunService:UnbindFromRenderStep("MoroAuraFace") end)
+RunService:BindToRenderStep("MoroAuraFace", Enum.RenderPriority.Last.Value, auraFaceStep)
 
 local function compressAngle(angle)
     return math.floor((angle + math.pi) / (math.pi * 2) * 65535 + 0.5)
@@ -536,17 +573,16 @@ end
 local lastAuraTag = 0
 
 local function autoTagLoop()
+    auraFaceChar = nil
     if not _G.AutoTagEnabled then return end
     local hrp = getHRP()
     if not hrp then return end
 
-    local target = findAuraTarget(hrp, _G.AuraLegitMode)
+    local target = findAuraTarget(hrp, _G.AuraMode == "Legit")
     if not target then return end
     local targetHRP = target.HumanoidRootPart
 
-    if _G.AuraFaceTarget then
-        faceTarget(hrp, targetHRP)
-    end
+    auraFaceChar = target
 
     -- Собственный кулдаун ауры (отдельно от TagCooldown бустера)
     if tick() - lastAuraTag < (_G.AuraTagDelay or 0) then return end
@@ -2104,9 +2140,15 @@ local auraToggle = auraSec:AddToggle({
 })
 auraToggle:AddKeybind({ Default = nil, Mode = "Toggle" })
 
-auraSec:AddToggle({
-    Name = "Legit Mode (cone in front of camera)", Icon = "target", Default = false,
-    Callback = function(state) _G.AuraLegitMode = state end,
+auraSec:AddDropdown({
+    Name = "Aura Mode", Icon = "target",
+    Options = {"Rage", "Legit"}, Default = "Rage",
+    Callback = function(val) _G.AuraMode = val end,
+})
+auraSec:AddDropdown({
+    Name = "Legit Aim Source", Icon = "crosshair",
+    Options = {"Character", "Camera"}, Default = "Character",
+    Callback = function(val) _G.AuraAimSource = val end,
 })
 auraSec:AddToggle({
     Name = "Face Target", Icon = "rotate-cw", Default = false,
