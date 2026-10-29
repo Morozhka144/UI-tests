@@ -47,7 +47,7 @@ _G.LegitTagFOV = 0.6
 _G.LegitTagWallCheck = true
 _G.AuraMode = "Rage" -- "Rage" (ближайший в радиусе) или "Legit" (только в конусе перед тобой)
 _G.AuraAimSource = "Character" -- для Legit: конус от направления "Character" или "Camera"
-_G.AuraFaceTarget = false
+_G.AuraFaceMode = "Off" -- "Off", "Camera" (камера смотрит на цель) или "Character" (поворот персонажа)
 _G.AuraFaceSmooth = 0.6 -- 0 = мгновенный поворот, ближе к 1 = плавнее
 _G.AuraTagDelay = 0.35
 _G.Whitelist = {} -- [Player.Name] = true: этих игроков аура не трогает
@@ -534,15 +534,34 @@ local function restoreAutoRotate()
     autoRotateSaved = nil
 end
 
+local camFaceRot = nil -- наш собственный угол камеры: игровой камера-скрипт каждый кадр сбрасывает CFrame
+
 local function auraFaceStep(dt)
     local target = auraFaceChar
     local hrp = getHRP()
     local targetHRP = target and target.Parent and target:FindFirstChild("HumanoidRootPart")
-    if not (_G.AutoTagEnabled and _G.AuraFaceTarget and hrp and targetHRP) then
+    local mode = _G.AuraFaceMode
+    if not (_G.AutoTagEnabled and mode and mode ~= "Off" and hrp and targetHRP) then
         restoreAutoRotate()
+        camFaceRot = nil
         return
     end
 
+    local smooth = math.clamp(_G.AuraFaceSmooth or 0, 0, 0.98)
+    local alpha = smooth <= 0 and 1 or (1 - smooth ^ (math.clamp(dt, 0, 0.1) * 60))
+
+    if mode == "Camera" then
+        restoreAutoRotate()
+        local camPos = Camera.CFrame.Position
+        local aimAt = targetHRP.Position + Vector3.new(0, 0.5, 0)
+        if (aimAt - camPos).Magnitude < 0.5 then return end
+        local goal = CFrame.lookAt(camPos, aimAt)
+        camFaceRot = camFaceRot and camFaceRot:Lerp(goal, alpha) or Camera.CFrame:Lerp(goal, alpha)
+        Camera.CFrame = CFrame.new(camPos) * camFaceRot.Rotation
+        return
+    end
+
+    camFaceRot = nil
     local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
     if hum and autoRotateSaved == nil then
         autoRotateSaved = hum.AutoRotate
@@ -553,13 +572,7 @@ local function auraFaceStep(dt)
     if flat.Magnitude < 0.05 then return end
     local goal = CFrame.lookAt(hrp.Position, hrp.Position + flat)
 
-    local smooth = math.clamp(_G.AuraFaceSmooth or 0, 0, 0.98)
-    if smooth <= 0 then
-        hrp.CFrame = goal
-    else
-        -- не зависит от FPS: доля пути за кадр = 1 - smooth^(dt*60)
-        hrp.CFrame = hrp.CFrame:Lerp(goal, 1 - smooth ^ (math.clamp(dt, 0, 0.1) * 60))
-    end
+    hrp.CFrame = alpha >= 1 and goal or hrp.CFrame:Lerp(goal, alpha)
     hrp.AssemblyAngularVelocity = Vector3.zero
 end
 
@@ -2150,9 +2163,10 @@ auraSec:AddDropdown({
     Options = {"Character", "Camera"}, Default = "Character",
     Callback = function(val) _G.AuraAimSource = val end,
 })
-auraSec:AddToggle({
-    Name = "Face Target", Icon = "rotate-cw", Default = false,
-    Callback = function(state) _G.AuraFaceTarget = state end,
+auraSec:AddDropdown({
+    Name = "Face Target", Icon = "rotate-cw",
+    Options = {"Off", "Camera", "Character"}, Default = "Off",
+    Callback = function(val) _G.AuraFaceMode = val end,
 })
 auraSec:AddSlider({
     Name = "Rotation Smoothness", Icon = "sliders",
