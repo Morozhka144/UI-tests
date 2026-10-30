@@ -1,6 +1,6 @@
 --[[
     Murder Mystery 2 - MoroElite UI Edition
-    ESP / Aimbot / Silent Aim / Auto Shoot / Murderer tools / Movement / Visuals / Skins
+    ESP / Aimbot / Bullet Homing / Auto Shoot / Murderer tools / Movement / Visuals / Skins
 --]]
 
 local function SafeLoad()
@@ -2985,7 +2985,7 @@ do
     local function aimSections(sub, prof, who, targets, defaultTarget)
         local L, R = sub:Column("left"), sub:Column("right")
         local aim = L:CreateSection({ Name = "Aimbot", Icon = "crosshair", Collapsible = true })
-        aim:AddToggle({ Name = "Aimbot (" .. who .. ")", Icon = "crosshair", Description = "Works while you are the " .. who:lower(), Callback = function(v) prof.aimbot = v end })
+        aim:AddToggle({ Name = "Aimbot", Icon = "crosshair", Description = "Works while you are the " .. who:lower(), Callback = function(v) prof.aimbot = v end })
         aim:AddDropdown({ Name = "Key", Options = { "Hold RMB", "Always" }, Default = "Hold RMB", Callback = function(v) prof.aimKey = v or "Hold RMB" end })
         aim:AddDropdown({ Name = "Target", Options = targets, Default = defaultTarget, Callback = function(v) prof.aimMode = v or defaultTarget end })
         aim:AddDropdown({ Name = "Part", Options = { "Head", "Torso", "Root" }, Default = "Head", Callback = function(v) prof.aimPart = v or "Head" end })
@@ -2995,10 +2995,10 @@ do
         aim:AddToggle({ Name = "Wall Check", Default = true, Callback = function(v) prof.aimWall = v end })
         aim:AddToggle({ Name = "Show FOV Circle", Default = true, Callback = function(v) prof.showFov = v end })
 
-        local sil = R:CreateSection({ Name = "Silent Aim", Icon = "target", Collapsible = true })
-        sil:AddToggle({ Name = "Silent Aim (" .. who .. ")", Icon = "target", Description = "Gun shots and knife throws go to the target", Callback = function(v)
+        local sil = R:CreateSection({ Name = "Bullet Homing", Icon = "target", Collapsible = true })
+        sil:AddToggle({ Name = "Bullet Homing", Icon = "target", Description = "Gun shots and knife throws go to the target", Callback = function(v)
             prof.silent = v
-            if v and not origGetMouse then notify("Silent Aim", "WeaponService hook failed - it will not work", "error") end
+            if v and not origGetMouse then notify("Bullet Homing", "WeaponService hook failed - it will not work", "error") end
         end })
         sil:AddSlider({ Name = "FOV", Min = 50, Max = 1000, Default = prof.silentFov, Suffix = " px", Callback = function(v) prof.silentFov = v end })
         sil:AddToggle({ Name = "Wall Check", Callback = function(v) prof.silentWall = v end })
