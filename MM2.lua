@@ -188,7 +188,7 @@ local S = {
     -- movement
     speed = false, speedVal = 24, jump = false, jumpVal = 60, infJump = false, noclip = false,
     fly = false, flySpeed = 60, antiVoid = true,
-    bhop = false, bhopMode = "Hold Space", bhopMax = 45, bhopStep = 3, hopCur = 16, hopT = 0,
+    bhop = false, bhopMode = "Hold Space", bhopMax = 45, bhopStep = 3, hopCur = 16, hopT = 0, bhopJump = 50,
     -- visuals
     fullbright = false, fovOn = false, fovVal = 90, xray = false, crosshair = false, noFog = false,
 }
@@ -1343,6 +1343,8 @@ track(RunService.Heartbeat:Connect(function()
         if want and moving then
             -- one jump per landing: only from the ground states, and never twice within 0.25 s
             -- (the floor is still "touched" for a few frames after take-off, which used to stack the jumps)
+            h.UseJumpPower = true
+            h.JumpPower = S.bhopJump
             local st = h:GetState()
             local grounded = h.FloorMaterial ~= Enum.Material.Air
                 and (st == Enum.HumanoidStateType.Running or st == Enum.HumanoidStateType.Landed or st == Enum.HumanoidStateType.RunningNoPhysics)
@@ -4533,7 +4535,13 @@ end
 
 -- MOVEMENT ----------------------------------------------------------
 do
-    local L, R = MoveTab:Column("left"), MoveTab:Column("right")
+    local function moveSub(name, icon)
+        if MoveTab.SubTab then return MoveTab:SubTab({ Name = name, Icon = icon }) end
+        return Win:CreateTab({ Name = "Move: " .. name, Icon = icon })
+    end
+    local WalkTab, TpTab = moveSub("Walk", "footprints"), moveSub("Teleport", "map-pin")
+    local L = WalkTab:Column("left")
+    local R = TpTab:Column("left")
     local mv = L:CreateSection({ Name = "Movement", Icon = "footprints", Collapsible = true })
     local sp = mv:AddToggle({ Name = "Speed", Callback = function(v)
         S.speed = v
@@ -4560,12 +4568,14 @@ do
             S.hopCur = 16
             local h = humOf(lp)
             if h and not S.speed then h.WalkSpeed = 16 end
+            if h and not S.jump then h.JumpPower = 50 end
         end
     end })
     bhT:AddKeybind({ Default = Enum.KeyCode.B, Mode = "Toggle" })
     bh:AddDropdown({ Name = "Mode", Options = { "Hold Space", "Always" }, Default = "Hold Space", Callback = function(v) S.bhopMode = v or "Hold Space" end })
     bh:AddSlider({ Name = "Max Speed", Min = 20, Max = 120, Default = S.bhopMax, Callback = function(v) S.bhopMax = v end })
     bh:AddSlider({ Name = "Speed Gain", Min = 1, Max = 10, Default = S.bhopStep, Decimals = 1, Callback = function(v) S.bhopStep = v end })
+    bh:AddSlider({ Name = "Jump Height", Min = 20, Max = 200, Default = S.bhopJump, Description = "How high each hop goes", Callback = function(v) S.bhopJump = v end })
 
     local tp = R:CreateSection({ Name = "Teleports", Icon = "map-pin", Collapsible = true })
     local function playerNames()
