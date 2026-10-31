@@ -4105,41 +4105,72 @@ local function makeRec(c)
     inst.Parent = fxFolder
     local rec = { model = inst, off = off, size = size, phase = math.random() * 6, gen = MR.gen, height = MR.height, hidden = false }
     if inst:GetAttribute("Rig") and inst.PrimaryPart then
-        -- every part stays anchored (no physics, so nothing can push the real character) and is placed each frame
-        -- relative to the real part it stands for; accessories ride on the part they are welded to
+        -- forward kinematics on the model's OWN skeleton: every joint takes the Transform of the same joint of the real character,
+        -- so a different body keeps its proportions while running, jumping or emoting. All parts stay anchored (no physics).
         rec.rig = true
-        rec.drop = inst.PrimaryPart.Position.Y - (bbCF.Position.Y - size.Y / 2)
+        local root = inst.PrimaryPart
+        rec.root = root
+        rec.drop = root.Position.Y - (bbCF.Position.Y - size.Y / 2)
         local rr = c:FindFirstChild("HumanoidRootPart")
         local hum = c:FindFirstChildOfClass("Humanoid")
-        rec.follow = {}
-        if rr then
-            local look = rr.CFrame.LookVector
-            local feetY = rr.Position.Y - ((hum and hum.HipHeight or 2) + rr.Size.Y / 2)
-            inst:PivotTo(CFrame.new(rr.Position.X, feetY + rec.drop, rr.Position.Z) * CFrame.Angles(0, math.atan2(-look.X, -look.Z), 0))
-            for _, d in ipairs(inst:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    local ref = c:FindFirstChild(d.Name)
-                    if not (ref and ref:IsA("BasePart")) then ref = nil end
-                    if not ref then
-                        -- an accessory handle is attached either by a Weld or, on newer rigs, by a RigidConstraint between attachments
-                        for _, j in ipairs(d:GetChildren()) do
-                            local other
-                            if (j:IsA("Weld") or j:IsA("Motor6D")) and j.Part0 and j.Part1 == d then
-                                other = j.Part0
-                            elseif j:IsA("RigidConstraint") then
-                                local a0, a1 = j.Attachment0, j.Attachment1
-                                local pa, pb = a0 and a0.Parent, a1 and a1.Parent
-                                other = (pa == d) and pb or pa
-                            end
-                            local cand = other and c:FindFirstChild(other.Name)
-                            if cand and cand:IsA("BasePart") then ref = cand break end
-                        end
+        rec.k = rec.drop / math.max((hum and hum.HipHeight or 2) + (rr and rr.Size.Y / 2 or 1), 0.1)
+        local function driven(d)
+            if d:IsA("Motor6D") then return d.Part1 end
+            if d:IsA("AnimationConstraint") then return d.Attachment1 and d.Attachment1.Parent end
+        end
+        local real = {}
+        for _, d in ipairs(c:GetDescendants()) do
+            local p = driven(d)
+            if p then real[d.Name .. ":" .. p.Name] = d end
+        end
+        local entries, byChild = {}, {}
+        local function addEntry(parent, child, cf0, cf1, src)
+            if parent and child and not byChild[child] then
+                local e = { parent = parent, child = child, cf0 = cf0, cf1 = cf1:Inverse(), src = src }
+                byChild[child] = e
+                entries[#entries + 1] = e
+            end
+        end
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("Motor6D") then
+                addEntry(d.Part0, d.Part1, d.C0, d.C1, real[d.Name .. ":" .. (d.Part1 and d.Part1.Name or "")])
+            elseif d:IsA("AnimationConstraint") and d.Attachment0 and d.Attachment1 then
+                addEntry(d.Attachment0.Parent, d.Attachment1.Parent, d.Attachment0.CFrame, d.Attachment1.CFrame, real[d.Name .. ":" .. d.Attachment1.Parent.Name])
+            end
+        end
+        -- accessory handles and other attached parts (no Transform)
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("Weld") and d.Part0 and d.Part1 then
+                addEntry(d.Part0, d.Part1, d.C0, d.C1)
+            elseif d:IsA("RigidConstraint") and d.Attachment0 and d.Attachment1 then
+                local pa, pb = d.Attachment0.Parent, d.Attachment1.Parent
+                if pa and pb then
+                    if pb:FindFirstChildWhichIsA("Attachment") and (pb.Name == "Handle" or pb:FindFirstAncestorOfClass("Accessory")) then
+                        addEntry(pa, pb, d.Attachment0.CFrame, d.Attachment1.CFrame)
+                    else
+                        addEntry(pb, pa, d.Attachment1.CFrame, d.Attachment0.CFrame)
                     end
-                    ref = ref or rr
-                    rec.follow[#rec.follow + 1] = { part = d, ref = ref, rel = ref.CFrame:ToObjectSpace(d.CFrame) }
                 end
             end
         end
+        -- parents before children
+        local order, placed = {}, { [root] = true }
+        local left = #entries
+        while left > 0 do
+            local progressed = false
+            for _, e in ipairs(entries) do
+                if not e.done and placed[e.parent] then
+                    e.done, placed[e.child] = true, true
+                    order[#order + 1] = e
+                    left -= 1
+                    progressed = true
+                end
+            end
+            if not progressed then break end
+        end
+        rec.order = order
+        rec.parts = {}
+        for _, d in ipairs(inst:GetDescendants()) do if d:IsA("BasePart") then rec.parts[#rec.parts + 1] = d end end
     end
     return rec
 end
@@ -4196,15 +4227,23 @@ local function mrStep(t)
         local yaw = math.atan2(-look.X, -look.Z)
         local feetY = r.Position.Y - ((h and h.HipHeight or 2) + r.Size.Y / 2)
         if rec.rig then
-            local pivot = r.Position
-            local adj = CFrame.new(pivot.X, pivot.Y + MR.yoff, pivot.Z) * CFrame.Angles(0, math.rad(MR.yaw), 0) * CFrame.new(-pivot.X, -pivot.Y, -pivot.Z)
-            local ps, cfs = {}, {}
-            for i, f in ipairs(rec.follow) do
-                local p = f.part
-                p.CanCollide, p.CanTouch, p.CanQuery = false, false, false   -- a Humanoid keeps switching collisions back on
-                ps[i] = p
-                cfs[i] = adj * f.ref.CFrame * f.rel
+            local rootCF = CFrame.new(r.Position.X, feetY + rec.drop + MR.yoff, r.Position.Z) * (r.CFrame - r.CFrame.Position) * CFrame.Angles(0, math.rad(MR.yaw), 0)
+            local cf = { [rec.root] = rootCF }
+            local ps, cfs = { rec.root }, { rootCF }
+            for _, e in ipairs(rec.order) do
+                local pcf = cf[e.parent]
+                if pcf then
+                    local T = CFrame.identity
+                    if e.src then
+                        local s = e.src.Transform
+                        T = CFrame.new(s.Position * rec.k) * (s - s.Position)
+                    end
+                    local ccf = pcf * e.cf0 * T * e.cf1
+                    cf[e.child] = ccf
+                    ps[#ps + 1], cfs[#cfs + 1] = e.child, ccf
+                end
             end
+            for _, p in ipairs(rec.parts) do p.CanCollide, p.CanTouch, p.CanQuery = false, false, false end   -- a Humanoid keeps switching collisions back on
             workspace:BulkMoveTo(ps, cfs, Enum.BulkMoveMode.FireCFrameChanged)
         else
         local bob = math.abs(math.sin(t * 9 + rec.phase)) * 0.45 * sp
