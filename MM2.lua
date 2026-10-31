@@ -207,7 +207,7 @@ local function newProfile(extra)
 end
 P = {
     Murderer = newProfile({ aimMode = "Anyone", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, throwWall = true, holster = true, holsterDelay = 0.3, stabHolster = true, stabHolsterDelay = 0.3, killAura = false, killRange = 14, killDelay = 0.9, killAll = false, throwAura = false, throwRange = 70, throwDelay = 1.2 }),
-    Sheriff = newProfile({ aimMode = "Murderer", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, autoShoot = false, shootDelay = 1.3, shootRange = 250, shootWall = true, autoGun = false, grabMode = "Remote", grabFallback = true, holster = true, holsterDelay = 0.3 }),
+    Sheriff = newProfile({ aimMode = "Murderer", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, autoShoot = false, shootDelay = 1.3, shootRange = 250, shootWall = true, autoGun = false, grabMode = "Remote", grabFallback = false, holster = true, holsterDelay = 0.3 }),
 }
 local SHARED_KEYS = { "aimbot", "aimKey", "aimMode", "aimPart", "aimFov", "aimSmooth", "aimWall", "predict", "showFov", "silent", "silentFov", "silentWall" }
 syncProfile = function()
@@ -4380,7 +4380,7 @@ do
     gn:AddLabel("Works for any player who is not the murderer and has no gun, innocents too.")
     gn:AddToggle({ Name = "Auto Grab Dropped Gun", Icon = "hand", Callback = function(v) P.Sheriff.autoGun = v end })
     gn:AddDropdown({ Name = "Method", Options = { "Remote", "Teleport" }, Default = "Remote", Description = "Remote: no movement. Teleport: walks into the gun and comes back", Callback = function(v) P.Sheriff.grabMode = v or "Remote" end })
-    gn:AddToggle({ Name = "Teleport Fallback", Default = true, Description = "If the remote method fails, teleport to the gun", Callback = function(v) P.Sheriff.grabFallback = v end })
+    gn:AddToggle({ Name = "Teleport Fallback", Default = false, Description = "If the remote method fails, teleport to the gun", Callback = function(v) P.Sheriff.grabFallback = v end })
     gn:AddButton({ Name = "Grab Gun Now", Callback = function()
         task.spawn(function()
             local ok, why = S.grabGun(P.Sheriff.grabMode, P.Sheriff.grabFallback)
@@ -4918,7 +4918,7 @@ end
 
 -- HALLOWEEN ---------------------------------------------------------
 do
-    local HW = { collect = false, mode = "Teleport", range = 400, speed = 60, delay = 0.35, avoid = true, got = 0, bad = {} }
+    local HW = { collect = false, range = 400, speed = 60, avoid = true, got = 0, bad = {} }
     local L, R = HalloweenTab:Column("left"), HalloweenTab:Column("right")
 
     local function candies()
@@ -4951,17 +4951,15 @@ do
 
     -- Candy collector ---------------------------------------------------
     local co = R:CreateSection({ Name = "Candy Collector", Icon = "candy", Collapsible = true })
-    co:AddToggle({ Name = "Auto Collect", Icon = "candy", Description = "Goes for the nearest candy by itself", Callback = function(v)
+    co:AddToggle({ Name = "Auto Collect", Icon = "candy", Description = "Flies to the nearest candy by itself", Callback = function(v)
         HW.collect = v
         HW.bad = {}
-        if not v then local h = humOf(lp) local r = hrpOf(lp) if h and r then h:MoveTo(r.Position) end end
+        if not v then HW.flying = false end
     end })
-    co:AddDropdown({ Name = "Mode", Options = { "Teleport", "Fly", "Walk" }, Default = "Teleport", Callback = function(v) HW.mode = v or "Teleport" end })
-    co:AddSlider({ Name = "Fly Speed", Min = 20, Max = 150, Default = HW.speed, Suffix = " st/s", Callback = function(v) HW.speed = v end })
-    co:AddSlider({ Name = "Teleport Delay", Min = 0.1, Max = 2, Default = HW.delay, Decimals = 2, Suffix = " s", Callback = function(v) HW.delay = v end })
+    co:AddSlider({ Name = "Fly Speed", Min = 10, Max = 150, Default = HW.speed, Suffix = " st/s", Callback = function(v) HW.speed = v end })
     co:AddSlider({ Name = "Range", Min = 50, Max = 800, Default = HW.range, Suffix = " st", Callback = function(v) HW.range = v end })
     co:AddToggle({ Name = "Avoid Murderer", Default = true, Description = "Skips candies close to the murderer", Callback = function(v) HW.avoid = v end })
-    co:AddLabel("Teleport jumps onto each candy, Fly glides through walls (noclip), Walk is a normal run.")
+    co:AddLabel("Flies to each candy in a straight line, through walls (noclip).")
 
     -- Fly keeps the body from colliding with anything
     track(RunService.Stepped:Connect(function()
@@ -4987,41 +4985,17 @@ do
                         end
                     end
                     if not best then return end
-                    if HW.mode == "Teleport" then
-                        r.CFrame = CFrame.new(best.Position + Vector3.new(0, 1.5, 0)) * (r.CFrame - r.CFrame.Position)
-                        r.AssemblyLinearVelocity = Vector3.zero
-                        local w0 = os.clock()
-                        while best.Parent and os.clock() - w0 < 0.5 do task.wait(0.05) end
-                        if best.Parent then HW.bad[best] = os.clock() + 8 else HW.got += 1 end
-                        task.wait(HW.delay)
-                        return
-                    end
-                    local t0, lastPos, lastCheck, stuck = os.clock(), r.Position, os.clock(), 0
-                    HW.flying = HW.mode == "Fly"
-                    while HW.collect and alive and best.Parent and os.clock() - t0 < 10 do
+                    HW.flying = true
+                    local t0 = os.clock()
+                    while HW.collect and alive and best.Parent and os.clock() - t0 < 12 do
                         r, h = hrpOf(lp), humOf(lp)
                         if not (r and h and h.Health > 0) then break end
                         local to = best.Position - r.Position
-                        if to.Magnitude < 3 then break end
-                        if HW.flying then
-                            local dt = RunService.Heartbeat:Wait()
-                            local step = math.min(HW.speed * dt, to.Magnitude)
-                            r.CFrame = CFrame.new(r.Position + to.Unit * step) * (r.CFrame - r.CFrame.Position)
-                            r.AssemblyLinearVelocity = Vector3.zero
-                        else
-                            h:MoveTo(best.Position)
-                            task.wait(0.1)
-                            if os.clock() - lastCheck > 0.6 then
-                                if (r.Position - lastPos).Magnitude < 0.8 then
-                                    stuck += 1
-                                    h.Jump = true
-                                    if stuck >= 3 then break end
-                                else
-                                    stuck = 0
-                                end
-                                lastPos, lastCheck = r.Position, os.clock()
-                            end
-                        end
+                        if to.Magnitude < 2.5 then break end
+                        local dt = RunService.Heartbeat:Wait()
+                        local step = math.min(HW.speed * dt, to.Magnitude)
+                        r.CFrame = CFrame.new(r.Position + to.Unit * step) * (r.CFrame - r.CFrame.Position)
+                        r.AssemblyLinearVelocity = Vector3.zero
                     end
                     HW.flying = false
                     if not best.Parent then HW.got += 1 else HW.bad[best] = os.clock() + 6 end
@@ -5030,7 +5004,7 @@ do
             task.wait(0.12)
         end
     end)
-    onCleanup(function() HW.collect = false end)
+    onCleanup(function() HW.collect, HW.flying = false, false end)
 end
 
 -- MISC --------------------------------------------------------------
