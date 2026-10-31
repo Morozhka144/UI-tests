@@ -3972,9 +3972,15 @@ local function marketModel(id)
     local ids = type(id) == "table" and id or { id }
     local desc
     local acc = {}
-    local function put(assetId, at)
+    -- an item named on its own replaces whatever the body bundles brought along for that slot (e.g. their default hair)
+    local function put(assetId, at, explicit)
         if ITEM_FIELDS[at] then desc[ITEM_FIELDS[at]] = assetId
-        elseif ITEM_ACCESSORY[at] then acc[#acc + 1] = { AssetId = assetId, AccessoryType = ITEM_ACCESSORY[at], Order = #acc + 1 } end
+        elseif ITEM_ACCESSORY[at] then
+            if explicit then
+                for i = #acc, 1, -1 do if acc[i].AccessoryType == ITEM_ACCESSORY[at] then table.remove(acc, i) end end
+            end
+            acc[#acc + 1] = { AssetId = assetId, AccessoryType = ITEM_ACCESSORY[at], Order = #acc + 1 }
+        end
     end
     -- a single bundle that ships with an outfit is used as the outfit (keeps its body scale); anything else is composed item by item
     if #ids == 1 then
@@ -4001,7 +4007,7 @@ local function marketModel(id)
                 if not (ITEM_FIELDS[det.AssetTypeId] or ITEM_ACCESSORY[det.AssetTypeId]) then
                     return nil, "asset type " .. tostring(det.AssetTypeId) .. " is not an avatar item, use Asset ID"
                 end
-                put(one, det.AssetTypeId)
+                put(one, det.AssetTypeId, true)
             end
         end
         if #acc > 0 then desc:SetAccessories(acc, true) end
@@ -4898,6 +4904,27 @@ do
     m:AddButton({ Name = "Server Hop", Callback = function() if Library.ServerHop then Library:ServerHop() end end })
     m:AddButton({ Name = "Reset Character", Callback = function() local h = humOf(lp) if h then h.Health = 0 end end })
     m:AddLabel("Anti-AFK is always on.")
+
+    -- spin: turns your character around its vertical axis
+    local SPIN = { on = false, speed = 720 }
+    local sp = L:CreateSection({ Name = "Spin", Icon = "refresh-cw", Collapsible = true })
+    local function spinRestore()
+        local h = humOf(lp)
+        if h then h.AutoRotate = true end
+    end
+    sp:AddToggle({ Name = "Spin", Icon = "refresh-cw", Description = "Rotates your character", Callback = function(v)
+        SPIN.on = v
+        if not v then spinRestore() end
+    end })
+    sp:AddSlider({ Name = "Speed", Min = 30, Max = 3600, Default = SPIN.speed, Suffix = " °/s", Callback = function(v) SPIN.speed = v end })
+    track(RunService.Heartbeat:Connect(function(dt)
+        if not SPIN.on then return end
+        local r, h = hrpOf(lp), humOf(lp)
+        if not (r and h) or h.Health <= 0 then return end
+        h.AutoRotate = false
+        r.CFrame = r.CFrame * CFrame.Angles(0, math.rad(SPIN.speed) * dt, 0)
+    end))
+    onCleanup(function() SPIN.on = false spinRestore() end)
 end
 
 -- preload the default model in the background so "Replace Models" works the moment it is switched on
