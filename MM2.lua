@@ -188,7 +188,7 @@ local S = {
     -- movement
     speed = false, speedVal = 24, jump = false, jumpVal = 60, infJump = false, noclip = false,
     fly = false, flySpeed = 60, antiVoid = true,
-    bhop = false, bhopMode = "Hold Space", bhopMax = 45, bhopStep = 3, hopCur = 16,
+    bhop = false, bhopMode = "Hold Space", bhopMax = 45, bhopStep = 3, hopCur = 16, hopT = 0,
     -- visuals
     fullbright = false, fovOn = false, fovVal = 90, xray = false, crosshair = false, noFog = false,
 }
@@ -1341,7 +1341,13 @@ track(RunService.Heartbeat:Connect(function()
         local moving = h.MoveDirection.Magnitude > 0.1
         local want = S.bhopMode == "Always" or UIS:IsKeyDown(Enum.KeyCode.Space)
         if want and moving then
-            if h.FloorMaterial ~= Enum.Material.Air then
+            -- one jump per landing: only from the ground states, and never twice within 0.25 s
+            -- (the floor is still "touched" for a few frames after take-off, which used to stack the jumps)
+            local st = h:GetState()
+            local grounded = h.FloorMaterial ~= Enum.Material.Air
+                and (st == Enum.HumanoidStateType.Running or st == Enum.HumanoidStateType.Landed or st == Enum.HumanoidStateType.RunningNoPhysics)
+            if grounded and os.clock() - S.hopT > 0.25 then
+                S.hopT = os.clock()
                 S.hopCur = math.min(S.hopCur + S.bhopStep, S.bhopMax)
                 h:ChangeState(Enum.HumanoidStateType.Jumping)
             end
