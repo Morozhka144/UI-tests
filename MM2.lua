@@ -101,7 +101,9 @@ end
 
 local function findTool(p, name)
     local c = char(p)
-    return (c and c:FindFirstChild(name)) or (p:FindFirstChild("Backpack") and p.Backpack:FindFirstChild(name))
+    local bp = p:FindFirstChild("Backpack")
+    local toys = bp and bp:FindFirstChild("Toys")
+    return (c and c:FindFirstChild(name)) or (bp and bp:FindFirstChild(name)) or (toys and toys:FindFirstChild(name))
 end
 
 -- "Murderer" / "Sheriff" / "Hero" / "Innocent" / "Lobby"
@@ -1487,8 +1489,6 @@ local SK = {
     pick = { Knife = nil, Gun = nil }, fakes = {}, idle = "Knife", loading = false, dd = {},
     adj = { Knife = { rot = Vector3.zero, off = Vector3.zero, size = 1 }, Gun = { rot = Vector3.zero, off = Vector3.zero, size = 1 } },
 }
-local GRIP = CFrame.new(0, -0.4, 0) * CFrame.Angles(math.rad(-90), 0, 0)
-local SKIN_TARGET = { Knife = 3.6, Gun = 2.2 }
 
 local function addSkin(slot, label, skin)
     local base, i = label, 1
@@ -1499,66 +1499,108 @@ local function addSkin(slot, label, skin)
     return label
 end
 
-local function collectDisplaySkins()
-    local seen, count = {}, { Knife = 0, Gun = 0 }
-    for _, d in ipairs(workspace.WeaponDisplays:GetChildren()) do
-        local mesh = d:FindFirstChildOfClass("SpecialMesh")
-        local slot = d.Name:find("Knife") and "Knife" or "Gun"
-        if mesh and mesh.MeshId ~= "" then
-            local key = slot .. mesh.MeshId .. mesh.TextureId
-            if not seen[key] then
-                seen[key] = true
-                count[slot] += 1
-                local id = mesh.MeshId:match("%d+") or "?"
-                addSkin(slot, slot .. " " .. count[slot] .. " (" .. id:sub(-4) .. ")", {
-                    meshId = mesh.MeshId, texId = mesh.TextureId, scale = mesh.Scale, offset = mesh.Offset,
-                    color = d.Color, material = d.Material,
-                })
+do
+local GRIP = CFrame.new(0, -0.4, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+local SKIN_TARGET = { Knife = 3.6, Gun = 2.6 }
+local AXES = { Vector3.xAxis, Vector3.yAxis, Vector3.zAxis }
+-- a skin is a whole model: scripts and joints are stripped, every part is welded to the biggest one
+local function prepSkinModel(objs)
+    local m = Instance.new("Model")
+    m.Name = "MM2SkinTemplate"
+    for _, o in ipairs(objs) do o.Parent = m end
+    for _, d in ipairs(m:GetDescendants()) do
+        if d:IsA("Tool") then
+            for _, ch in ipairs(d:GetChildren()) do
+                if ch:IsA("BasePart") or ch:IsA("Model") then ch.Parent = m end
             end
+            d:Destroy()
         end
     end
+    for _, d in ipairs(m:GetDescendants()) do
+        if d:IsA("LuaSourceContainer") or d:IsA("Sound") or d:IsA("Humanoid") or d:IsA("Animator") or d:IsA("JointInstance") or d:IsA("WeldConstraint")
+            or d:IsA("ProximityPrompt") or d:IsA("ClickDetector") or d:IsA("BodyMover") or d:IsA("ForceField") or d:IsA("Seat") or d:IsA("VehicleSeat")
+            or d:IsA("Constraint") then
+            pcall(function() d:Destroy() end)
+        end
+    end
+    local parts, root, best = {}, nil, -1
+    for _, d in ipairs(m:GetDescendants()) do
+        if d:IsA("BasePart") then
+            parts[#parts + 1] = d
+            local vol = d.Size.X * d.Size.Y * d.Size.Z
+            if vol > best then root, best = d, vol end
+        end
+    end
+    if not root then m:Destroy() return nil end
+    m.PrimaryPart = root
+    for _, p in ipairs(parts) do
+        p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless, p.CastShadow = false, false, false, false, true, false
+        if p ~= root then
+            local w = Instance.new("Weld")
+            w.Part0, w.Part1 = root, p
+            w.C0 = root.CFrame:ToObjectSpace(p.CFrame)
+            w.Parent = p
+        end
+    end
+    return m
 end
-pcall(collectDisplaySkins)
 
-local function fakeFor(slot)
+local function longAxis(s) return (s.X >= s.Y and s.X >= s.Z) and 1 or (s.Y >= s.Z and 2 or 3) end
+local function rotateTo(a, b)
+    local axis = a:Cross(b)
+    if axis.Magnitude < 1e-4 then
+        if a:Dot(b) > 0 then return CFrame.identity end
+        local perp = math.abs(a.Y) < 0.9 and Vector3.yAxis or Vector3.xAxis
+        return CFrame.fromAxisAngle(a:Cross(perp).Unit, math.pi)
+    end
+    return CFrame.fromAxisAngle(axis.Unit, math.acos(math.clamp(a:Dot(b), -1, 1)))
+end
+
+local function dropFake(slot)
+    local f = SK.fakes[slot]
+    if f then pcall(function() f.model:Destroy() end) end
+    SK.fakes[slot] = nil
+end
+
+-- the skin rides on the handle of the weapon you hold (so it sits exactly like the real one); with nothing in hand it goes to the hand
+local function fakeFor(slot, skin, handle)
     local c = lp.Character
     local hand = c and (c:FindFirstChild("RightHand") or c:FindFirstChild("Right Arm"))
-    if not hand then return nil end
+    local anchor = handle or hand
+    if not anchor then return nil end
+    local a = SK.adj[slot]
+    local key = skin.label .. "|" .. string.format("%.2f", a.size)
     local f = SK.fakes[slot]
-    if f and f.part.Parent and f.weld.Part0 == hand then return f end
-    if f then pcall(function() f.part:Destroy() end) end
-    local part = Instance.new("Part")
-    part.Name = "MM2Skin" .. slot
-    part.Size = Vector3.new(0.4, 0.4, 0.4)
-    part.CanCollide, part.CanQuery, part.CanTouch, part.Massless, part.Anchored = false, false, false, true, false
-    part.CastShadow = false
-    local mesh = Instance.new("SpecialMesh")
-    mesh.MeshType = Enum.MeshType.FileMesh
-    mesh.Parent = part
+    if f and f.model.Parent and f.key == key and f.anchor == anchor then return f end
+    dropFake(slot)
+    local m = skin.model:Clone()
+    local _, sz0 = m:GetBoundingBox()
+    m:ScaleTo(SKIN_TARGET[slot] * a.size / math.max(sz0.X, sz0.Y, sz0.Z, 0.01))
+    local bbCF, sz = m:GetBoundingBox()
+    local root = m.PrimaryPart
+    local center = root.CFrame:ToObjectSpace(bbCF)
+    local mi = longAxis(sz)
+    local ti = handle and longAxis(handle.Size) or 3
     local weld = Instance.new("Weld")
-    weld.Part0, weld.Part1 = hand, part
-    weld.Parent = part
-    part.Parent = workspace.Terrain
-    f = { part = part, mesh = mesh, weld = weld }
+    weld.Part0, weld.Part1 = anchor, root
+    weld.C1 = center
+    weld.Parent = root
+    m.Parent = workspace.Terrain
+    f = { model = m, weld = weld, key = key, anchor = anchor, base = handle and CFrame.identity or GRIP, orient = rotateTo(AXES[mi], AXES[ti]) }
     SK.fakes[slot] = f
     return f
 end
 
-local function styleFake(slot, skin)
-    local f = fakeFor(slot)
-    if not f then return nil end
-    local a = SK.adj[slot]
-    f.mesh.MeshId = skin.meshId
-    f.mesh.TextureId = skin.texId or ""
-    f.mesh.Scale = (skin.scale or Vector3.one) * a.size
-    f.mesh.Offset = skin.offset or Vector3.zero
-    f.part.Color = skin.color or Color3.new(1, 1, 1)
-    f.part.Material = skin.material or Enum.Material.Plastic
-    f.weld.C0 = GRIP * CFrame.new(a.off) * CFrame.Angles(math.rad(a.rot.X), math.rad(a.rot.Y), math.rad(a.rot.Z)) * (skin.orient or CFrame.identity)
-    return f
-end
-
 local hiddenReal = setmetatable({}, { __mode = "k" })
+local function setRealHidden(tool, hide)
+    for _, d in ipairs(tool:GetDescendants()) do
+        if d:IsA("BasePart") then
+            if hide then d.LocalTransparencyModifier = 1 hiddenReal[d] = true
+            elseif hiddenReal[d] then d.LocalTransparencyModifier = 0 hiddenReal[d] = nil end
+        end
+    end
+end
+local lastHidden = {}
 local function updateSkins()
     local c = lp.Character
     for _, slot in ipairs({ "Knife", "Gun" }) do
@@ -1567,14 +1609,23 @@ local function updateSkins()
         local equipped = real and real.Parent == c
         local show = skin and visAlive(lp) and (equipped or (not real and SK.idle == slot))
         local f = SK.fakes[slot]
-        local rh = real and real:FindFirstChild("Handle")
         if show then
-            f = styleFake(slot, skin)
-            if f then f.part.Transparency = 0 end
-            if rh then rh.LocalTransparencyModifier = 1 hiddenReal[rh] = true end
+            f = fakeFor(slot, skin, equipped and real:FindFirstChild("Handle") or nil)
+            if f then
+                local a = SK.adj[slot]
+                f.weld.C0 = f.base * CFrame.new(a.off) * CFrame.Angles(math.rad(a.rot.X), math.rad(a.rot.Y), math.rad(a.rot.Z)) * f.orient
+                if f.model.Parent ~= workspace.Terrain then f.model.Parent = workspace.Terrain end
+            end
+            if equipped then
+                setRealHidden(real, true)
+                lastHidden[slot] = real
+            end
         else
-            if f and f.part.Parent then f.part.Transparency = 1 end
-            if rh and hiddenReal[rh] then rh.LocalTransparencyModifier = 0 hiddenReal[rh] = nil end
+            if f and f.model.Parent then f.model.Parent = nil end
+        end
+        if lastHidden[slot] and (not show or lastHidden[slot] ~= real or not equipped) then
+            pcall(setRealHidden, lastHidden[slot], false)
+            lastHidden[slot] = nil
         end
     end
 end
@@ -1585,9 +1636,11 @@ task.spawn(function()
     end
 end)
 onCleanup(function()
-    for _, f in pairs(SK.fakes) do pcall(function() f.part:Destroy() end) end
-    for h in pairs(hiddenReal) do pcall(function() h.LocalTransparencyModifier = 0 end) end
+    for slot in pairs(SK.fakes) do dropFake(slot) end
+    for p in pairs(hiddenReal) do pcall(function() p.LocalTransparencyModifier = 0 end) end
 end)
+SK.prep = prepSkinModel
+end
 
 local function selectSkin(slot, label)
     SK.pick[slot] = label ~= "Default (real)" and label or nil
@@ -1601,28 +1654,7 @@ local function refreshSkinLists()
     end
 end
 
-local function extractMesh(objs)
-    for _, o in ipairs(objs) do
-        local list = o:GetDescendants()
-        table.insert(list, 1, o)
-        for _, d in ipairs(list) do
-            if d:IsA("MeshPart") and d.MeshId ~= "" then
-                local tex = d.TextureID
-                if tex == "" then
-                    local sa = d:FindFirstChildOfClass("SurfaceAppearance")
-                    if sa then tex = sa.ColorMap end
-                end
-                return { meshId = d.MeshId, texId = tex, native = d.MeshSize, color = d.Color, material = d.Material }
-            elseif d:IsA("SpecialMesh") and d.MeshId ~= "" then
-                local part = d.Parent
-                return { meshId = d.MeshId, texId = d.TextureId, scale = d.Scale, offset = d.Offset,
-                    color = part:IsA("BasePart") and part.Color or nil, material = part:IsA("BasePart") and part.Material or nil }
-            end
-        end
-    end
-end
-
--- takes the first mesh from a catalog model and uses it as a skin
+-- loads a model asset and keeps the whole model as a skin
 local function loadSkinAsset(id, name, slot)
     if SK.loading then return notify("Skins", "Already loading, wait a moment", "warning") end
     SK.loading = true
@@ -1640,19 +1672,12 @@ local function loadSkinAsset(id, name, slot)
         if not objs or #objs == 0 then
             return notify("Skins", done and ("Asset not available: " .. tostring(err or "empty")) or "Timed out", "error", 5)
         end
-        local info = extractMesh(objs)
-        for _, o in ipairs(objs) do pcall(function() o:Destroy() end) end
-        if not info then return notify("Skins", "No mesh found in that asset", "error", 4) end
-        local skin = { meshId = info.meshId, texId = info.texId or "", scale = info.scale, offset = info.offset, color = info.color, material = info.material }
-        if info.native then
-            local m = math.max(info.native.X, info.native.Y, info.native.Z, 0.01)
-            skin.scale = Vector3.one * (SKIN_TARGET[slot] / m)
-            -- point the mesh's longest axis along the hand (the blade / barrel goes forward)
-            local n = info.native
-            if n.X >= n.Y and n.X >= n.Z then skin.orient = CFrame.Angles(0, math.rad(90), 0)
-            elseif n.Y >= n.X and n.Y >= n.Z then skin.orient = CFrame.Angles(math.rad(90), 0, 0) end
+        local ok, m = pcall(SK.prep, objs)
+        if not (ok and m) then
+            for _, o in ipairs(objs) do pcall(function() o:Destroy() end) end
+            return notify("Skins", "That asset has no visible parts", "error", 4)
         end
-        local label = addSkin(slot, tostring(name):sub(1, 28), skin)
+        local label = addSkin(slot, tostring(name):sub(1, 28), { model = m })
         refreshSkinLists()
         selectSkin(slot, label)
         notify("Skins", "Using " .. label .. " as your " .. slot:lower() .. " (adjust it under Fit)", "success", 4)
@@ -4617,7 +4642,7 @@ do
     local L, R = SkinTab:Column("left"), SkinTab:Column("right")
 
     local ws = L:CreateSection({ Name = "Weapon Skins", Icon = "palette", Collapsible = true })
-    ws:AddLabel("Shown only on your screen. Pick a skin and it appears in your hand.")
+    ws:AddLabel("Shown only on your screen. Any model asset works as a weapon.")
     SK.dd.Knife = ws:AddDropdown({ Name = "Knife", Options = SK.names.Knife, Default = "Default (real)", Callback = function(v)
         SK.pick.Knife = (v and v ~= "Default (real)") and v or nil
     end })
@@ -4625,12 +4650,29 @@ do
         SK.pick.Gun = (v and v ~= "Default (real)") and v or nil
     end })
     ws:AddDropdown({ Name = "Show When Empty-Handed", Options = { "Knife", "Gun", "Off" }, Default = "Knife", Description = "What you hold in the lobby / as an innocent", Callback = function(v) SK.idle = v or "Knife" end })
-    ws:AddButton({ Name = "Refresh Skins", Callback = function()
-        SK.list, SK.names = { Knife = {}, Gun = {} }, { Knife = { "Default (real)" }, Gun = { "Default (real)" } }
-        collectDisplaySkins()
-        refreshSkinLists()
-        notify("Skins", (#SK.names.Knife - 1) .. " knives, " .. (#SK.names.Gun - 1) .. " guns", "info")
-    end })
+
+    -- ready-made weapons (model assets)
+    local GUN_PRESETS = {
+        { "AWP Sniper", 9736025924 }, { "AK-47", 9914863724 }, { "AK-47 (mesh)", 4776045776 },
+        { "Minigun", 91486152 }, { "Shotgun", 3840063 }, { "Rocket Launcher", 175731201 },
+    }
+    local KNIFE_PRESETS = {
+        { "Banana", 13165469156 }, { "Lightsaber", 14558617502 }, { "Green Lightsaber", 12857941046 },
+        { "Katana", 11401699633 }, { "Black Katana", 140237683099823 }, { "Chainsaw", 3155896845 },
+    }
+    local pr = L:CreateSection({ Name = "Presets", Icon = "swords", Collapsible = true })
+    local function presetPicker(slot, list)
+        local names, byName = {}, {}
+        for _, p in ipairs(list) do names[#names + 1] = p[1] byName[p[1]] = p end
+        local cur = names[1]
+        pr:AddDropdown({ Name = slot .. " Preset", Options = names, Default = cur, Callback = function(v) cur = v or cur end })
+        pr:AddButton({ Name = "Use as " .. slot, Primary = true, Callback = function()
+            local p = byName[cur]
+            loadSkinAsset(p[2], p[1], slot)
+        end })
+    end
+    presetPicker("Gun", GUN_PRESETS)
+    presetPicker("Knife", KNIFE_PRESETS)
 
     local fit = L:CreateSection({ Name = "Fit", Icon = "move-3d", Collapsible = true })
     fit:AddLabel("Rotate / resize the skin if it sits wrong in your hand.")
@@ -4657,7 +4699,7 @@ do
 
     -- catalog ------------------------------------------------------------
     local cs = R:CreateSection({ Name = "Catalog Skins", Icon = "search", Collapsible = true })
-    cs:AddLabel("Searches Roblox for models and uses the first mesh as a skin.")
+    cs:AddLabel("Searches the Roblox toolbox for models.")
     local kw, results, chosen = "karambit knife", {}, nil
     cs:AddTextbox({ Name = "Keyword", Default = kw, Placeholder = "knife, sword, pistol...", Callback = function(t) kw = t end })
     local resDd = cs:AddDropdown({ Name = "Results", Options = {}, Callback = function(v) chosen = v end })
@@ -4687,21 +4729,16 @@ do
         if r then loadSkinAsset(r.id, r.name, "Gun") else notify("Skins", "Pick a result first", "warning") end
     end })
 
-    local cu = R:CreateSection({ Name = "Custom Mesh", Icon = "box", Collapsible = true })
-    local meshBox, texBox, scaleBox = "", "", "1"
-    cu:AddTextbox({ Name = "MeshId", Placeholder = "rbxassetid://...", Callback = function(t) meshBox = t end })
-    cu:AddTextbox({ Name = "TextureId", Placeholder = "rbxassetid://... (optional)", Callback = function(t) texBox = t end })
-    cu:AddTextbox({ Name = "Scale", Default = "1", Numeric = true, Callback = function(t) scaleBox = t end })
-    local function custom(slot)
-        if meshBox == "" then return notify("Skins", "Enter a MeshId", "warning") end
-        local id = meshBox:match("^%d+$") and ("rbxassetid://" .. meshBox) or meshBox
-        local label = addSkin(slot, "Custom " .. slot, { meshId = id, texId = texBox, scale = Vector3.one * (tonumber(scaleBox) or 1) })
-        refreshSkinLists()
-        selectSkin(slot, label)
-        notify("Skins", "Custom " .. slot:lower() .. " ready", "success")
+    local cu = R:CreateSection({ Name = "Asset ID", Icon = "box", Collapsible = true })
+    local assetBox = ""
+    cu:AddTextbox({ Name = "Model Asset ID", Placeholder = "e.g. 9914863724", Numeric = true, Callback = function(t) assetBox = t end })
+    local function byId(slot)
+        local id = tonumber(assetBox)
+        if not id then return notify("Skins", "Enter a numeric asset id", "warning") end
+        loadSkinAsset(id, "Asset " .. id, slot)
     end
-    cu:AddButton({ Name = "Use as Knife", Callback = function() custom("Knife") end })
-    cu:AddButton({ Name = "Use as Gun", Callback = function() custom("Gun") end })
+    cu:AddButton({ Name = "Use as Knife", Callback = function() byId("Knife") end })
+    cu:AddButton({ Name = "Use as Gun", Callback = function() byId("Gun") end })
 
     -- avatar -------------------------------------------------------------
     local av = R:CreateSection({ Name = "Avatar Changer", Icon = "user", Collapsible = true })
