@@ -4121,11 +4121,18 @@ local function makeRec(c)
                     local ref = c:FindFirstChild(d.Name)
                     if not (ref and ref:IsA("BasePart")) then ref = nil end
                     if not ref then
+                        -- an accessory handle is attached either by a Weld or, on newer rigs, by a RigidConstraint between attachments
                         for _, j in ipairs(d:GetChildren()) do
+                            local other
                             if (j:IsA("Weld") or j:IsA("Motor6D")) and j.Part0 and j.Part1 == d then
-                                local cand = c:FindFirstChild(j.Part0.Name)
-                                if cand and cand:IsA("BasePart") then ref = cand break end
+                                other = j.Part0
+                            elseif j:IsA("RigidConstraint") then
+                                local a0, a1 = j.Attachment0, j.Attachment1
+                                local pa, pb = a0 and a0.Parent, a1 and a1.Parent
+                                other = (pa == d) and pb or pa
                             end
+                            local cand = other and c:FindFirstChild(other.Name)
+                            if cand and cand:IsA("BasePart") then ref = cand break end
                         end
                     end
                     ref = ref or rr
@@ -4925,6 +4932,48 @@ do
         r.CFrame = r.CFrame * CFrame.Angles(0, math.rad(SPIN.speed) * dt, 0)
     end))
     onCleanup(function() SPIN.on = false spinRestore() end)
+
+    -- fling: Touch Fling spikes your own velocity so that whoever you touch is thrown; Anti-Fling makes other players' bodies harmless
+    local FL = { touch = false, anti = false }
+    local fl = L:CreateSection({ Name = "Fling", Icon = "wind", Collapsible = true })
+    fl:AddToggle({ Name = "Touch Fling", Icon = "zap", Description = "Throws players you touch", Callback = function(v) FL.touch = v end })
+    fl:AddToggle({ Name = "Anti-Fling", Icon = "shield", Description = "Other players can't push or throw you", Callback = function(v) FL.anti = v end })
+    task.spawn(function()
+        while alive do
+            if FL.touch then
+                local r = hrpOf(lp)
+                if r and r.Parent then
+                    local keepVel = r.AssemblyLinearVelocity
+                    r.AssemblyLinearVelocity = Vector3.new(10000, 10000, 10000)
+                    r.AssemblyAngularVelocity = Vector3.new(0, 10000, 0)
+                    RunService.RenderStepped:Wait()
+                    if r.Parent then
+                        r.AssemblyLinearVelocity = keepVel
+                        r.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+                RunService.Heartbeat:Wait()
+            else
+                task.wait(0.2)
+            end
+        end
+    end)
+    track(RunService.Stepped:Connect(function()
+        if not FL.anti then return end
+        for _, p in ipairs(Players:GetPlayers()) do
+            local c = p ~= lp and p.Character
+            if c then
+                for _, part in ipairs(c:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end
+    end))
+    onCleanup(function() FL.touch, FL.anti = false, false end)
 end
 
 -- preload the default model in the background so "Replace Models" works the moment it is switched on
