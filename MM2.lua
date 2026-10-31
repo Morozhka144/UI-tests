@@ -59,7 +59,7 @@ local function track(c) conns[#conns + 1] = c return c end
 local function onCleanup(fn) cleanups[#cleanups + 1] = fn end
 local function safe(fn, ...) local ok, a, b = pcall(fn, ...) if ok then return a, b end return nil end
 local function rainbowAt(t, off) return Color3.fromHSV((t * 0.3 + (off or 0)) % 1, 0.8, 1) end
-local function dbg(msg) local f = _G.__MM2Dlog if f then f(msg) end end
+local function dbg() end
 
 local overlayParent = (gethui and gethui()) or game:GetService("CoreGui")
 local overlay = Instance.new("ScreenGui")
@@ -1726,13 +1726,7 @@ local F = {
     trail = false, trailStyle = "Ribbon", trailColor = Color3.fromRGB(120, 200, 255), trailRainbow = true,
 }
 
-local dlogT = {}
-_G.__MM2Log = dlogT
-local function dlog(msg)
-    dlogT[#dlogT + 1] = string.format("[%.1f] %s", os.clock() % 10000, tostring(msg))
-    if #dlogT > 300 then table.remove(dlogT, 1) end
-end
-_G.__MM2Dlog = dlog
+local function dlog() end
 local function describe(v, depth)
     depth = depth or 0
     local tv = typeof(v)
@@ -3105,7 +3099,6 @@ do
     local pool = { "Soul Ascend", "Black Hole", "Thunder Smite", "Crystal Shatter", "Haunt", "Sakura Bloom" }
     local known = {}
     for _, n in ipairs(pool) do known[n] = true end
-    _G.__MM2Fx = { build = kfBuild }
 
     killEffect = function(victim, mine)
         local c, r = char(victim), hrpOf(victim)
@@ -3336,15 +3329,6 @@ local function buildAura(c, style, color, scale)
             tr.Parent = o
             a.dots[i] = { part = o, trail = tr }
         end
-    elseif style == "Flames" then
-        a.core.Size = Vector3.new(3 * scale, 0.5, 3 * scale)
-        mkEmitter(a.core, { tex = "rbxasset://textures/particles/fire_main.dds", c0 = Color3.fromRGB(255, 190, 60), c1 = Color3.fromRGB(220, 40, 20), rate = 90, s0 = 3, s1 = 7, size = 2.2 * scale, l0 = 0.5, l1 = 1.1, le = 0.8, shape = Enum.ParticleEmitterShape.Disc })
-    elseif style == "Sparkles" then
-        a.core.Size = Vector3.new(4 * scale, 6 * scale, 4 * scale)
-        a.emit = mkEmitter(a.core, { c0 = color, rate = 60, s0 = 0.5, s1 = 2, size = 0.55 * scale, l0 = 0.8, l1 = 1.8, spread = Vector2.new(180, 180), acc = Vector3.new(0, 1.5, 0), shape = Enum.ParticleEmitterShape.Cylinder })
-    elseif style == "Shadow Smoke" then
-        a.core.Size = Vector3.new(3 * scale, 0.5, 3 * scale)
-        mkEmitter(a.core, { tex = "rbxasset://textures/particles/smoke_main.dds", c0 = Color3.fromRGB(45, 0, 70), c1 = Color3.fromRGB(10, 0, 20), le = 0, t0 = 0.35, rate = 28, s0 = 1.5, s1 = 3.5, size = 3.2 * scale, l0 = 1.2, l1 = 2.2, shape = Enum.ParticleEmitterShape.Disc })
     end
     auras[c] = a
 end
@@ -3574,11 +3558,6 @@ local function updateAura(c, a, t)
             d.part.Color = col:Lerp(Color3.new(1, 1, 1), 0.5)
             d.trail.Color = ColorSequence.new(col, col:Lerp(Color3.new(1, 1, 1), 0.7))
         end
-    elseif style == "Sparkles" then
-        a.core.CFrame = CFrame.new(r.Position)
-        if a.emit then a.emit.Color = ColorSequence.new(col) end
-    else -- Flames / Shadow Smoke
-        a.core.CFrame = CFrame.new(feet)
     end
 end
 
@@ -4279,9 +4258,6 @@ track(RunService.RenderStepped:Connect(function()
     end
 end))
 
-_G.__MM2Dbg = { Library = Library, F = F, S = S, P = P, SK = SK, applyAvatar = applyAvatar, loadSkinAsset = loadSkinAsset, addSkin = addSkin, resetAvatar = resetAvatar, PF = PF, MR = MR, killEffect = killEffect, drawTracer = drawTracer, pfPreset = pfPreset, pfEnable = pfEnable,
-    setWeather = setWeather, loadModelAsset = loadModelAsset, searchModels = searchModels, setVignette = setVignette }
-onCleanup(function() _G.__MM2Dbg = nil end)
 
 local Win = Library:CreateWindow({
     Title = "Moro MM2",
@@ -4322,6 +4298,7 @@ local PostTab = subTab({ Name = "Post FX", Icon = "clapperboard" })
 local ModelTab = subTab({ Name = "Models", Icon = "box" })
 local WorldTab = subTab({ Name = "World", Icon = "globe" })
 local SkinTab = Win:CreateTab({ Name = "Skins", Icon = "palette" })
+local HalloweenTab = Win:CreateTab({ Name = "Halloween", Icon = "ghost" })
 local MiscTab = Win:CreateTab({ Name = "Misc", Icon = "wrench" })
 Win:AddSettingsTab()
 
@@ -4507,12 +4484,9 @@ do
     local we = R:CreateSection({ Name = "World ESP", Icon = "map-pin", Collapsible = true })
     local gunT = we:AddToggle({ Name = "Gun", Default = true, Callback = function(v) E.gun = v end })
     gunT:AddColorPicker({ Default = E.gunCol, Callback = function(c) E.gunCol = c end })
-    local coinT = we:AddToggle({ Name = "Coins / Candies", Callback = function(v) E.coins = v end })
-    coinT:AddColorPicker({ Default = E.coinCol, Callback = function(c) E.coinCol = c end })
     we:AddToggle({ Name = "Outline", Default = true, Callback = function(v) E.outline = v end })
     we:AddToggle({ Name = "Fill", Default = true, Callback = function(v) E.fill = v end })
     we:AddToggle({ Name = "Labels", Default = true, Callback = function(v) E.tag = v end })
-    we:AddSlider({ Name = "Coin Range", Min = 30, Max = 800, Default = E.coinMax, Suffix = " st", Callback = function(v) E.coinMax = v end })
 
     -- colors / notifications / info --------------------------------------
     local rc = R:CreateSection({ Name = "Role Colors", Icon = "palette", Collapsible = true })
@@ -4940,6 +4914,123 @@ do
         local id = resChosen and results[resChosen]
         if id then loadModelAsset(id) else notify("Model", "Pick a result first", "warning") end
     end })
+end
+
+-- HALLOWEEN ---------------------------------------------------------
+do
+    local HW = { collect = false, mode = "Teleport", range = 400, speed = 60, delay = 0.35, avoid = true, got = 0, bad = {} }
+    local L, R = HalloweenTab:Column("left"), HalloweenTab:Column("right")
+
+    local function candies()
+        local map = mapModel()
+        local cc = map and map:FindFirstChild("CoinContainer")
+        local out = {}
+        if cc then
+            for _, c in ipairs(cc:GetChildren()) do
+                if c:IsA("BasePart") and tostring(c:GetAttribute("CoinID")) == "Candy" then out[#out + 1] = c end
+            end
+        end
+        return out
+    end
+    local function murdererPos()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= lp and getRole(p) == "Murderer" then
+                local r = hrpOf(p)
+                if r and visAlive(p) then return r.Position end
+            end
+        end
+    end
+
+    -- Candy ESP ---------------------------------------------------------
+    local ce = L:CreateSection({ Name = "Candy ESP", Icon = "eye", Collapsible = true })
+    local ceT = ce:AddToggle({ Name = "Candy ESP", Icon = "eye", Description = "Outline and label on every candy (and coin)", Callback = function(v) E.coins = v end })
+    ceT:AddColorPicker({ Default = E.coinCol, Callback = function(c) E.coinCol = c end })
+    ce:AddSlider({ Name = "Range", Min = 30, Max = 800, Default = E.coinMax, Suffix = " st", Callback = function(v) E.coinMax = v end })
+    ce:AddStat({ Name = "Candies on map", Interval = 1, Get = function() return tostring(#candies()) end })
+    ce:AddStat({ Name = "Collected", Interval = 1, Get = function() return tostring(HW.got) end })
+
+    -- Candy collector ---------------------------------------------------
+    local co = R:CreateSection({ Name = "Candy Collector", Icon = "candy", Collapsible = true })
+    co:AddToggle({ Name = "Auto Collect", Icon = "candy", Description = "Goes for the nearest candy by itself", Callback = function(v)
+        HW.collect = v
+        HW.bad = {}
+        if not v then local h = humOf(lp) local r = hrpOf(lp) if h and r then h:MoveTo(r.Position) end end
+    end })
+    co:AddDropdown({ Name = "Mode", Options = { "Teleport", "Fly", "Walk" }, Default = "Teleport", Callback = function(v) HW.mode = v or "Teleport" end })
+    co:AddSlider({ Name = "Fly Speed", Min = 20, Max = 150, Default = HW.speed, Suffix = " st/s", Callback = function(v) HW.speed = v end })
+    co:AddSlider({ Name = "Teleport Delay", Min = 0.1, Max = 2, Default = HW.delay, Decimals = 2, Suffix = " s", Callback = function(v) HW.delay = v end })
+    co:AddSlider({ Name = "Range", Min = 50, Max = 800, Default = HW.range, Suffix = " st", Callback = function(v) HW.range = v end })
+    co:AddToggle({ Name = "Avoid Murderer", Default = true, Description = "Skips candies close to the murderer", Callback = function(v) HW.avoid = v end })
+    co:AddLabel("Teleport jumps onto each candy, Fly glides through walls (noclip), Walk is a normal run.")
+
+    -- Fly keeps the body from colliding with anything
+    track(RunService.Stepped:Connect(function()
+        if not HW.flying then return end
+        local c = lp.Character
+        if not c then return end
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end))
+    task.spawn(function()
+        while alive do
+            if HW.collect then
+                pcall(function()
+                    local r, h = hrpOf(lp), humOf(lp)
+                    if not (r and h and h.Health > 0 and visAlive(lp)) then return end
+                    local murd = (HW.avoid and getRole(lp) ~= "Murderer") and murdererPos() or nil
+                    local best, bd = nil, HW.range
+                    for _, c in ipairs(candies()) do
+                        local d = (c.Position - r.Position).Magnitude
+                        if d < bd and not (HW.bad[c] and os.clock() < HW.bad[c]) and not (murd and (c.Position - murd).Magnitude < 22) then
+                            best, bd = c, d
+                        end
+                    end
+                    if not best then return end
+                    if HW.mode == "Teleport" then
+                        r.CFrame = CFrame.new(best.Position + Vector3.new(0, 1.5, 0)) * (r.CFrame - r.CFrame.Position)
+                        r.AssemblyLinearVelocity = Vector3.zero
+                        local w0 = os.clock()
+                        while best.Parent and os.clock() - w0 < 0.5 do task.wait(0.05) end
+                        if best.Parent then HW.bad[best] = os.clock() + 8 else HW.got += 1 end
+                        task.wait(HW.delay)
+                        return
+                    end
+                    local t0, lastPos, lastCheck, stuck = os.clock(), r.Position, os.clock(), 0
+                    HW.flying = HW.mode == "Fly"
+                    while HW.collect and alive and best.Parent and os.clock() - t0 < 10 do
+                        r, h = hrpOf(lp), humOf(lp)
+                        if not (r and h and h.Health > 0) then break end
+                        local to = best.Position - r.Position
+                        if to.Magnitude < 3 then break end
+                        if HW.flying then
+                            local dt = RunService.Heartbeat:Wait()
+                            local step = math.min(HW.speed * dt, to.Magnitude)
+                            r.CFrame = CFrame.new(r.Position + to.Unit * step) * (r.CFrame - r.CFrame.Position)
+                            r.AssemblyLinearVelocity = Vector3.zero
+                        else
+                            h:MoveTo(best.Position)
+                            task.wait(0.1)
+                            if os.clock() - lastCheck > 0.6 then
+                                if (r.Position - lastPos).Magnitude < 0.8 then
+                                    stuck += 1
+                                    h.Jump = true
+                                    if stuck >= 3 then break end
+                                else
+                                    stuck = 0
+                                end
+                                lastPos, lastCheck = r.Position, os.clock()
+                            end
+                        end
+                    end
+                    HW.flying = false
+                    if not best.Parent then HW.got += 1 else HW.bad[best] = os.clock() + 6 end
+                end)
+            end
+            task.wait(0.12)
+        end
+    end)
+    onCleanup(function() HW.collect = false end)
 end
 
 -- MISC --------------------------------------------------------------
