@@ -207,7 +207,7 @@ local function newProfile(extra)
 end
 P = {
     Murderer = newProfile({ aimMode = "Anyone", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, throwWall = true, holster = true, holsterDelay = 0.3, stabHolster = true, stabHolsterDelay = 0.3, killAura = false, killRange = 14, killDelay = 0.9, killAll = false, throwAura = false, throwRange = 70, throwDelay = 1.2 }),
-    Sheriff = newProfile({ aimMode = "Murderer", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, autoShoot = false, shootDelay = 1.3, shootRange = 250, shootWall = true, autoGun = false, grabMode = "Remote", grabFallback = false, holster = true, holsterDelay = 0.3 }),
+    Sheriff = newProfile({ aimMode = "Murderer", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, autoShoot = false, shootDelay = 1.3, shootRange = 250, shootWall = true, autoGun = false, grabMode = "Remote", holster = true, holsterDelay = 0.3 }),
 }
 local SHARED_KEYS = { "aimbot", "aimKey", "aimMode", "aimPart", "aimFov", "aimSmooth", "aimWall", "predict", "showFov", "silent", "silentFov", "silentWall" }
 syncProfile = function()
@@ -223,7 +223,7 @@ syncProfile = function()
     S.throwAura, S.throwRange, S.throwDelay = isM and m.throwAura, m.throwRange, m.throwDelay
     S.autoShoot, S.shootDelay, S.shootRange, S.shootWall = isS and sh.autoShoot, sh.shootDelay, sh.shootRange, sh.shootWall
     S.autoGun = (not isM) and sh.autoGun   -- innocents need the gun grab most of all
-    S.grabMode, S.grabFallback = sh.grabMode, sh.grabFallback
+    S.grabMode = sh.grabMode
     -- wallbang works the same way for both roles: shots for the sheriff, knife throws for the murderer
     local wp = isM and m or sh
     S.wallbang, S.wbMode, S.wbOffset, S.wbManual = (isM or isS) and wp.wallbang, wp.wbMode, wp.wbOffset, (isM or isS) and wp.wbManual
@@ -1296,7 +1296,7 @@ do
         task.wait(0.35)
         tpTo(home)
     end
-    S.grabGun = function(mode, fallback)
+    S.grabGun = function(mode)
         local drop = gunDrop()
         local r = hrpOf(lp)
         local part = dropPart(drop)
@@ -1311,18 +1311,13 @@ do
             byTeleport(part, r)
         else
             byRemote(drop, part, r)
-            task.wait(0.6)
-            if fallback and not findTool(lp, "Gun") and part.Parent then
-                dbg("Remote grab failed, falling back to teleport")
-                byTeleport(part, r)
-            end
         end
         return true
     end
     task.spawn(function()
         while alive do
             if S.autoGun and getRole(lp) ~= "Murderer" and visAlive(lp) and not findTool(lp, "Gun") and gunDrop() then
-                pcall(S.grabGun, S.grabMode, S.grabFallback)
+                pcall(S.grabGun, S.grabMode)
                 task.wait(1)
             end
             task.wait(0.4)
@@ -4380,10 +4375,9 @@ do
     gn:AddLabel("Works for any player who is not the murderer and has no gun, innocents too.")
     gn:AddToggle({ Name = "Auto Grab Dropped Gun", Icon = "hand", Callback = function(v) P.Sheriff.autoGun = v end })
     gn:AddDropdown({ Name = "Method", Options = { "Remote", "Teleport" }, Default = "Remote", Description = "Remote: no movement. Teleport: walks into the gun and comes back", Callback = function(v) P.Sheriff.grabMode = v or "Remote" end })
-    gn:AddToggle({ Name = "Teleport Fallback", Default = false, Description = "If the remote method fails, teleport to the gun", Callback = function(v) P.Sheriff.grabFallback = v end })
     gn:AddButton({ Name = "Grab Gun Now", Callback = function()
         task.spawn(function()
-            local ok, why = S.grabGun(P.Sheriff.grabMode, P.Sheriff.grabFallback)
+            local ok, why = S.grabGun(P.Sheriff.grabMode)
             if not ok then notify("Gun", why, "warning") end
         end)
     end })
