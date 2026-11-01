@@ -13465,7 +13465,8 @@ local function ResetFarmState()
   -- Эти флаги раньше НЕ сбрасывались: после смерти посреди Seek/босса они оставались включёнными.
   KnobFarm.Teleporting = false
   KnobFarm.SeekMode = false
-      KnobFarm.DisableGodmodeForBoss = false
+  KnobFarm.LibraryPadlockSeen = false
+  KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
   pcall(function()
@@ -13721,6 +13722,13 @@ local function FindTool(...)
   return nil
 end
 
+-- Игрок жив: циклы комнат 50 и 100 раньше проверяли только Active и продолжали «проходить» комнату мёртвым персонажем
+local function PlayerAlive()
+  local char = localPlayer and localPlayer.Character
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  return hum ~= nil and hum.Health > 0
+end
+
 local function GetFarmSpeed()
   local opt = options and options.AutoFarmSpeed
   return (opt and opt.Value) or 35
@@ -13730,7 +13738,7 @@ end
 local function ApplyFarmSpeed(hum)
   local speed = GetFarmSpeed()
   SetFeature("EnableWalkspeed", true)
-  SetFeature("PhantomNoclip", false)   -- конфиг может включить его позже запуска фарма
+  SetFeature("PhantomNoclip", true)    -- фарм ходит с Phantom Noclip
   SetFeature("Noclip", false)
   if options and options.Walkspeed and options.Walkspeed.Value ~= speed then
     options.Walkspeed:SetValue(speed)
@@ -15023,9 +15031,20 @@ local function FetchRoomKey(room, waitForSpawn)
   end
   if not (keyObj and keyPos) then return false end
 
-  NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
-
+  -- Промпт ключа срабатывает с большого расстояния (FirePrompt расширяет радиус): если ключ рядом, берём его
+  -- сразу, не идя через комнату. Иначе бот «бегал» на месте у препятствия и ключ так и не брал.
   local prompt = keyObj:FindFirstChildWhichIsA("ProximityPrompt", true)
+  local fromRoot = GetRoot()
+  if prompt and fromRoot and (fromRoot.Position - keyPos).Magnitude <= 26 then
+    local quick = tick()
+    while not HasKeyTool() and tick() - quick < 1.0 and KnobFarm.Active and not _Unloading do
+      if prompt.Enabled then FirePrompt(prompt, false, true) end
+      task.wait(0.1)
+    end
+    if HasKeyTool() then return true end
+  end
+
+  NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
   local pickStart = tick()
   while not HasKeyTool() and tick() - pickStart < 2.0 and KnobFarm.Active and not _Unloading do
     if prompt and prompt.Enabled then
@@ -15722,8 +15741,12 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       end
     end
 
-    -- Общий таймаут пути
+    -- Общий таймаут пути. Он тоже считается застреванием: бот, который «дёргается» на месте у препятствия,
+    -- не попадает под проверку смещения, и раньше этот случай не копил StuckBreaks вообще.
     if now - startTime > 12.0 then
+      if targetType ~= "Loot" then
+        KnobFarm.StuckBreaks = (KnobFarm.StuckBreaks or 0) + 1
+      end
       break
     end
 
@@ -15953,16 +15976,18 @@ local function handleRoom(room, door)
       or (door and door:FindFirstChild("Padlock", true))
   end
   local padlock = findPadlock()
+  if padlock then KnobFarm.LibraryPadlockSeen = true end
 
   -- Комната 50 может ещё подгружаться: пока в ней нет ни замка, ни книг, считать замок открытым нельзя.
   -- Раньше бот входил сюда на момент загрузки, видел «нет замка», пропускал всю библиотеку и упирался в закрытую дверь.
+  -- Ждём именно замок: книги подгружаются раньше двери, и по их появлению замок ещё не виден
+  -- (бот видел «замка нет», считал библиотеку пройденной и шёл сразу к двери, не собрав ни одной книги).
   local loadWait = tick()
-  while not padlock and tick() - loadWait < 12 and KnobFarm.Active and not _Unloading do
-    local booksLoaded = targetRoom and targetRoom:FindFirstChild("LiveHintBook", true)
-    if booksLoaded then break end
+  while not padlock and not KnobFarm.LibraryPadlockSeen and tick() - loadWait < 15 and KnobFarm.Active and not _Unloading and PlayerAlive() do
     KnobFarm.SetStatus("Room 50: waiting for the library to load...")
     task.wait(0.4)
     padlock = findPadlock()
+    if padlock then KnobFarm.LibraryPadlockSeen = true end
   end
 
   -- Находим дверь 51 (выход из библиотеки в коридор 51)
@@ -16055,7 +16080,7 @@ local function handleRoom(room, door)
       end
     end
 
-    while KnobFarm.Active and not _Unloading do
+    while KnobFarm.Active and not _Unloading and PlayerAlive() do
       -- Если замок открылся или лист пропал во время сбора книг — немедленно выходим к двери
       if (sheetWasPresent and not hasSheet()) or (padlock and not padlock.Parent) then
         break
@@ -16180,7 +16205,7 @@ local function handleRoom(room, door)
           if blanks <= 3 then
             task.spawn(function()
               local function brute(s)
-                if not (KnobFarm.Active and not _Unloading and padlock and padlock.Parent) then return end
+                if not (KnobFarm.Active and not _Unloading and PlayerAlive() and padlock and padlock.Parent) then return end
                 local idx = string.find(s, "_")
                 if not idx then
                   pcall(function() remotesFolder.PL:FireServer(s) end)
@@ -16199,7 +16224,7 @@ local function handleRoom(room, door)
 
       -- Ждем пока замок откроется ИЛИ пока лист пропадет из инвентаря
       local t = tick()
-      while KnobFarm.Active and not _Unloading and (tick() - t < 12) do
+      while KnobFarm.Active and not _Unloading and PlayerAlive() and (tick() - t < 12) do
         if sheetWasPresent and not hasSheet() then
           KnobFarm.SetStatus("Room 50: Sheet consumed! Lock opened.")
           break
@@ -16252,7 +16277,7 @@ local function handleRoom(room, door)
 
     KnobFarm.SetStatus("Room 50: Passing Door 51 into Room 51...")
     local passStart = tick()
-    while tick() - passStart < 2.5 and KnobFarm.Active and not _Unloading do
+    while tick() - passStart < 2.5 and KnobFarm.Active and not _Unloading and PlayerAlive() do
       local passedDot = d51Center and ((curRoot.Position - d51Center):Dot(passDir)) or 5
       if passedDot >= 4.0 then break end
       ApplyFarmSpeed(curHum)
@@ -16265,7 +16290,7 @@ local function handleRoom(room, door)
   -- 7. Идем к двери 52 через NavigateTo (обычный фарм пешком)
   local door3 = nil
   local findStart = tick()
-  while tick() - findStart < 3.0 and not door3 and KnobFarm.Active and not _Unloading do
+  while tick() - findStart < 3.0 and not door3 and KnobFarm.Active and not _Unloading and PlayerAlive() do
     door3 = findDoor()
     if door3 then break end
     task.wait(0.15)
@@ -16330,7 +16355,7 @@ local function SolveRoom100(room)
   -- 0. Ожидание угроз перед входом
   if HasEntityThreat() then
     KnobFarm.SetStatus("Room 100: Threat detected! Waiting...")
-    while HasEntityThreat() and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading do
+    while HasEntityThreat() and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
       task.wait(0.3)
     end
     task.wait(0.5)
@@ -16346,7 +16371,7 @@ local function SolveRoom100(room)
 
   -- Ожидание загрузки объектов комнаты 100 (до 3 сек)
   local loadStart = tick()
-  while tick() - loadStart < 3.0 and KnobFarm.Active and not _Unloading do
+  while tick() - loadStart < 3.0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
     local f = targetRoom and (targetRoom:FindFirstChild("FusePickup", true) or targetRoom:FindFirstChild("ElevatorBreaker", true))
     if f then break end
     task.wait(0.2)
@@ -16386,7 +16411,7 @@ local function SolveRoom100(room)
 
   -- Объекты комнаты могут подгружаться не сразу: пока предохранителей нет — ждём (до 8 секунд)
   local searchStart = tick()
-  while #getFuses() == 0 and tick() - searchStart < 8.0 and KnobFarm.Active and not _Unloading do
+  while #getFuses() == 0 and tick() - searchStart < 8.0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
     KnobFarm.SetStatus("Room 100: Waiting for fuses to load...")
     task.wait(0.5)
   end
@@ -16395,7 +16420,7 @@ local function SolveRoom100(room)
   end
 
   local fuseStart = tick()
-  while KnobFarm.Active and not _Unloading and (tick() - fuseStart < 90) do
+  while KnobFarm.Active and not _Unloading and PlayerAlive() and (tick() - fuseStart < 90) do
     local unlooted = getFuses()
     if #unlooted == 0 then break end
 
@@ -16534,7 +16559,7 @@ local function SolveRoom100(room)
       WaitFigureClear(bPos, 15)
       -- Вставляем собранные предохранители в щиток
       local insertStart = tick()
-      while tick() - insertStart < 3.0 and KnobFarm.Active and not _Unloading do
+      while tick() - insertStart < 3.0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
         local hadPrompt = false
         for _, bPr in ipairs(breaker:GetDescendants()) do
           if bPr:IsA("ProximityPrompt") and bPr.Enabled then
@@ -16567,7 +16592,7 @@ local function SolveRoom100(room)
   end
 
   local solveWait = tick()
-  while tick() - solveWait < 45 and KnobFarm.Active and not _Unloading and not breakerSolved() do
+  while tick() - solveWait < 45 and KnobFarm.Active and not _Unloading and PlayerAlive() and not breakerSolved() do
     -- встроенный Instant-режим (реагирует на смену кода на панели) + прямой EBF на случай, если код не менялся
     if featureState.RunBreakerFunc then pcall(featureState.RunBreakerFunc) end
     if remotesFolder and remotesFolder:FindFirstChild("EBF") then
@@ -16602,6 +16627,8 @@ local function SolveRoom100(room)
       FirePrompt(ePr, false, false)
     end
   end
+
+  if not PlayerAlive() then return end
 
   -- 7. Завершение игры: ждем результатов и нажимаем Play Again
   KnobFarm.SetStatus("Game Completed! Waiting for results...")
@@ -16900,9 +16927,9 @@ local function Tick()
     return
   end
 
-  -- В фарме ноуклипа быть не должно (ни Phantom, ни обычного): бот должен ходить по полу и лестницам,
-  -- иначе он проваливается сквозь них. Конфиг может включить их позже запуска фарма, поэтому следим каждый тик.
-  SetFeature("PhantomNoclip", false)
+  -- Phantom Noclip в фарме включён на весь забег (бот проходит сквозь мебель и препятствия), обычный Noclip выключен.
+  -- Конфиг может поменять их позже запуска фарма, поэтому следим каждый тик.
+  SetFeature("PhantomNoclip", true)
   SetFeature("Noclip", false)
   if KnobFarm.PassedFirstDoor and not KnobFarm.DisableGodmodeForBoss then
     SetFeature("Godmode", true)
