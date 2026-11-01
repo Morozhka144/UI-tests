@@ -14116,6 +14116,23 @@ local function EquipUnlockTool(preferLockpick, lockId)
   end
 end
 
+-- Убедиться, что подходящий ключ именно в руках (а не в рюкзаке): до 2 секунд пробуем взять его.
+local function EnsureKeyInHand(lockId)
+  local deadline = tick() + 2.0
+  repeat
+    local char = localPlayer and localPlayer.Character
+    local has, tool = HasKeyTool(lockId)
+    if has and tool and char and tool.Parent == char then return true end
+    if has and tool then
+      EquipUnlockTool(false, lockId)
+    end
+    task.wait(0.1)
+  until tick() > deadline or not KnobFarm.Active or _Unloading
+  local char = localPlayer and localPlayer.Character
+  local has, tool = HasKeyTool(lockId)
+  return has and tool ~= nil and char ~= nil and tool.Parent == char
+end
+
 local function FindRoomKey(room)
   local function isKeyCandidate(inst)
     if not inst then return false end
@@ -15094,6 +15111,7 @@ local function FetchRoomKey(room, waitForSpawn)
       KnobFarm.Teleporting = false
     end
   end
+  if HasKeyTool(lockId) then EnsureKeyInHand(lockId) end
   return HasKeyTool(lockId)
 end
 
@@ -16999,10 +17017,18 @@ local function StepGoToExit(char, root, room, roomNum)
   local exitLockId = target:GetAttribute("RoomID")
   if IsDoorLocked(target) and not HasLockpick() and not HasKeyTool(exitLockId) then
     KnobFarm.SetStatus("No lockpicks! Walking to key (Room " .. tostring(roomNum) .. ")...")
-    if FetchRoomKey(room, true) then
-      EquipUnlockTool(false, exitLockId)
-    else
+    if not FetchRoomKey(room, true) then
       KnobFarm.SetStatus("Door locked & no key found in Room " .. tostring(roomNum))
+    end
+  end
+
+  -- Ключ найден — идём к двери только с ключом в руках
+  if IsDoorLocked(target) and HasKeyTool(exitLockId) then
+    KnobFarm.SetStatus("Taking the key in hand (Room " .. tostring(roomNum) .. ")...")
+    if not EnsureKeyInHand(exitLockId) and not HasLockpick() then
+      KnobFarm.SetStatus("Key is not in hand yet (Room " .. tostring(roomNum) .. ")...")
+      task.wait(0.2)
+      return
     end
   end
 
