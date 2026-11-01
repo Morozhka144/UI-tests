@@ -13443,6 +13443,8 @@ local function ResetFarmState()
   -- Эти флаги раньше НЕ сбрасывались: после смерти посреди Seek/босса они оставались включёнными.
   KnobFarm.Teleporting = false
   KnobFarm.SeekMode = false
+  KnobFarm.DisabledNoclipForSeek = false
+  KnobFarm.NoclipBeforeSeek = false
   KnobFarm.LibraryPadlockSeen = false
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
@@ -14761,22 +14763,6 @@ end
 
 -- Единственное место, где живёт машина состояний погони Seek.
 -- Возвращает true, пока погоня идёт и нужно пропускать двери.
--- Живой Seek в мире (SeekMovingNewClone на дне карты — это заготовка, а не погоня)
-local function SeekEntityNearby()
-  local root = GetRoot()
-  if not root then return false end
-  for _, name in ipairs({ "SeekMoving", "SeekMovingNewClone" }) do
-    local seek = workspace:FindFirstChild(name)
-    if seek then
-      local ok, pivot = pcall(function() return seek:GetPivot().Position end)
-      if ok and math.abs(pivot.Y - root.Position.Y) < 60 and (pivot - root.Position).Magnitude < 400 then
-        return true
-      end
-    end
-  end
-  return false
-end
-
 local function UpdateSeekState(room, roomNum)
   local curNum = tonumber(roomNum) or GetLatestRoomNum() or 0
   local curRooms = workspace:FindFirstChild("CurrentRooms")
@@ -14798,10 +14784,7 @@ local function UpdateSeekState(room, roomNum)
   -- Начало погони: флаг игры или триггеры Seek в комнате
   local gameData = GetGameData()
   local chaseVal = gameData and gameData:FindFirstChild("ChaseInSession")
-  -- Погоня началась, когда игра подняла флаг ChaseInSession или Seek реально появился рядом.
-  -- Раньше достаточно было триггера в комнате (TriggerEventCollision) — бот входил в режим погони заранее,
-  -- вечно телепортировался к двери и не двигался. Сам триггер бот должен просто пройти пешком.
-  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or SeekEntityNearby()
+  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or RoomHasSeekTrigger(targetRoom)
   if inChase and curNum > 0 then
     KnobFarm.InSeekChase = true
     KnobFarm.SeekDoorsSkipped = 0
@@ -15942,47 +15925,18 @@ local function handleRoom(room, door)
 
   -- Вспомогательная функция: есть ли лист у игрока (в руках или в рюкзаке)
   local function hasSheet()
-    return FindTool("LibraryHintPaper", "LibraryHintPaperHard")
+    local c = localPlayer and localPlayer.Character
+    local bp = localPlayer and localPlayer:FindFirstChildOfClass("Backpack")
+    return (c and (c:FindFirstChild("LibraryHintPaper") or c:FindFirstChild("LibraryHintPaperHard")))
+      or (bp and (bp:FindFirstChild("LibraryHintPaper") or bp:FindFirstChild("LibraryHintPaperHard")))
   end
 
   local sheetWasPresent = hasSheet()
 
   -- Находим замок библиотеки (если он есть)
-  local function findPadlock()
-    return (targetRoom and targetRoom:FindFirstChild("Padlock", true))
-      or (curRooms and curRooms:FindFirstChild("Padlock", true))
-      or (door and door:FindFirstChild("Padlock", true))
-  end
-  local padlock = findPadlock()
-  if padlock then KnobFarm.LibraryPadlockSeen = true end
-
-  -- Комната 50 может ещё подгружаться: пока в ней нет ни замка, ни книг, считать замок открытым нельзя.
-  -- Раньше бот входил сюда на момент загрузки, видел «нет замка», пропускал всю библиотеку и упирался в закрытую дверь.
-  -- Ждём именно замок: книги подгружаются раньше двери, и по их появлению замок ещё не виден
-  -- (бот видел «замка нет», считал библиотеку пройденной и шёл сразу к двери, не собрав ни одной книги).
-  local function libraryBooksPresent()
-    local r50 = targetRoom or (curRooms and curRooms:FindFirstChild("50"))
-    return r50 ~= nil and r50:FindFirstChild("LiveHintBook", true) ~= nil
-  end
-  local loadWait = tick()
-  while not padlock and not KnobFarm.LibraryPadlockSeen and not libraryBooksPresent()
-    and tick() - loadWait < 30 and KnobFarm.Active and not _Unloading and PlayerAlive() do
-    KnobFarm.SetStatus("Room 50: waiting for the library to load...")
-    task.wait(0.4)
-    curRooms = workspace:FindFirstChild("CurrentRooms")
-    targetRoom = (curRooms and curRooms:FindFirstChild("50")) or targetRoom
-    padlock = findPadlock()
-    if padlock then KnobFarm.LibraryPadlockSeen = true end
-  end
-  -- Книги есть, а замок ещё не подгрузился: ждём его ещё немного, но библиотеку пропускать нельзя
-  if not padlock and libraryBooksPresent() then
-    local padWait = tick()
-    while not padlock and tick() - padWait < 6 and KnobFarm.Active and not _Unloading and PlayerAlive() do
-      task.wait(0.3)
-      padlock = findPadlock()
-    end
-    if padlock then KnobFarm.LibraryPadlockSeen = true end
-  end
+  local padlock = (targetRoom and targetRoom:FindFirstChild("Padlock", true))
+    or (curRooms and curRooms:FindFirstChild("Padlock", true))
+    or (door and door:FindFirstChild("Padlock", true))
 
   -- Находим дверь 51 (выход из библиотеки в коридор 51)
   local door2 = nil
@@ -16041,12 +15995,16 @@ local function handleRoom(room, door)
   end
 
   -- Если замок уже открыт/исчез — НЕ ищем книги и не идем за листом назад, сразу к выходу!
-  local isAlreadyOpened = (not padlock or not padlock.Parent) and (KnobFarm.LibraryPadlockSeen or not libraryBooksPresent())
+  local isAlreadyOpened = (not padlock or not padlock.Parent)
 
   if not isAlreadyOpened then
     -- 1. Настройки для комнаты 50
     KnobFarm.DisableGodmodeForBoss = true
-    SetFeature("Godmode", false)
+    pcall(function()
+      if toggles and toggles.Godmode and toggles.Godmode.Value then
+        toggles.Godmode:SetValue(false)
+      end
+    end)
     SetCrouched(true)
     KnobFarm.Teleporting = false
     KnobFarm.AvoidFigure = true
@@ -16074,58 +16032,57 @@ local function handleRoom(room, door)
       end
     end
 
-    local function collectBooks()
-      while KnobFarm.Active and not _Unloading and PlayerAlive() do
-        -- Если замок открылся или лист пропал во время сбора книг — немедленно выходим к двери
-        if (sheetWasPresent and not hasSheet()) or (padlock and not padlock.Parent) then
-          break
+    while KnobFarm.Active and not _Unloading and PlayerAlive() do
+      -- Если замок открылся или лист пропал во время сбора книг — немедленно выходим к двери
+      if (sheetWasPresent and not hasSheet()) or (padlock and not padlock.Parent) then
+        break
+      end
+
+      local unlooted = {}
+      for _, b in ipairs(books) do
+        if not KnobFarm.LootedObjects[b] and b.Parent then
+          table.insert(unlooted, b)
         end
+      end
+      if #unlooted == 0 then break end
 
-        local unlooted = {}
-        for _, b in ipairs(books) do
-          if not KnobFarm.LootedObjects[b] and b.Parent then
-            table.insert(unlooted, b)
-          end
-        end
-        if #unlooted == 0 then break end
+      local figPos = getFigurePos()
+      table.sort(unlooted, function(a, b)
+        local posA = (a:IsA("BasePart") and a.Position) or (a:IsA("Model") and a:GetPivot().Position) or Vector3.zero
+        local posB = (b:IsA("BasePart") and b.Position) or (b:IsA("Model") and b:GetPivot().Position) or Vector3.zero
+        local distA = figPos and (posA - figPos).Magnitude or 100
+        local distB = figPos and (posB - figPos).Magnitude or 100
+        return distA > distB
+      end)
 
-        local figPos = getFigurePos()
-        table.sort(unlooted, function(a, b)
-          local posA = (a:IsA("BasePart") and a.Position) or (a:IsA("Model") and a:GetPivot().Position) or Vector3.zero
-          local posB = (b:IsA("BasePart") and b.Position) or (b:IsA("Model") and b:GetPivot().Position) or Vector3.zero
-          local distA = figPos and (posA - figPos).Magnitude or 100
-          local distB = figPos and (posB - figPos).Magnitude or 100
-          return distA > distB
-        end)
+      local targetBook = unlooted[1]
+      local bPos = (targetBook:IsA("BasePart") and targetBook.Position)
+        or (targetBook:IsA("Model") and targetBook:GetPivot().Position)
+      if not bPos then
+        KnobFarm.LootedObjects[targetBook] = true
+      else
+        WaitFigureClear(bPos, 15)
 
-        local targetBook = unlooted[1]
-        local bPos = (targetBook:IsA("BasePart") and targetBook.Position)
-          or (targetBook:IsA("Model") and targetBook:GetPivot().Position)
-        if not bPos then
-          KnobFarm.LootedObjects[targetBook] = true
-        else
-          WaitFigureClear(bPos, 15)
-
-          KnobFarm.SetStatus("Room 50: Walking to Book (avoiding Figure)...")
-          local floorPos = GetFloorPosition(bPos) or bPos
+        KnobFarm.SetStatus("Room 50: Walking to Book (avoiding Figure)...")
+        local floorPos = GetFloorPosition(bPos) or bPos
+        if NavigateTo then
           NavigateTo(floorPos, targetBook, "LiveHintBook", 8.0, "Loot")
+        end
 
-          local curChar = localPlayer and localPlayer.Character
-          local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
-          local dist = curRoot and (curRoot.Position - bPos).Magnitude or 999
+        local curChar = localPlayer and localPlayer.Character
+        local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+        local dist = curRoot and (curRoot.Position - bPos).Magnitude or 999
 
-          if dist <= 14.0 then
-            CollectBossItem(targetBook)
-            KnobFarm.LootedObjects[targetBook] = true
-            KnobFarm.SetStatus("Room 50: Book collected! Waiting 0.65s...")
-            task.wait(0.65)
-          else
-            KnobFarm.LootedObjects[targetBook] = true
-          end
+        if dist <= 14.0 then
+          CollectBossItem(targetBook)
+          KnobFarm.LootedObjects[targetBook] = true
+          KnobFarm.SetStatus("Room 50: Book collected! Waiting 0.65s...")
+          task.wait(0.65)
+        else
+          KnobFarm.LootedObjects[targetBook] = true
         end
       end
     end
-    collectBooks()
 
     -- 3. Идет за листочком по полу (только если лист еще не у игрока и замок закрыт)
     local needPaper = not hasSheet() and (padlock and padlock.Parent)
@@ -16148,7 +16105,9 @@ local function handleRoom(room, door)
         if pPos then
           local floorPos = GetFloorPosition(pPos) or pPos
           WaitFigureClear(pPos, 15)
-          NavigateTo(floorPos, paper, "Hint Paper", 8.0, "Loot")
+          if NavigateTo then
+            NavigateTo(floorPos, paper, "Hint Paper", 8.0, "Loot")
+          end
 
           local curChar = localPlayer and localPlayer.Character
           local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
@@ -16160,7 +16119,9 @@ local function handleRoom(room, door)
             task.wait(0.3)
 
             -- Берет листочек в руки (EquipTool)
-            local paperTool = hasSheet()
+            local bp = localPlayer:FindFirstChildOfClass("Backpack")
+            local paperTool = (curChar and (curChar:FindFirstChild("LibraryHintPaper") or curChar:FindFirstChild("LibraryHintPaperHard")))
+              or (bp and (bp:FindFirstChild("LibraryHintPaper") or bp:FindFirstChild("LibraryHintPaperHard")))
             if paperTool and hum and paperTool.Parent ~= curChar then
               pcall(function() hum:EquipTool(paperTool) end)
               task.wait(0.3)
@@ -16185,7 +16146,9 @@ local function handleRoom(room, door)
       local padPos = (padPart:IsA("BasePart") and padPart.Position) or padPart:GetPivot().Position
       local floorPos = GetFloorPosition(padPos) or padPos
       WaitFigureClear(padPos, 20)
-      NavigateTo(floorPos, padPart, "Door Padlock", 10.0, "Door")
+      if NavigateTo then
+        NavigateTo(floorPos, padPart, "Door Padlock", 10.0, "Door")
+      end
       task.wait(0.3)
     end
 
@@ -16196,32 +16159,27 @@ local function handleRoom(room, door)
         if not string.find(code, "_") and code ~= "_____" then
           remotesFolder.PL:FireServer(code)
         else
-          -- Перебор только если неизвестно не больше 3 цифр (≤1000 попыток) и только пока замок закрыт
-          -- и фарм работает. Раньше это был неуправляемый поток с десятками тысяч вызовов ремоута.
-          local _, blanks = string.gsub(code, "_", "")
-          if blanks <= 3 then
-            task.spawn(function()
-              local function brute(s)
-                if not (KnobFarm.Active and not _Unloading and PlayerAlive() and padlock and padlock.Parent) then return end
-                local idx = string.find(s, "_")
-                if not idx then
-                  pcall(function() remotesFolder.PL:FireServer(s) end)
-                  task.wait(0.02)
-                  return
-                end
-                for d = 0, 9 do
-                  brute(string.sub(s, 1, idx - 1) .. tostring(d) .. string.sub(s, idx + 1))
-                end
+          task.spawn(function()
+            local function brute(s)
+              local idx = string.find(s, "_")
+              if not idx then
+                pcall(function() remotesFolder.PL:FireServer(s) end)
+                task.wait(0.02)
+                return
               end
-              brute(code)
-            end)
-          end
+              for d = 0, 9 do
+                local newS = string.sub(s, 1, idx - 1) .. tostring(d) .. string.sub(s, idx + 1)
+                brute(newS)
+              end
+            end
+            brute(code)
+          end)
         end
       end
 
       -- Ждем пока замок откроется ИЛИ пока лист пропадет из инвентаря
       local t = tick()
-      while KnobFarm.Active and not _Unloading and PlayerAlive() and (tick() - t < 12) do
+      while KnobFarm.Active and not _Unloading and (tick() - t < 12) do
         if sheetWasPresent and not hasSheet() then
           KnobFarm.SetStatus("Room 50: Sheet consumed! Lock opened.")
           break
@@ -16233,31 +16191,19 @@ local function handleRoom(room, door)
         task.wait(0.15)
       end
     end
-
-    -- Замок не открылся: без кода не уходим. Добираем недособранные книги и повторяем код.
-    local solveStart = tick()
-    while padlock and padlock.Parent and KnobFarm.Active and not _Unloading and PlayerAlive() and tick() - solveStart < 90 do
-      if sheetWasPresent and not hasSheet() then break end
-      KnobFarm.SetStatus("Room 50: code not accepted yet - retrying...")
-      local code = Functions and Functions.GetLibraryCode and Functions.GetLibraryCode()
-      if code and not string.find(code, "_") then
-        if remotesFolder and remotesFolder:FindFirstChild("PL") then
-          pcall(function() remotesFolder.PL:FireServer(code) end)
-        end
-      else
-        for _, b in ipairs(books) do
-          if b.Parent then KnobFarm.LootedObjects[b] = nil end
-        end
-        collectBooks()
-      end
-      task.wait(1.0)
-    end
   end
 
   -- 6. Открытие 51 двери и проход сквозь неё строго ВПЕРЕД в комнату 51
   KnobFarm.SetStatus("Room 50: Opening Door 51...")
   if door2 then
-    pcall(OpenDoor, door2)
+    if OpenDoor then
+      pcall(function() OpenDoor(door2) end)
+    else
+      local co = door2:FindFirstChild("ClientOpen")
+      if co then pcall(function() co:FireServer() end) end
+      local pr = door2:FindFirstChildWhichIsA("ProximityPrompt", true)
+      if pr then pcall(safeFirePrompt, pr) end
+    end
     pcall(function()
       for _, dp in ipairs(door2:GetDescendants()) do
         if dp:IsA("BasePart") then dp.CanCollide = false end
@@ -16265,7 +16211,19 @@ local function handleRoom(room, door)
     end)
   end
 
-  SetFeature("Godmode", true)
+  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке
+  pcall(function()
+    if toggles and toggles.Godmode and not toggles.Godmode.Value then
+      toggles.Godmode:SetValue(true)
+    end
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    else
+      KnobFarm.NoclipBeforeJeff = true
+    end
+  end)
 
   -- Проходим сквозь дверной проем 51 строго вперед (к коридору 51, никогда не назад!)
   local curChar = localPlayer and localPlayer.Character
@@ -16293,11 +16251,17 @@ local function handleRoom(room, door)
 
     KnobFarm.SetStatus("Room 50: Passing Door 51 into Room 51...")
     local passStart = tick()
-    while tick() - passStart < 2.5 and KnobFarm.Active and not _Unloading and PlayerAlive() do
+    while tick() - passStart < 2.5 and KnobFarm.Active and not _Unloading do
       local passedDot = d51Center and ((curRoot.Position - d51Center):Dot(passDir)) or 5
       if passedDot >= 4.0 then break end
       ApplyFarmSpeed(curHum)
       curHum:Move(passDir, false)
+      pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+          cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + passDir)
+        end
+      end)
       task.wait(0.04)
     end
     if curHum then curHum:Move(Vector3.zero, false) end
@@ -16306,7 +16270,7 @@ local function handleRoom(room, door)
   -- 7. Идем к двери 52 через NavigateTo (обычный фарм пешком)
   local door3 = nil
   local findStart = tick()
-  while tick() - findStart < 3.0 and not door3 and KnobFarm.Active and not _Unloading and PlayerAlive() do
+  while tick() - findStart < 3.0 and not door3 and KnobFarm.Active and not _Unloading do
     door3 = findDoor()
     if door3 then break end
     task.wait(0.15)
@@ -16315,14 +16279,21 @@ local function handleRoom(room, door)
   if door3 then
     local d52Part = door3:FindFirstChild("Door") or door3.PrimaryPart
       or door3:FindFirstChildWhichIsA("BasePart", true)
-    if d52Part then
+    if d52Part and NavigateTo then
       KnobFarm.SetStatus("Walking to Door 52...")
       local d52Pos = d52Part.Position
       local floorPos = GetFloorPosition(d52Pos) or d52Pos
       NavigateTo(floorPos, d52Part, "Door 52", 10.0, "Door")
 
       -- Открываем дверь 52
-      pcall(OpenDoor, door3)
+      if OpenDoor then
+        pcall(function() OpenDoor(door3) end)
+      else
+        local proximityPrompt = door3:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if proximityPrompt then pcall(safeFirePrompt, proximityPrompt) end
+        local clientOpen = door3:FindFirstChild("ClientOpen")
+        if clientOpen then pcall(function() clientOpen:FireServer() end) end
+      end
       pcall(function()
         for _, dp in ipairs(door3:GetDescendants()) do
           if dp:IsA("BasePart") then dp.CanCollide = false end
@@ -16352,6 +16323,20 @@ local function handleRoom(room, door)
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.Teleporting = false
+
+  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
+  -- чтобы бот не застревал в одной точке
+  pcall(function()
+    if toggles and toggles.Godmode and not toggles.Godmode.Value then
+      toggles.Godmode:SetValue(true)
+    end
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      KnobFarm.NoclipBeforeJeff = true
+      toggles.PhantomNoclip:SetValue(false)
+    else
+      KnobFarm.NoclipBeforeJeff = true
+    end
+  end)
   KnobFarm.SetStatus("Room 50 completed! Resuming Knob Farm...")
   task.wait(0.5)
 end
@@ -16715,15 +16700,36 @@ end
 -- Общее восстановление после завершения Seek (раньше этот блок был скопирован дважды)
 local function EndSeek(curRoomNum)
   MarkSeekDone(curRoomNum)
-  KnobFarm.SeekMode = false
+  KnobFarm.DisabledNoclipForSeek = false
   KnobFarm.Teleporting = false
-  SetFeature("PhantomNoclip", true)
-  SetFeature("AutoDoorSkip", false)
+  pcall(function()
+    if toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
+      toggles.AutoDoorSkip:SetValue(false)
+    end
+    if toggles and toggles.PhantomNoclip then
+      toggles.PhantomNoclip:SetValue(false)
+      task.wait(0.05)
+      toggles.PhantomNoclip:SetValue(true)
+    end
+    -- Обычный Noclip возвращаем ТОЛЬКО если он был включён до погони (раньше включался всегда)
+    if KnobFarm.NoclipBeforeSeek and toggles and toggles.Noclip and not toggles.Noclip.Value then
+      toggles.Noclip:SetValue(true)
+    end
+    KnobFarm.NoclipBeforeSeek = false
+    local curChar = localPlayer and localPlayer.Character
+    if curChar then
+      for _, p in ipairs(curChar:GetDescendants()) do
+        if p:IsA("BasePart") then
+          p.CanCollide = false
+        end
+      end
+    end
+  end)
   KnobFarm.SetStatus("Seek passed! Knob Farm resumed.")
   task.wait(0.2)
 end
 
--- 3. Погоня Seek: просто телепортируемся на дверь за дверью
+-- 3. Погоня Seek: отключаем ноуклип и просто телепортируемся на дверь за дверью
 local function StepSeek(char, hum, root, room, roomNum)
   local curRoomNum = GetLatestRoomNum() or roomNum
   local curRooms = workspace:FindFirstChild("CurrentRooms")
@@ -16732,17 +16738,35 @@ local function StepSeek(char, hum, root, room, roomNum)
   local inSeek = UpdateSeekState(room, roomNum) or UpdateSeekState(seekRoom, curRoomNum)
 
   if not inSeek then
-    if KnobFarm.SeekMode then
+    if KnobFarm.DisabledNoclipForSeek then
       EndSeek(curRoomNum)
       return true
     end
     return false
   end
 
-  KnobFarm.SeekMode = true
-  SetFeature("PhantomNoclip", false)
+  -- Запоминаем, был ли включён обычный Noclip, ДО погони (один раз), чтобы вернуть ровно его
+  if not KnobFarm.DisabledNoclipForSeek then
+    KnobFarm.NoclipBeforeSeek = (toggles and toggles.Noclip and toggles.Noclip.Value) or false
+  end
+
+  -- Ноуклип выкл, коллизии вкл
+  pcall(function()
+    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
+      toggles.PhantomNoclip:SetValue(false)
+    end
+    if toggles and toggles.Noclip and toggles.Noclip.Value then
+      toggles.Noclip:SetValue(false)
+    end
+    for _, p in ipairs(char:GetDescendants()) do
+      if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+        p.CanCollide = true
+      end
+    end
+  end)
+  KnobFarm.DisabledNoclipForSeek = true
   KnobFarm.InSeekChase = true
-  KnobFarm.Teleporting = true   -- фарм сам перемещает персонажа
+  KnobFarm.Teleporting = true   -- иначе античит-«страж» PhantomNoclip откатит наш телепорт
   root.AssemblyLinearVelocity = Vector3.zero
   hum:Move(Vector3.zero, false)
 
@@ -16755,29 +16779,6 @@ local function StepSeek(char, hum, root, room, roomNum)
     door = targetRoom:FindFirstChildWhichIsA("Model", true)
     if door and not (door.Name == "Door" or door:FindFirstChild("Door") or door:FindFirstChildWhichIsA("ProximityPrompt", true)) then
       door = nil
-    end
-  end
-
-  -- Дверь уже открыта, а следующая комната ещё не создана сервером: телепорт на неё каждые 0.1 с только дёргал
-  -- бота на месте (иногда ставя его на сторону Seek). Встаём сразу за дверью и ждём новую комнату.
-  if door and door:GetAttribute("Opened") == true then
-    local prevRoom = curRooms and curRooms:FindFirstChild(tostring((GetLatestRoomNum() or curRoomNum) - 1))
-    local prevDoor = prevRoom and prevRoom:FindFirstChild("Door")
-    local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
-    local prevPart = prevDoor and (prevDoor:FindFirstChild("Door") or prevDoor.PrimaryPart)
-    if doorPart and prevPart then
-      local flat = Vector3.new(doorPart.Position.X - prevPart.Position.X, 0, doorPart.Position.Z - prevPart.Position.Z)
-      if flat.Magnitude > 1 then
-        local forward = flat.Unit
-        local past = (root.Position - doorPart.Position):Dot(forward)
-        if past < 2 then
-          root.CFrame = CFrame.new(doorPart.Position.X + forward.X * 4, root.Position.Y, doorPart.Position.Z + forward.Z * 4)
-          root.AssemblyLinearVelocity = Vector3.zero
-        end
-        KnobFarm.SetStatus("Seek Chase: waiting for the next room (" .. tostring(KnobFarm.SeekDoorsSkipped or 0) .. "/" .. tostring(maxDoors) .. ")")
-        task.wait(0.1)
-        return true
-      end
     end
   end
 
