@@ -15013,6 +15013,29 @@ local function FetchRoomKey(room, waitForSpawn)
     end
     task.wait(0.05)
   end
+
+  -- Пешком до ключа не дойти (стена/откат позиции): один раз телепортируемся к нему, берём и возвращаемся к двери.
+  -- Без этого бот бесконечно бегал «за ключом» и не мог выйти из комнаты 0.
+  if not HasKeyTool() and KnobFarm.Active and not _Unloading then
+    local curRoot = GetRoot()
+    if curRoot then
+      KnobFarm.SetStatus("Key unreachable on foot - teleporting to it")
+      local backCFrame = curRoot.CFrame
+      KnobFarm.Teleporting = true
+      curRoot.CFrame = CFrame.new((GetFloorPosition(keyPos) or keyPos) + Vector3.new(0, 3, 0))
+      curRoot.AssemblyLinearVelocity = Vector3.zero
+      task.wait(0.25)
+      local grabStart = tick()
+      while not HasKeyTool() and tick() - grabStart < 2.0 and KnobFarm.Active and not _Unloading do
+        if prompt and prompt.Enabled then FirePrompt(prompt, false, true) end
+        task.wait(0.1)
+      end
+      curRoot.CFrame = backCFrame
+      curRoot.AssemblyLinearVelocity = Vector3.zero
+      task.wait(0.15)
+      KnobFarm.Teleporting = false
+    end
+  end
   return HasKeyTool()
 end
 
