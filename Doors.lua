@@ -15497,19 +15497,28 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
 
     local rootPos = root.Position
 
-    -- Фигура рядом: замираем, а если слишком близко — отходим. Путь не продолжаем.
+    -- Фигура рядом: слишком близко — отходим; в зоне осторожности замираем, но только если путь
+    -- ведёт К ней. Если маршрут уходит в сторону или от Фигуры, идём дальше (приседание уже включено).
+    -- Раньше бот стоял без статуса, пока Фигура бродила в 22–32 студах, даже когда идти нужно было прочь от неё.
     if KnobFarm.AvoidFigure then
       local fp = GetFigurePosition()
       if fp then
         local fd = FlatDist(rootPos, fp)
         if fd < FIGURE_HOLD_DIST then
-          figureHoldAt = tick()
           if fd < FIGURE_RETREAT_DIST and fd > 0.1 then
+            figureHoldAt = tick()
             h:Move(Vector3.new((rootPos.X - fp.X) / fd, 0, (rootPos.Z - fp.Z) / fd), false)
-          else
-            h:Move(Vector3.zero, false)
+            return
           end
-          return
+          local heading = WaypointPosition(waypoints[wpIndex]) or targetPos
+          local hx, hz = heading.X - rootPos.X, heading.Z - rootPos.Z
+          local towardFigure = (hx * (fp.X - rootPos.X) + hz * (fp.Z - rootPos.Z)) > 0
+          if towardFigure then
+            figureHoldAt = tick()
+            KnobFarm.SetStatus("Figure " .. tostring(math.floor(fd / 5) * 5) .. "m away - holding still until it leaves")
+            h:Move(Vector3.zero, false)
+            return
+          end
         end
       end
     end
