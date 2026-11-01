@@ -6424,9 +6424,7 @@ do
     end)
 
     local postSim = runService.PostSimulation or runService.Heartbeat
-    local rollbackStreak = 0
-    local lastNotice = 0
-    antiTpConn = postSim:Connect(function(deltaTime)
+    antiTpConn = postSim:Connect(function()
       if not phantomEnabled then return end
       local c = localPlayer.Character
       local currRoot = c and c:FindFirstChild("HumanoidRootPart")
@@ -6439,36 +6437,16 @@ do
         return
       end
 
-      -- Допустимое смещение за кадр = базовый допуск + то, что персонаж мог пройти со своей скоростью.
-      -- Раньше допуск был фиксированным: в тяжёлых комнатах (магазин Джеффа) FPS падал, обычный шаг
-      -- за кадр становился больше допуска, и откат возвращал персонажа на место каждый кадр — бот
-      -- стоял намертво.
-      local frameTime = math.min(deltaTime or 1 / 60, 0.5)
-      local allowed = phantomTolerance + currRoot.AssemblyLinearVelocity.Magnitude * frameTime * 1.5
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
-      if distMoved > allowed then
+      if distMoved > phantomTolerance then
         if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
           or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
-          rollbackStreak = 0
           lastSafeCFrame = currRoot.CFrame
         else
-          rollbackStreak = rollbackStreak + 1
-          if rollbackStreak >= 8 then
-            -- Откат 8 кадров подряд ничего не меняет: что-то перемещает персонажа каждый кадр.
-            -- Защита не должна держать его вечно — принимаем текущую позицию.
-            rollbackStreak = 0
-            lastSafeCFrame = currRoot.CFrame
-            if tick() - lastNotice > 5 then
-              lastNotice = tick()
-              library:Notify({ Title = "Phantom Noclip", Description = "Rollback loop detected: accepting the new position", Time = 3 })
-            end
-          else
-            currRoot.CFrame = lastSafeCFrame
-            currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-          end
+          currRoot.CFrame = lastSafeCFrame
+          currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         end
       else
-        rollbackStreak = 0
         lastSafeCFrame = currRoot.CFrame
       end
     end)
