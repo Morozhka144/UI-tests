@@ -13738,7 +13738,7 @@ end
 local function ApplyFarmSpeed(hum)
   local speed = GetFarmSpeed()
   SetFeature("EnableWalkspeed", true)
-  SetFeature("PhantomNoclip", true)    -- фарм ходит с Phantom Noclip
+  SetFeature("PhantomNoclip", not (KnobFarm.InSeekChase or KnobFarm.SeekMode))   -- фарм ходит с Phantom Noclip
   SetFeature("Noclip", false)
   if options and options.Walkspeed and options.Walkspeed.Value ~= speed then
     options.Walkspeed:SetValue(speed)
@@ -16701,6 +16701,7 @@ local function EndSeek(curRoomNum)
   MarkSeekDone(curRoomNum)
   KnobFarm.SeekMode = false
   KnobFarm.Teleporting = false
+  SetFeature("PhantomNoclip", true)
   SetFeature("AutoDoorSkip", false)
   KnobFarm.SetStatus("Seek passed! Knob Farm resumed.")
   task.wait(0.2)
@@ -16723,6 +16724,7 @@ local function StepSeek(char, hum, root, room, roomNum)
   end
 
   KnobFarm.SeekMode = true
+  SetFeature("PhantomNoclip", false)
   KnobFarm.InSeekChase = true
   KnobFarm.Teleporting = true   -- фарм сам перемещает персонажа
   root.AssemblyLinearVelocity = Vector3.zero
@@ -16929,7 +16931,8 @@ local function Tick()
 
   -- Phantom Noclip в фарме включён на весь забег (бот проходит сквозь мебель и препятствия), обычный Noclip выключен.
   -- Конфиг может поменять их позже запуска фарма, поэтому следим каждый тик.
-  SetFeature("PhantomNoclip", true)
+  -- (на время погони Seek Phantom выключается: с ним двери в коридоре погони не открываются и бот не успевает)
+  SetFeature("PhantomNoclip", not (KnobFarm.InSeekChase or KnobFarm.SeekMode))
   SetFeature("Noclip", false)
   if KnobFarm.PassedFirstDoor and not KnobFarm.DisableGodmodeForBoss then
     SetFeature("Godmode", true)
