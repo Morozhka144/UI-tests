@@ -14044,29 +14044,29 @@ local function HasLockpick()
   return false, nil
 end
 
-local function HasKeyTool()
+-- Ключ подходит к двери, если у него тот же LockID (RoomID двери). Раньше бот держал ключ от старой двери,
+-- считал, что ключ есть, и вечно стоял у новой запертой двери, не идя за её ключом.
+local function KeyFitsLock(tool, lockId)
+  if not lockId then return true end
+  local id = tool:GetAttribute("LockID")
+  return id == nil or id == lockId
+end
+
+local function HasKeyTool(lockId)
   if Functions and Functions.HasItem then
     local k = Functions.HasItem("Key") or Functions.HasItem("KeyObtain") or Functions.HasItem("KeyElectrical") or Functions.HasItem("KeyIron")
-    if k then return true, k end
+    if k and (typeof(k) ~= "Instance" or KeyFitsLock(k, lockId)) then return true, k end
   end
   local char = localPlayer and localPlayer.Character
   local bp = localPlayer and localPlayer:FindFirstChildOfClass("Backpack")
-  if char then
-    for _, it in ipairs(char:GetChildren()) do
-      if it:IsA("Tool") then
-        local n = it.Name:lower()
-        if (n == "key" or n:find("key", 1, true)) and not n:find("skeleton", 1, true) then
-          return true, it
-        end
-      end
-    end
-  end
-  if bp then
-    for _, it in ipairs(bp:GetChildren()) do
-      if it:IsA("Tool") then
-        local n = it.Name:lower()
-        if (n == "key" or n:find("key", 1, true)) and not n:find("skeleton", 1, true) then
-          return true, it
+  for _, container in ipairs({ char, bp }) do
+    if container then
+      for _, it in ipairs(container:GetChildren()) do
+        if it:IsA("Tool") then
+          local n = it.Name:lower()
+          if (n == "key" or n:find("key", 1, true)) and not n:find("skeleton", 1, true) and KeyFitsLock(it, lockId) then
+            return true, it
+          end
         end
       end
     end
@@ -14074,7 +14074,7 @@ local function HasKeyTool()
   return false, nil
 end
 
-local function EquipUnlockTool(preferLockpick)
+local function EquipUnlockTool(preferLockpick, lockId)
   local char = localPlayer and localPlayer.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not hum or not char then return end
@@ -14093,7 +14093,7 @@ local function EquipUnlockTool(preferLockpick)
   end
 
   -- При открытии дверей: если есть ключ, ВСЕГДА берем именно ключ (прячем отмычки, если они в руке)
-  local hasKey, keyTool = HasKeyTool()
+  local hasKey, keyTool = HasKeyTool(lockId)
   if hasKey and keyTool then
     if keyTool.Parent ~= char then
       pcall(function()
@@ -15041,6 +15041,14 @@ local function FetchRoomKey(room, waitForSpawn)
     end
   end
   if not (keyObj and keyPos) then return false end
+  local lockId = nil
+  do
+    local node = keyObj
+    while node and node ~= room and not lockId do
+      lockId = node:GetAttribute("LockID")
+      node = node.Parent
+    end
+  end
 
   -- Промпт ключа срабатывает с большого расстояния (FirePrompt расширяет радиус): если ключ рядом, берём его
   -- сразу, не идя через комнату. Иначе бот «бегал» на месте у препятствия и ключ так и не брал.
@@ -15048,16 +15056,16 @@ local function FetchRoomKey(room, waitForSpawn)
   local fromRoot = GetRoot()
   if prompt and fromRoot and (fromRoot.Position - keyPos).Magnitude <= 26 then
     local quick = tick()
-    while not HasKeyTool() and tick() - quick < 1.0 and KnobFarm.Active and not _Unloading do
+    while not HasKeyTool(lockId) and tick() - quick < 1.0 and KnobFarm.Active and not _Unloading do
       if prompt.Enabled then FirePrompt(prompt, false, true) end
       task.wait(0.1)
     end
-    if HasKeyTool() then return true end
+    if HasKeyTool(lockId) then return true end
   end
 
   NavigateTo(keyPos, keyObj, "Key", 6.0, "Key")
   local pickStart = tick()
-  while not HasKeyTool() and tick() - pickStart < 2.0 and KnobFarm.Active and not _Unloading do
+  while not HasKeyTool(lockId) and tick() - pickStart < 2.0 and KnobFarm.Active and not _Unloading do
     if prompt and prompt.Enabled then
       FirePrompt(prompt, false, true)
     end
@@ -15066,7 +15074,7 @@ local function FetchRoomKey(room, waitForSpawn)
 
   -- Пешком до ключа не дойти (стена/откат позиции): один раз телепортируемся к нему, берём и возвращаемся к двери.
   -- Без этого бот бесконечно бегал «за ключом» и не мог выйти из комнаты 0.
-  if not HasKeyTool() and KnobFarm.Active and not _Unloading then
+  if not HasKeyTool(lockId) and KnobFarm.Active and not _Unloading then
     local curRoot = GetRoot()
     if curRoot then
       KnobFarm.SetStatus("Key unreachable on foot - teleporting to it")
@@ -15076,7 +15084,7 @@ local function FetchRoomKey(room, waitForSpawn)
       curRoot.AssemblyLinearVelocity = Vector3.zero
       task.wait(0.25)
       local grabStart = tick()
-      while not HasKeyTool() and tick() - grabStart < 2.0 and KnobFarm.Active and not _Unloading do
+      while not HasKeyTool(lockId) and tick() - grabStart < 2.0 and KnobFarm.Active and not _Unloading do
         if prompt and prompt.Enabled then FirePrompt(prompt, false, true) end
         task.wait(0.1)
       end
@@ -15086,7 +15094,7 @@ local function FetchRoomKey(room, waitForSpawn)
       KnobFarm.Teleporting = false
     end
   end
-  return HasKeyTool()
+  return HasKeyTool(lockId)
 end
 
 PassDoorStraight = function(door, root, hum)
@@ -15102,16 +15110,17 @@ PassDoorStraight = function(door, root, hum)
 
   -- 1. Быстрое отпирание ключом/отмычкой, если дверь заперта
   if IsDoorLocked(door) then
-    if not HasLockpick() and not HasKeyTool() then
+    local lockId = door:GetAttribute("RoomID")
+    if not HasLockpick() and not HasKeyTool(lockId) then
       KnobFarm.SetStatus("No lockpicks! Picking up key...")
       FetchRoomKey(door.Parent, false)
     end
 
-    KnobFarm.SetStatus(HasKeyTool() and "Unlocking door with key..." or "Unlocking door with lockpick...")
-    EquipUnlockTool()
+    KnobFarm.SetStatus(HasKeyTool(lockId) and "Unlocking door with key..." or "Unlocking door with lockpick...")
+    EquipUnlockTool(false, lockId)
     local unStart = tick()
     while IsDoorLocked(door) and tick() - unStart < 3.0 and KnobFarm.Active and not _Unloading do
-      EquipUnlockTool()
+      EquipUnlockTool(false, lockId)
       local _, curPrompt = IsDoorLocked(door)
       if curPrompt and curPrompt.Enabled then
         FirePrompt(curPrompt, true)
@@ -15795,7 +15804,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       and (targetPos - root.Position).Magnitude < 14.0 then
       lastDoorTry = now
       if IsDoorLocked(target) then
-        EquipUnlockTool()
+        EquipUnlockTool(false, target:GetAttribute("RoomID"))
       else
         doorAttempts = doorAttempts + 1
         OpenDoor(target)
@@ -16987,10 +16996,11 @@ local function StepGoToExit(char, root, room, roomNum)
     return
   end
 
-  if IsDoorLocked(target) and not HasLockpick() and not HasKeyTool() then
+  local exitLockId = target:GetAttribute("RoomID")
+  if IsDoorLocked(target) and not HasLockpick() and not HasKeyTool(exitLockId) then
     KnobFarm.SetStatus("No lockpicks! Walking to key (Room " .. tostring(roomNum) .. ")...")
     if FetchRoomKey(room, true) then
-      EquipUnlockTool()
+      EquipUnlockTool(false, exitLockId)
     else
       KnobFarm.SetStatus("Door locked & no key found in Room " .. tostring(roomNum))
     end
