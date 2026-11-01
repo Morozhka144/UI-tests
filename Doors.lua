@@ -1216,12 +1216,67 @@ local function createESPEngine()
         return e
     end
 
+    -- Предметы, монеты и ключи в Doors содержат невидимые хитбоксы (для промпта): рамка и подсветка по ним
+    -- получались огромными и не по размеру предмета. Считаем габариты только по видимым деталям.
+    local function isHiddenPart(p)
+        return p.Transparency >= 0.9 or string.find(string.lower(p.Name), "hitbox", 1, true) ~= nil
+    end
+
+    local function fitVisibleParts(e, model)
+        local descendants = model:GetDescendants()
+        if #descendants > 150 then return false end
+        local visible, hiddenCount = {}, 0
+        for _, d in ipairs(descendants) do
+            if d:IsA("BasePart") then
+                if isHiddenPart(d) then hiddenCount = hiddenCount + 1 else visible[#visible + 1] = d end
+            end
+        end
+        if hiddenCount == 0 or #visible == 0 then return false end
+
+        local pivot = model:GetPivot()
+        local lo, hi = Vector3.new(math.huge, math.huge, math.huge), Vector3.new(-math.huge, -math.huge, -math.huge)
+        local biggest, biggestVolume = visible[1], -1
+        for _, p in ipairs(visible) do
+            local h = p.Size / 2
+            for sx = -1, 1, 2 do
+                for sy = -1, 1, 2 do
+                    for sz = -1, 1, 2 do
+                        local q = pivot:PointToObjectSpace(p.CFrame:PointToWorldSpace(Vector3.new(h.X * sx, h.Y * sy, h.Z * sz)))
+                        lo = Vector3.new(math.min(lo.X, q.X), math.min(lo.Y, q.Y), math.min(lo.Z, q.Z))
+                        hi = Vector3.new(math.max(hi.X, q.X), math.max(hi.Y, q.Y), math.max(hi.Z, q.Z))
+                    end
+                end
+            end
+            local volume = p.Size.X * p.Size.Y * p.Size.Z
+            if volume > biggestVolume then biggest, biggestVolume = p, volume end
+        end
+        local size = hi - lo
+        e.size = Vector3.new(math.max(size.X, 0.5), math.max(size.Y, 0.5), math.max(size.Z, 0.5))
+        e.off = CFrame.new((lo + hi) / 2)
+
+        -- Подсветка: общий предок видимых деталей, если под ним нет хитбоксов; иначе самая крупная видимая деталь
+        local ancestor = visible[1]
+        for i = 2, #visible do
+            while ancestor and not visible[i]:IsDescendantOf(ancestor) do ancestor = ancestor.Parent end
+        end
+        local clean = ancestor and ancestor ~= model
+        if clean then
+            for _, d in ipairs(ancestor:GetDescendants()) do
+                if d:IsA("BasePart") and isHiddenPart(d) then clean = false break end
+            end
+        end
+        e.adornee = clean and ancestor or biggest
+        return true
+    end
+
     local function refreshBox(e)
         local o = e.obj
         if e.isPart then
             e.size = o.Size
             return true
         elseif e.isModel then
+            if not e.isPlayer and fitVisibleParts(e, o) then return true end
+            e.adornee = nil
             local success, result, result3 = pcall(o.GetBoundingBox, o)
             if success and result3 then
                 e.size = Vector3.new(math.max(result3.X, 0.5), math.max(result3.Y, 0.5), math.max(result3.Z, 0.5))
@@ -1252,6 +1307,8 @@ local function createESPEngine()
             e.hl = hl
         end
         local hl = e.hl
+        local adornee = e.adornee or e.obj
+        if hl.Adornee ~= adornee then hl.Adornee = adornee end
         hl.Enabled = true
         hl.DepthMode = style == "Visible Only" and Enum.HighlightDepthMode.Occluded or Enum.HighlightDepthMode.AlwaysOnTop
         local fill, out = col, (S.matchColors and col or S.outlineColor)
