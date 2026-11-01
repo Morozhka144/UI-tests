@@ -568,6 +568,7 @@ local SECTION_ICONS = {
     ["Visuals"] = "eye", ["Archives"] = "archive", ["Anticheat Bypass"] = "shield", ["Archives Addons"] = "puzzle",
     ["Chams & Boxes"] = "box-select", ["Labels"] = "tag", ["Tracers & Arrows"] = "locate", ["Colors"] = "palette",
     ["Targets"] = "crosshair", ["ESP Preset"] = "wand-sparkles",
+    ["Post FX Presets"] = "clapperboard", ["Color Grading"] = "palette", ["Bloom / Rays / Blur"] = "sun", ["Depth of Field / Fog"] = "aperture", ["Weather"] = "cloud-snow", ["Vignette"] = "circle",
     ["Screen Filter"] = "sparkles", ["Aura"] = "wand-sparkles", ["Entity Fun"] = "party-popper", ["HUD"] = "layout-dashboard", ["Model Library"] = "box", ["Model Search"] = "search", ["Swap Options"] = "sliders-horizontal",
 }
 
@@ -2149,6 +2150,7 @@ tabs = {
     { "Models", "box", { "Model Library", "Model Search", "Swap Options", "Swap: Players", "Swap: Figure", "Swap: Seek",
       "Swap: Rush and clones", "Swap: Ambush and clones", "Swap: A-60 / A-120", "Swap: Eyes / Lookman", "Swap: Companion", "Swap: Custom entity" } },
     { "Fun", "party-popper", { "Screen Filter", "Aura", "Entity Fun" } },
+    { "Post FX", "clapperboard", { "Post FX Presets", "Color Grading", "Bloom / Rays / Blur", "Depth of Field / Fog", "Weather", "Vignette" } },
     { "HUD", "layout-dashboard", { "HUD" } },
   }),
   Exploits = moroWindow:AddTab("Exploits", "sparkle", {
@@ -18303,6 +18305,356 @@ do
 end
 
 -- =====================================================================
+--  POST FX (ported from the MM2 script): presets, color grading, bloom / rays / blur,
+--  depth of field and fog, weather and a vignette. Client-side only.
+-- =====================================================================
+do
+  local PF = { on = false, fx = {}, backup = nil, ui = {} }
+  local PF_DEFAULT = {
+    b = 0, c = 0, s = 0, tint = Color3.new(1, 1, 1),
+    bi = 0, bs = 24, bt = 2, ri = 0, rs = 0.5,
+    dof = false, df = 50, dr = 30, dfar = 0, dnear = 0, blur = 0,
+    ad = 0.3, ao = 0, ac = Color3.fromRGB(199, 199, 199), adc = Color3.fromRGB(106, 112, 125), ag = 0, ah = 0,
+    clock = nil, amb = nil, expo = 0,
+  }
+  PF.v = {}
+  for key, value in pairs(PF_DEFAULT) do PF.v[key] = value end
+
+  local PF_PRESETS = {
+    ["Cinematic"] = { b = 0.02, c = 0.22, s = 0.08, tint = Color3.fromRGB(255, 243, 228), bi = 0.7, bs = 32, bt = 0.95, ri = 0.12, rs = 0.7, dof = true, df = 38, dr = 14, dfar = 0.12,
+      ad = 0.3, ac = Color3.fromRGB(200, 205, 215), adc = Color3.fromRGB(120, 100, 90), ah = 1, clock = 17.2 },
+    ["Neon Night"] = { c = 0.35, s = 0.55, tint = Color3.fromRGB(200, 170, 255), bi = 1.6, bs = 42, bt = 0.75, ad = 0.35, ac = Color3.fromRGB(60, 40, 110), adc = Color3.fromRGB(180, 60, 255), ah = 2,
+      clock = 0, amb = Color3.fromRGB(70, 50, 120), expo = 0.1 },
+    ["Halloween"] = { c = 0.25, s = 0.35, tint = Color3.fromRGB(255, 170, 90), bi = 0.9, bs = 36, bt = 0.85, ad = 0.5, ac = Color3.fromRGB(255, 120, 40), adc = Color3.fromRGB(120, 30, 150), ah = 2.4,
+      clock = 0, amb = Color3.fromRGB(90, 40, 20), expo = 0.15 },
+    ["Blood Moon"] = { c = 0.3, s = 0.2, tint = Color3.fromRGB(255, 120, 120), bi = 1.0, bs = 40, bt = 0.8, ad = 0.45, ac = Color3.fromRGB(170, 20, 20), adc = Color3.fromRGB(60, 0, 0), ah = 2,
+      clock = 0, amb = Color3.fromRGB(80, 15, 15) },
+    ["Vaporwave"] = { c = 0.25, s = 0.6, tint = Color3.fromRGB(255, 190, 245), bi = 1.2, bs = 38, bt = 0.8, ad = 0.3, ac = Color3.fromRGB(255, 130, 220), adc = Color3.fromRGB(90, 200, 255), ah = 1.2,
+      clock = 18.2, amb = Color3.fromRGB(120, 80, 150) },
+    ["Noir"] = { b = -0.03, c = 0.45, s = -1, tint = Color3.fromRGB(235, 235, 235), bi = 0.3, ad = 0.25, ac = Color3.fromRGB(120, 120, 120), adc = Color3.fromRGB(60, 60, 60), ah = 1.5 },
+    ["Frozen"] = { b = 0.04, c = 0.15, s = -0.1, tint = Color3.fromRGB(190, 225, 255), bi = 0.8, bs = 34, bt = 0.9, ri = 0.1, ad = 0.38, ac = Color3.fromRGB(215, 235, 255), adc = Color3.fromRGB(170, 205, 235), ah = 1.4,
+      clock = 12 },
+    ["Matrix"] = { c = 0.3, s = -0.2, tint = Color3.fromRGB(150, 255, 170), bi = 0.9, bs = 30, bt = 0.85, ad = 0.34, ac = Color3.fromRGB(20, 90, 40), adc = Color3.fromRGB(0, 70, 20), ah = 1.8,
+      clock = 0, amb = Color3.fromRGB(10, 70, 25) },
+    ["Golden Hour"] = { b = 0.02, c = 0.2, s = 0.2, tint = Color3.fromRGB(255, 220, 170), bi = 0.8, bs = 36, bt = 0.9, ri = 0.3, rs = 0.9, ad = 0.32, ac = Color3.fromRGB(255, 200, 150), adc = Color3.fromRGB(255, 140, 80), ah = 1.2,
+      clock = 17.6 },
+    ["Dreamy"] = { b = 0.05, c = -0.05, s = 0.25, tint = Color3.fromRGB(255, 235, 250), bi = 1.4, bs = 52, bt = 0.7, dof = true, df = 30, dr = 10, dfar = 0.35, dnear = 0.1, ad = 0.3,
+      ac = Color3.fromRGB(240, 220, 255), adc = Color3.fromRGB(255, 200, 230), ah = 1 },
+    ["Toxic"] = { c = 0.3, s = 0.5, tint = Color3.fromRGB(190, 255, 120), bi = 1.1, bs = 36, bt = 0.8, ad = 0.45, ac = Color3.fromRGB(110, 190, 20), adc = Color3.fromRGB(40, 90, 0), ah = 2.2,
+      clock = 0, amb = Color3.fromRGB(40, 90, 15) },
+  }
+  local PF_NAMES = { "Cinematic", "Neon Night", "Halloween", "Blood Moon", "Vaporwave", "Noir", "Frozen", "Matrix", "Golden Hour", "Dreamy", "Toxic" }
+
+  local function tween(instance, seconds, props, style)
+    local playing = tweenService:Create(instance, TweenInfo.new(seconds, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props)
+    playing:Play()
+    return playing
+  end
+
+  local function pfEnsure()
+    if PF.fx.cc then return end
+    local function make(class, name)
+      local effect = Instance.new(class)
+      effect.Name = "Moro_" .. name
+      effect.Parent = lighting
+      return effect
+    end
+    PF.fx.cc = make("ColorCorrectionEffect", "CC")
+    PF.fx.bloom = make("BloomEffect", "Bloom")
+    PF.fx.rays = make("SunRaysEffect", "Rays")
+    PF.fx.dof = make("DepthOfFieldEffect", "DOF")
+    PF.fx.blur = make("BlurEffect", "Blur")
+    local existing = lighting:FindFirstChildOfClass("Atmosphere")
+    if existing then
+      PF.fx.atmo = existing
+      PF.atmoBackup = { Density = existing.Density, Offset = existing.Offset, Color = existing.Color, Decay = existing.Decay, Glare = existing.Glare, Haze = existing.Haze }
+    else
+      PF.fx.atmo = make("Atmosphere", "Atmo")
+      PF.atmoOwn = true
+    end
+    PF.backup = { ClockTime = lighting.ClockTime, Ambient = lighting.Ambient, OutdoorAmbient = lighting.OutdoorAmbient, ExposureCompensation = lighting.ExposureCompensation }
+  end
+
+  local function pfApply(smooth)
+    if not PF.on then return end
+    pfEnsure()
+    local v, fx = PF.v, PF.fx
+    local seconds = smooth and 1.2 or 0.05
+    local function to(instance, props) tween(instance, seconds, props, Enum.EasingStyle.Sine) end
+    to(fx.cc, { Brightness = v.b, Contrast = v.c, Saturation = v.s, TintColor = v.tint })
+    to(fx.bloom, { Intensity = v.bi, Size = v.bs, Threshold = v.bt })
+    to(fx.rays, { Intensity = v.ri, Spread = v.rs })
+    fx.dof.Enabled = v.dof
+    to(fx.dof, { FocusDistance = v.df, InFocusRadius = v.dr, FarIntensity = v.dfar, NearIntensity = v.dnear })
+    to(fx.blur, { Size = v.blur })
+    to(fx.atmo, { Density = v.ad, Offset = v.ao, Color = v.ac, Decay = v.adc, Glare = v.ag, Haze = v.ah })
+    if v.clock then lighting.ClockTime = v.clock end
+    if v.amb then
+      lighting.Ambient = v.amb
+      lighting.OutdoorAmbient = v.amb
+    end
+    lighting.ExposureCompensation = v.expo
+  end
+
+  local function pfEnable(on)
+    PF.on = on
+    if on then
+      pfEnsure()
+      pfApply(true)
+    else
+      for key, effect in pairs(PF.fx) do
+        if key == "atmo" and not PF.atmoOwn then
+          for prop, value in pairs(PF.atmoBackup or {}) do pcall(function() effect[prop] = value end) end
+        else
+          pcall(function() effect:Destroy() end)
+        end
+      end
+      if PF.backup then
+        for key, value in pairs(PF.backup) do pcall(function() lighting[key] = value end) end
+      end
+      PF.fx, PF.backup, PF.atmoBackup, PF.atmoOwn = {}, nil, nil, nil
+    end
+  end
+
+  local function syncSliders()
+    for key, slider in pairs(PF.ui) do
+      local value = PF.v[key]
+      if typeof(value) == "number" then pcall(function() slider:SetValue(value) end) end
+    end
+  end
+
+  local function pfPreset(name)
+    local preset = PF_PRESETS[name]
+    if not preset then return end
+    for key, value in pairs(PF_DEFAULT) do PF.v[key] = value end
+    for key, value in pairs(preset) do PF.v[key] = value end
+    PF.v.clock = preset.clock
+    PF.v.amb = preset.amb
+    if not PF.on then
+      pcall(function() toggles.PostFxEnabled:SetValue(true) end)
+      if not PF.on then pfEnable(true) end   -- the control may not call back when set from code
+    else
+      pfApply(true)
+    end
+    syncSliders()
+  end
+
+  -- ------------------------------------------------------------------ weather
+  local WEATHER_KINDS = { "Off", "Snow", "Rain", "Embers", "Fireflies", "Spooky Wisps", "Autumn Leaves", "Confetti" }
+  local weather = { part = nil, kind = "Off", height = 0 }
+  local postFolder = Instance.new("Folder")
+  postFolder.Name = "MoroPostFx"
+  postFolder.Parent = workspace
+
+  local function makeEmitter(parent, cfg)
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Texture = cfg.tex or "rbxasset://textures/particles/sparkles_main.dds"
+    emitter.Color = ColorSequence.new(cfg.c0, cfg.c1 or cfg.c0)
+    emitter.LightEmission = cfg.le or 1
+    emitter.Rate = cfg.rate or 30
+    emitter.Lifetime = NumberRange.new(cfg.l0 or 0.6, cfg.l1 or 1.3)
+    emitter.Speed = NumberRange.new(cfg.s0 or 1, cfg.s1 or 3)
+    emitter.SpreadAngle = cfg.spread or Vector2.new(25, 25)
+    if cfg.keep then
+      emitter.Size = NumberSequence.new(cfg.size or 0.6)
+    else
+      emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, cfg.size or 0.6), NumberSequenceKeypoint.new(1, 0) })
+    end
+    emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, cfg.t0 or 0.1), NumberSequenceKeypoint.new(0.8, cfg.t0 or 0.1), NumberSequenceKeypoint.new(1, 1) })
+    emitter.Acceleration = cfg.acc or Vector3.zero
+    emitter.RotSpeed = NumberRange.new(-120, 120)
+    emitter.EmissionDirection = cfg.dir or Enum.NormalId.Top
+    if cfg.shape then emitter.Shape = cfg.shape end
+    emitter.Parent = parent
+    return emitter
+  end
+
+  local function setWeather(kind)
+    if weather.part then
+      weather.part:Destroy()
+      weather.part = nil
+    end
+    weather.kind = kind
+    if kind == "Off" then return end
+    local part = Instance.new("Part")
+    part.Anchored, part.CanCollide, part.CanQuery, part.CanTouch, part.CastShadow = true, false, false, false, false
+    part.Transparency = 1
+    part.Size = Vector3.new(70, 1, 70)
+    part.Parent = postFolder
+    local box = Enum.ParticleEmitterShape.Box
+    if kind == "Snow" then
+      makeEmitter(part, { c0 = Color3.new(1, 1, 1), le = 0.3, t0 = 0.05, rate = 380, s0 = 6, s1 = 10, size = 0.55, keep = true, l0 = 3, l1 = 4, spread = Vector2.new(20, 20), dir = Enum.NormalId.Bottom, shape = box })
+      weather.height = 16
+    elseif kind == "Rain" then
+      local emitter = makeEmitter(part, { c0 = Color3.fromRGB(170, 200, 255), le = 0.3, t0 = 0.35, rate = 700, s0 = 70, s1 = 90, size = 0.9, keep = true, l0 = 0.5, l1 = 0.6, spread = Vector2.new(2, 2), dir = Enum.NormalId.Bottom, shape = box })
+      emitter.Orientation = Enum.ParticleOrientation.VelocityParallel
+      emitter.Squash = NumberSequence.new(-3)
+      weather.height = 25
+    elseif kind == "Embers" then
+      makeEmitter(part, { c0 = Color3.fromRGB(255, 190, 70), c1 = Color3.fromRGB(255, 60, 20), rate = 70, s0 = 3, s1 = 8, size = 0.28, l0 = 3, l1 = 5, spread = Vector2.new(35, 35), acc = Vector3.new(0, 2, 0), shape = box })
+      weather.height = -6
+    elseif kind == "Fireflies" then
+      part.Size = Vector3.new(50, 12, 50)
+      local emitter = makeEmitter(part, { c0 = Color3.fromRGB(220, 255, 120), rate = 28, s0 = 0.4, s1 = 1.4, size = 0.32, l0 = 4, l1 = 6, spread = Vector2.new(180, 180), shape = box })
+      emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.25, 0.1), NumberSequenceKeypoint.new(0.5, 0.7), NumberSequenceKeypoint.new(0.75, 0.1), NumberSequenceKeypoint.new(1, 1) })
+      emitter.Size = NumberSequence.new(0.32)
+      weather.height = 3
+    elseif kind == "Spooky Wisps" then
+      part.Size = Vector3.new(50, 8, 50)
+      makeEmitter(part, { c0 = Color3.fromRGB(170, 90, 255), c1 = Color3.fromRGB(255, 130, 30), rate = 40, s0 = 1, s1 = 3, size = 0.8, l0 = 4, l1 = 6, spread = Vector2.new(60, 60), acc = Vector3.new(0, 1.6, 0), shape = box })
+      weather.height = 1
+    elseif kind == "Autumn Leaves" then
+      makeEmitter(part, { c0 = Color3.fromRGB(255, 150, 40), c1 = Color3.fromRGB(150, 60, 20), le = 0, t0 = 0, rate = 70, s0 = 3, s1 = 5, size = 1.2, keep = true, l0 = 4, l1 = 5, spread = Vector2.new(30, 30), dir = Enum.NormalId.Bottom, shape = box })
+      weather.height = 16
+    elseif kind == "Confetti" then
+      local emitter = makeEmitter(part, { c0 = Color3.fromRGB(255, 80, 120), rate = 200, s0 = 5, s1 = 9, size = 0.9, keep = true, l0 = 3, l1 = 4, spread = Vector2.new(25, 25), dir = Enum.NormalId.Bottom, shape = box })
+      emitter.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 70, 110)), ColorSequenceKeypoint.new(0.33, Color3.fromRGB(255, 220, 60)),
+        ColorSequenceKeypoint.new(0.66, Color3.fromRGB(70, 220, 255)), ColorSequenceKeypoint.new(1, Color3.fromRGB(190, 90, 255)),
+      })
+      emitter.LightEmission = 0.2
+      weather.height = 16
+    end
+    weather.part = part
+  end
+
+  local weatherConnection = runService.RenderStepped:Connect(function()
+    local camera = workspace.CurrentCamera
+    if weather.part and camera then
+      weather.part.CFrame = CFrame.new(camera.CFrame.Position + Vector3.new(0, weather.height or 30, 0))
+    end
+  end)
+
+  -- ------------------------------------------------------------------ vignette
+  local vignette = { frames = {}, strength = 0, color = Color3.new(0, 0, 0) }
+  local vignetteGui = Instance.new("ScreenGui")
+  vignetteGui.Name = "MoroVignette"
+  vignetteGui.ResetOnSpawn = false
+  vignetteGui.IgnoreGuiInset = true
+  vignetteGui.DisplayOrder = -5
+  pcall(function() if syn and syn.protect_gui then syn.protect_gui(vignetteGui) end end)
+  vignetteGui.Parent = (gethui and gethui()) or coreGui
+  do
+    local edges = {
+      { Vector2.new(0, 0), UDim2.new(1, 0, 0.3, 0), UDim2.new(0, 0, 0, 0), 90 },
+      { Vector2.new(0, 1), UDim2.new(1, 0, 0.3, 0), UDim2.new(0, 0, 1, 0), 270 },
+      { Vector2.new(0, 0), UDim2.new(0.3, 0, 1, 0), UDim2.new(0, 0, 0, 0), 0 },
+      { Vector2.new(1, 0), UDim2.new(0.3, 0, 1, 0), UDim2.new(1, 0, 0, 0), 180 },
+    }
+    for _, edge in ipairs(edges) do
+      local frame = Instance.new("Frame")
+      frame.AnchorPoint, frame.Size, frame.Position = edge[1], edge[2], edge[3]
+      frame.BackgroundColor3 = Color3.new(0, 0, 0)
+      frame.BorderSizePixel = 0
+      frame.Visible = false
+      local gradient = Instance.new("UIGradient")
+      gradient.Rotation = edge[4]
+      gradient.Parent = frame
+      frame.Parent = vignetteGui
+      vignette.frames[#vignette.frames + 1] = { frame = frame, gradient = gradient }
+    end
+  end
+
+  local function setVignette(strength, color)
+    vignette.strength, vignette.color = strength, color or vignette.color
+    for _, entry in ipairs(vignette.frames) do
+      entry.frame.Visible = strength > 0.01
+      entry.frame.BackgroundColor3 = vignette.color
+      entry.gradient.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1 - strength), NumberSequenceKeypoint.new(1, 1) })
+    end
+  end
+
+  library:OnUnload(function()
+    pfEnable(false)
+    setWeather("Off")
+    setVignette(0)
+    pcall(function() weatherConnection:Disconnect() end)
+    pcall(function() postFolder:Destroy() end)
+    pcall(function() vignetteGui:Destroy() end)
+  end)
+
+  -- ------------------------------------------------------------------ menu (built later from MENU)
+  Menus.PostFx = function()
+    Groupboxes.PostPresets = tabs.Visuals:AddLeftGroupbox("Post FX Presets")
+    Groupboxes.PostPresets:AddToggle("PostFxEnabled", {
+      Text = "Post Processing", Default = false, Tooltip = "Color grading, bloom, depth of field and fog over the whole game",
+      Callback = function(value) pfEnable(value) end,
+    })
+    Groupboxes.PostPresets:AddDropdown("PostFxPreset", {
+      Text = "Preset", Values = PF_NAMES, Default = PF_NAMES[1],
+      Callback = function(value) if value then pfPreset(value) end end,
+    })
+    Groupboxes.PostPresets:AddButton({ Text = "Reset Values", Callback = function()
+      for key, value in pairs(PF_DEFAULT) do PF.v[key] = value end
+      pfApply(true)
+      syncSliders()
+    end })
+
+    local function slider(box, key, name, min, max, decimals, suffix)
+      box:AddSlider("PostFx_" .. key, {
+        Text = name, Min = min, Max = max, Default = PF.v[key] or min, Rounding = decimals, Suffix = suffix or "",
+        Callback = function(value)
+          PF.v[key] = value
+          pfApply(false)
+        end,
+      })
+      PF.ui[key] = options["PostFx_" .. key]
+    end
+
+    Groupboxes.PostGrading = tabs.Visuals:AddLeftGroupbox("Color Grading")
+    slider(Groupboxes.PostGrading, "b", "Brightness", -0.5, 0.5, 2)
+    slider(Groupboxes.PostGrading, "c", "Contrast", -1, 1, 2)
+    slider(Groupboxes.PostGrading, "s", "Saturation", -1, 1.5, 2)
+    Groupboxes.PostGrading._raw:AddColorPicker({
+      Name = "Tint", Default = Color3.new(1, 1, 1),
+      Callback = function(color)
+        PF.v.tint = color
+        pfApply(false)
+      end,
+    })
+    slider(Groupboxes.PostGrading, "expo", "Exposure", -1.5, 1.5, 2)
+    slider(Groupboxes.PostGrading, "clock", "Time of Day", 0, 24, 1, " h")
+
+    Groupboxes.PostBloom = tabs.Visuals:AddRightGroupbox("Bloom / Rays / Blur")
+    slider(Groupboxes.PostBloom, "bi", "Bloom Intensity", 0, 3, 2)
+    slider(Groupboxes.PostBloom, "bs", "Bloom Size", 0, 56, 0)
+    slider(Groupboxes.PostBloom, "bt", "Bloom Threshold", 0, 2, 2)
+    slider(Groupboxes.PostBloom, "ri", "Sun Rays", 0, 1, 2)
+    slider(Groupboxes.PostBloom, "blur", "Blur", 0, 24, 0)
+
+    Groupboxes.PostDof = tabs.Visuals:AddRightGroupbox("Depth of Field / Fog")
+    Groupboxes.PostDof:AddToggle("PostFxDof", {
+      Text = "Depth of Field", Default = false,
+      Callback = function(value)
+        PF.v.dof = value
+        pfApply(false)
+      end,
+    })
+    slider(Groupboxes.PostDof, "df", "Focus Distance", 5, 200, 0, " st")
+    slider(Groupboxes.PostDof, "dr", "Focus Radius", 2, 100, 0)
+    slider(Groupboxes.PostDof, "dfar", "Far Blur", 0, 1, 2)
+    slider(Groupboxes.PostDof, "ad", "Fog Density", 0, 0.8, 2)
+    slider(Groupboxes.PostDof, "ah", "Haze", 0, 6, 1)
+
+    Groupboxes.PostWeather = tabs.Visuals:AddLeftGroupbox("Weather")
+    Groupboxes.PostWeather:AddDropdown("PostFxWeather", {
+      Text = "Type", Values = WEATHER_KINDS, Default = "Off",
+      Callback = function(value) setWeather(value or "Off") end,
+    })
+
+    Groupboxes.PostVignette = tabs.Visuals:AddLeftGroupbox("Vignette")
+    Groupboxes.PostVignette:AddSlider("PostFxVignette", {
+      Text = "Strength", Min = 0, Max = 100, Default = 0, Rounding = 0, Suffix = " %",
+      Callback = function(value) setVignette(value / 100) end,
+    })
+    Groupboxes.PostVignette._raw:AddColorPicker({
+      Name = "Color", Default = Color3.new(0, 0, 0),
+      Callback = function(color) setVignette(vignette.strength, color) end,
+    })
+  end
+end
+
+-- =====================================================================
 --  MENU
 --  Everything above only defines logic and handlers. All tabs, sections,
 --  toggles, sliders and buttons are created here, in the order they appear.
@@ -19520,6 +19872,7 @@ Groupboxes.Visuals_Tracers:AddSlider("ESPTracerThickness", {
 Menus.ESPLook()
 Menus.ModelSwap()
 Menus.Fun()
+Menus.PostFx()
 
 Groupboxes.Visuals_Notifs = tabs.Visuals:AddLeftGroupbox("Entity Notifications")
 
