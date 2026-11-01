@@ -1733,6 +1733,34 @@ local threatState = {
   Sunk = false, ActiveThreats = {}, ThreatNames = {
     RushMoving = true, Rush = true, AmbushMoving = true, Ambush = true, A60 = true, A60Moving = true, ["A-60"] = true, A120 = true, A120Moving = true, ["A-120"] = true, BackdoorRush = true, BlitzMoving = true, Blitz = true, ["RNIUSHCG=="] = true, GlitchRush = true, AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true, CustomEntity = true, BashMoving = true, }, }
 
+-- Угроза «близко»: сзади ближе 100 стадов, спереди (по взгляду бота) ближе 50. scale > 1 даёт запас от мигания.
+-- Расстояние плоское (XZ): Rush/Ambush бегут по этажу, высота комнаты в счёт не идёт.
+threatState.IsClose = function(scale)
+  scale = scale or 1
+  local char = localPlayer and localPlayer.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then return false end
+  local look = root.CFrame.LookVector
+  local forward = Vector3.new(look.X, 0, look.Z)
+  forward = forward.Magnitude > 0.01 and forward.Unit or Vector3.new(0, 0, -1)
+  local checked = {}
+  local function near(obj)
+    if not obj or not obj.Parent or checked[obj] then return false end
+    checked[obj] = true
+    local ok, pivot = pcall(function() return obj:GetPivot().Position end)
+    if not ok or not pivot then return true end
+    local offset = Vector3.new(pivot.X - root.Position.X, 0, pivot.Z - root.Position.Z)
+    return offset.Magnitude < ((offset:Dot(forward) > 0) and 50 or 100) * scale
+  end
+  for threat, active in pairs(threatState.ActiveThreats) do
+    if active and near(threat) then return true end
+  end
+  for name in pairs(threatState.ThreatNames) do
+    if near(workspace:FindFirstChild(name)) then return true end
+  end
+  return false
+end
+
 local function HasActiveThreat()
   if threatState and threatState.ActiveThreats then
     for threat, active in pairs(threatState.ActiveThreats) do
@@ -1804,7 +1832,10 @@ local function isGodmodeActive()
     if KnobFarm.PassedFirstDoor then
       -- Уже утоплены — держим годмод до конца угрозы: утопленный персонаж находится внутри ступени, и проверка
       -- «на лестнице» мигала бы каждый кадр (годмод включался и выключался прямо под Rush).
-      return HasActiveThreat() and (threatState.Sunk or not isStandingOnStairs())
+      if not HasActiveThreat() then return false end
+      -- Топимся, только когда угроза близко; пока утоплены — держим с запасом, чтобы граница не мигала
+      if threatState.Sunk then return threatState.IsClose(1.5) end
+      return threatState.IsClose(1) and not isStandingOnStairs()
     end
     return false
   end
@@ -14849,12 +14880,12 @@ local function WaitForThreats(roomNum, room)
   local isThreatZone = IsSeekThreatZone(room, roomNum) or roomNum == ROOMS.LAST_NORMAL or roomNum == ROOMS.IGNORE_TO
   if not isThreatZone then return end
 
-  if HasEntityThreat() then
+  if HasEntityThreat() and threatState.IsClose(1) then
     KnobFarm.SetStatus("Threat detected (Room " .. tostring(roomNum) .. ")! Waiting...")
     local char = localPlayer and localPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then hum:Move(Vector3.zero, false) end
-    while HasEntityThreat() and KnobFarm.Active and not _Unloading do
+    while HasEntityThreat() and threatState.IsClose(1.2) and KnobFarm.Active and not _Unloading do
       if hum then hum:Move(Vector3.zero, false) end
       task.wait(0.3)
     end
@@ -16377,9 +16408,9 @@ local function SolveRoom100(room)
     or room
 
   -- 0. Ожидание угроз перед входом
-  if HasEntityThreat() then
+  if HasEntityThreat() and threatState.IsClose(1) then
     KnobFarm.SetStatus("Room 100: Threat detected! Waiting...")
-    while HasEntityThreat() and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
+    while HasEntityThreat() and threatState.IsClose(1.2) and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
       task.wait(0.3)
     end
     task.wait(0.5)
