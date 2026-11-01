@@ -1778,13 +1778,33 @@ local function getGodmodeMode()
   return 1
 end
 
+-- Годмод «топит» персонажа на 2,3 стада в пол. На лестнице ступени оказываются выше этой точки, и бот
+-- проваливается сквозь неё в пустоту. Поэтому на лестнице (и пока не сойдёт с неё) не топим.
+local function isStandingOnStairs()
+  local char = localPlayer and localPlayer.Character
+  local root = char and char:FindFirstChild("HumanoidRootPart")
+  if not root then return false end
+  local params = RaycastParams.new()
+  params.FilterType = Enum.RaycastFilterType.Exclude
+  params.FilterDescendantsInstances = { char }
+  local hit = workspace:Raycast(root.Position + Vector3.new(0, 4, 0), Vector3.new(0, -14, 0), params)
+  local part = hit and hit.Instance
+  if not part then return false end
+  local name = part.Name:lower()
+  local parent = part.Parent and part.Parent.Name:lower() or ""
+  return (name:find("stair", 1, true) or name:find("step", 1, true)
+    or parent:find("stair", 1, true) or parent:find("step", 1, true)) ~= nil
+end
+
 local function isGodmodeActive()
   if KnobFarm and KnobFarm.Active then
     if KnobFarm.DisableGodmodeForBoss then
       return false
     end
     if KnobFarm.PassedFirstDoor then
-      return HasActiveThreat()
+      -- Уже утоплены — держим годмод до конца угрозы: утопленный персонаж находится внутри ступени, и проверка
+      -- «на лестнице» мигала бы каждый кадр (годмод включался и выключался прямо под Rush).
+      return HasActiveThreat() and (threatState.Sunk or not isStandingOnStairs())
     end
     return false
   end
@@ -13206,8 +13226,6 @@ KnobFarm.InLobby = false
 KnobFarm.SeekMode = false
 KnobFarm.IgnoredDoors = setmetatable({}, { __mode = "k" })
 KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
-KnobFarm.LootDoneAt = setmetatable({}, { __mode = "k" })
-KnobFarm.FireplacesDisabled = setmetatable({}, { __mode = "k" })
 
 local STATS_FILE = "Doors_Farm_Stats.json"
 
@@ -13225,7 +13243,6 @@ local ROOMS = {
   SEEK_DOORS_SECOND = 10,  -- и во второй
   SKIP_DOOR_AFTER = 90,    -- секунд в одной комнате до принудительного скипа двери
   PLAY_AGAIN_AFTER = 600,  -- секунд в одной комнате до Play Again
-  LOOT_RESCAN = 6,         -- секунд, в течение которых вылутанную комнату не сканируем заново
 }
 
 -- Что фарм меняет в других функциях (Godmode, Instant Interact и т.д.) идёт через SetFeature:
@@ -13448,9 +13465,7 @@ local function ResetFarmState()
   -- Эти флаги раньше НЕ сбрасывались: после смерти посреди Seek/босса они оставались включёнными.
   KnobFarm.Teleporting = false
   KnobFarm.SeekMode = false
-  KnobFarm.LootDoneAt = setmetatable({}, { __mode = "k" })
-  KnobFarm.FireplacesDisabled = setmetatable({}, { __mode = "k" })
-  KnobFarm.DisableGodmodeForBoss = false
+      KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
   pcall(function()
@@ -13715,6 +13730,8 @@ end
 local function ApplyFarmSpeed(hum)
   local speed = GetFarmSpeed()
   SetFeature("EnableWalkspeed", true)
+  SetFeature("PhantomNoclip", false)   -- конфиг может включить его позже запуска фарма
+  SetFeature("Noclip", false)
   if options and options.Walkspeed and options.Walkspeed.Value ~= speed then
     options.Walkspeed:SetValue(speed)
   end
@@ -13759,6 +13776,18 @@ local function GetLatestRoomNum()
   local gameData = GetGameData()
   local v = gameData and gameData:FindFirstChild("LatestRoom")
   return v and tonumber(v.Value) or nil
+end
+
+-- Игра подняла флаг погони Seek, а фарм ещё идёт по своему пути/лутает: путь нужно оборвать, чтобы главный
+-- цикл успел включить режим погони (телепорт по дверям). Раньше бот дорабатывал путь и не успевал.
+local function ChasePending()
+  if KnobFarm.InSeekChase then return false end
+  local num = KnobFarm.CurrentRoomNum or 0
+  if num < ROOMS.SECOND_SEEK and KnobFarm.FirstChaseDone then return false end
+  if num >= ROOMS.SECOND_SEEK and KnobFarm.SecondChaseDone then return false end
+  local gameData = GetGameData()
+  local flag = gameData and gameData:FindFirstChild("ChaseInSession")
+  return flag ~= nil and flag.Value == true
 end
 
 -- Play Again (раньше — 4 копии поиска ремоута). Уважает тумблер AutoFarmPlayAgain.
@@ -14144,11 +14173,15 @@ local function IsDoorLocked(door)
     return false, nil
   end
 
+  -- Замок считается закрытым, пока у него есть промпт «Unlock». После отпирания модель замка остаётся висеть,
+  -- но промпт исчезает: раньше бот принимал такую дверь за запертую и крутился перед ней вечно.
   local lock = door:FindFirstChild("Lock") or door:FindFirstChild("Lock", true)
   if lock and lock.Parent then
     local unPr = lock:FindFirstChild("UnlockPrompt")
       or lock:FindFirstChildWhichIsA("ProximityPrompt", true)
-    return true, unPr
+    if unPr then
+      return true, unPr
+    end
   end
 
   local unlockPrompt = door:FindFirstChild("UnlockPrompt", true)
@@ -14553,7 +14586,7 @@ local function ScanLootables(room)
     if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc]
       and IsLootablePrompt(desc) then
       local pos = GetInstancePosition(desc.Parent) or GetInstancePosition(desc)
-      if pos then
+      if pos and HasFloorUnder(pos) then
         list[#list + 1] = { prompt = desc, pos = pos, parent = desc.Parent }
       end
     end
@@ -14599,8 +14632,7 @@ local function LootAround(room, radius, list)
   local count = 0
   for _, item in ipairs(list) do
     if not KnobFarm.Active or _Unloading then break end
-    if not KnobFarm.LootedObjects[item.prompt] and (item.pos - root.Position).Magnitude <= radius
-      and HasFloorUnder(item.pos) then
+    if not KnobFarm.LootedObjects[item.prompt] and (item.pos - root.Position).Magnitude <= radius then
       LootPrompt(item.prompt, item.parent)
       count = count + 1
     end
@@ -14612,14 +14644,7 @@ local function LootAllInRoom(room)
   if not room or not KnobFarm.Active or _Unloading then return end
   if not GetRoot() then return end
 
-  -- Комната уже вылутана: не сканируем её заново на каждом тике (полный GetDescendants)
-  local doneAt = KnobFarm.LootDoneAt[room]
-  if doneAt and tick() - doneAt < ROOMS.LOOT_RESCAN then return end
-
-  if not KnobFarm.FireplacesDisabled[room] then
-    KnobFarm.FireplacesDisabled[room] = true
-    DisableFireplaces(room)
-  end
+  DisableFireplaces(room)
 
   -- Сначала всё, что лежит прямо у входа в комнату
   if LootAround(room, 8.0) > 0 then
@@ -14628,9 +14653,9 @@ local function LootAllInRoom(room)
   end
 
   local attempts = 0
-  local exhausted = false
   while attempts < 35 and KnobFarm.Active and not _Unloading do
     attempts = attempts + 1
+    if ChasePending() then break end
 
     local root = GetRoot()
     if root and not HasFloorUnder(root.Position, 25) then
@@ -14642,14 +14667,7 @@ local function LootAllInRoom(room)
     local list = ScanLootables(room)
     local target = NearestLootable(list, root and root.Position)
     if not target then
-      exhausted = true
       break -- всё доступное в комнате собрано
-    end
-
-    -- Пол под целью проверяем только у ближайшей (раньше рейкаст делался для каждого промпта комнаты)
-    if not HasFloorUnder(target.pos) then
-      KnobFarm.LootedObjects[target.prompt] = true
-      continue
     end
 
     local label = (target.parent and target.parent.Name) or "Item"
@@ -14672,10 +14690,6 @@ local function LootAllInRoom(room)
     end
 
     task.wait(0.04)
-  end
-
-  if exhausted then
-    KnobFarm.LootDoneAt[room] = tick()
   end
 end
 
@@ -14761,6 +14775,22 @@ end
 
 -- Единственное место, где живёт машина состояний погони Seek.
 -- Возвращает true, пока погоня идёт и нужно пропускать двери.
+-- Живой Seek в мире (SeekMovingNewClone на дне карты — это заготовка, а не погоня)
+local function SeekEntityNearby()
+  local root = GetRoot()
+  if not root then return false end
+  for _, name in ipairs({ "SeekMoving", "SeekMovingNewClone" }) do
+    local seek = workspace:FindFirstChild(name)
+    if seek then
+      local ok, pivot = pcall(function() return seek:GetPivot().Position end)
+      if ok and math.abs(pivot.Y - root.Position.Y) < 60 and (pivot - root.Position).Magnitude < 400 then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function UpdateSeekState(room, roomNum)
   local curNum = tonumber(roomNum) or GetLatestRoomNum() or 0
   local curRooms = workspace:FindFirstChild("CurrentRooms")
@@ -14782,7 +14812,10 @@ local function UpdateSeekState(room, roomNum)
   -- Начало погони: флаг игры или триггеры Seek в комнате
   local gameData = GetGameData()
   local chaseVal = gameData and gameData:FindFirstChild("ChaseInSession")
-  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or RoomHasSeekTrigger(targetRoom)
+  -- Погоня началась, когда игра подняла флаг ChaseInSession или Seek реально появился рядом.
+  -- Раньше достаточно было триггера в комнате (TriggerEventCollision) — бот входил в режим погони заранее,
+  -- вечно телепортировался к двери и не двигался. Сам триггер бот должен просто пройти пешком.
+  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or SeekEntityNearby()
   if inChase and curNum > 0 then
     KnobFarm.InSeekChase = true
     KnobFarm.SeekDoorsSkipped = 0
@@ -15036,6 +15069,21 @@ PassDoorStraight = function(door, root, hum)
 
   -- 2. Открытие створки и нажатие промпта
   OpenDoor(door)
+  -- Дверь считаем открытой только если замок реально исчез. Раньше она помечалась открытой всегда:
+  -- запертая дверь без ключа/отмычки больше не проверялась на замок, и бот вставал перед ней навсегда.
+  local function lockPromptLeft()
+    local lock = door:FindFirstChild("Lock")
+    return lock ~= nil and lock:FindFirstChildWhichIsA("ProximityPrompt", true) ~= nil and door:GetAttribute("Opened") ~= true
+  end
+  local stillLocked = lockPromptLeft()
+  if stillLocked then
+    task.wait(0.15)
+    stillLocked = lockPromptLeft()
+  end
+  if stillLocked then
+    KnobFarm.SetStatus("Door is locked - need a key")
+    return
+  end
   KnobFarm.OpenedDoors[door] = true
 
   -- 3. Быстрый сквозной импульс вперёд через проём
@@ -15497,6 +15545,19 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
 
     local rootPos = root.Position
 
+    -- Годмод топит персонажа в пол: подъём/спуск по лестнице в таком состоянии заканчивается падением.
+    -- Пока угроза активна, а следующий участок пути идёт по уклону, стоим и ждём, пока она пройдёт.
+    if isGodmodeActive() then
+      local nextPoint = WaypointPosition(waypoints[wpIndex])
+      local prevPoint = WaypointPosition(waypoints[math.max(wpIndex - 1, 1)])
+      if nextPoint and prevPoint and math.abs(nextPoint.Y - prevPoint.Y) > 1.0 then
+        figureHoldAt = tick()
+        KnobFarm.SetStatus("Entity active - waiting before the stairs")
+        h:Move(Vector3.zero, false)
+        return
+      end
+    end
+
     -- Фигура рядом: слишком близко — отходим; в зоне осторожности замираем, но только если путь
     -- ведёт К ней. Если маршрут уходит в сторону или от Фигуры, идём дальше (приседание уже включено).
     -- Раньше бот стоял без статуса, пока Фигура бродила в 22–32 студах, даже когда идти нужно было прочь от неё.
@@ -15617,6 +15678,8 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     if not root or not h or h.Health <= 0 then break end
 
     local now = tick()
+
+    if ChasePending() then break end
 
     -- Пока стоим из-за Фигуры — не считаем это застреванием и не тратим таймаут пути
     if now - figureHoldAt < 0.3 then
@@ -15884,9 +15947,23 @@ local function handleRoom(room, door)
   local sheetWasPresent = hasSheet()
 
   -- Находим замок библиотеки (если он есть)
-  local padlock = (targetRoom and targetRoom:FindFirstChild("Padlock", true))
-    or (curRooms and curRooms:FindFirstChild("Padlock", true))
-    or (door and door:FindFirstChild("Padlock", true))
+  local function findPadlock()
+    return (targetRoom and targetRoom:FindFirstChild("Padlock", true))
+      or (curRooms and curRooms:FindFirstChild("Padlock", true))
+      or (door and door:FindFirstChild("Padlock", true))
+  end
+  local padlock = findPadlock()
+
+  -- Комната 50 может ещё подгружаться: пока в ней нет ни замка, ни книг, считать замок открытым нельзя.
+  -- Раньше бот входил сюда на момент загрузки, видел «нет замка», пропускал всю библиотеку и упирался в закрытую дверь.
+  local loadWait = tick()
+  while not padlock and tick() - loadWait < 12 and KnobFarm.Active and not _Unloading do
+    local booksLoaded = targetRoom and targetRoom:FindFirstChild("LiveHintBook", true)
+    if booksLoaded then break end
+    KnobFarm.SetStatus("Room 50: waiting for the library to load...")
+    task.wait(0.4)
+    padlock = findPadlock()
+  end
 
   -- Находим дверь 51 (выход из библиотеки в коридор 51)
   local door2 = nil
@@ -16477,16 +16554,31 @@ local function SolveRoom100(room)
   SetFeature("AutoBreakerBox", true)
   SetFeature("BreakerBoxMethod", "Instant", true)
 
-  if remotesFolder and remotesFolder:FindFirstChild("EBF") then
-    pcall(function() remotesFolder.EBF:FireServer() end)
+  -- Щиток считается решённым, когда у лифта появляется TouchInterest (так же это ловит сам эксплоит).
+  -- Раньше бот стрелял EBF 3,5 секунды и уходил в лифт, даже если на панели было «06» — то есть не дождавшись решения.
+  local function findElevator()
+    return (targetRoom and (targetRoom:FindFirstChild("ElevatorCar", true) or targetRoom:FindFirstChild("Elevator", true)))
+      or (curRooms and (curRooms:FindFirstChild("ElevatorCar", true) or curRooms:FindFirstChild("Elevator", true)))
+      or workspace:FindFirstChild("ElevatorCar")
+  end
+  local function breakerSolved()
+    local car = findElevator()
+    return car ~= nil and car:FindFirstChild("TouchInterest", true) ~= nil
   end
 
   local solveWait = tick()
-  while tick() - solveWait < 3.5 and KnobFarm.Active and not _Unloading do
+  while tick() - solveWait < 45 and KnobFarm.Active and not _Unloading and not breakerSolved() do
+    -- встроенный Instant-режим (реагирует на смену кода на панели) + прямой EBF на случай, если код не менялся
+    if featureState.RunBreakerFunc then pcall(featureState.RunBreakerFunc) end
     if remotesFolder and remotesFolder:FindFirstChild("EBF") then
       pcall(function() remotesFolder.EBF:FireServer() end)
     end
     task.wait(0.5)
+  end
+  if breakerSolved() then
+    KnobFarm.SetStatus("Room 100: Breaker box solved")
+  else
+    KnobFarm.SetStatus("Room 100: Breaker box not confirmed, continuing")
   end
 
   -- 6. Телепортируется в лифт (ElevatorCar)
@@ -16794,9 +16886,27 @@ local function Tick()
   local char = localPlayer and localPlayer.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   local root = char and char:FindFirstChild("HumanoidRootPart")
-  if not char or not hum or not root then
+  if not char or not hum then
     task.wait(0.5)
     return
+  end
+
+  -- Смерть обрабатываем до проверки корня: у мёртвого персонажа HumanoidRootPart исчезает, и раньше
+  -- тик выходил раньше, чем доходил до «Play Again» — фарм вставал навсегда на экране смерти.
+  if hum.Health <= 0 and StepDeath(hum) then return end
+
+  if not root then
+    task.wait(0.5)
+    return
+  end
+
+  -- В фарме ноуклипа быть не должно (ни Phantom, ни обычного): бот должен ходить по полу и лестницам,
+  -- иначе он проваливается сквозь них. Конфиг может включить их позже запуска фарма, поэтому следим каждый тик.
+  SetFeature("PhantomNoclip", false)
+  SetFeature("Noclip", false)
+  if KnobFarm.PassedFirstDoor and not KnobFarm.DisableGodmodeForBoss then
+    SetFeature("Godmode", true)
+    SetFeature("GodmodeMethod", "On entity spawn", true)
   end
 
   if StepDeath(hum) then return end
