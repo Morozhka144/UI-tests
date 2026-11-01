@@ -1833,10 +1833,9 @@ local function isGodmodeActive()
       -- Уже утоплены — держим годмод до конца угрозы: утопленный персонаж находится внутри ступени, и проверка
       -- «на лестнице» мигала бы каждый кадр (годмод включался и выключался прямо под Rush).
       if not HasActiveThreat() then return false end
-      -- Защита (утопление) включается заранее: Rush пробегает 100+ стадов за секунду, а на лестнице топиться нельзя.
-      -- Радиус 2.5x от радиуса остановки (250 сзади / 125 спереди), пока утоплены — держим с запасом, чтобы граница не мигала.
-      if threatState.Sunk then return threatState.IsClose(3.5) end
-      return threatState.IsClose(2.5) and not isStandingOnStairs()
+      -- Бот сам разрешил подъём по лестнице (угроза далеко): на это время не топимся, иначе провалится сквозь ступени
+      if KnobFarm.StairsPass and tick() - KnobFarm.StairsPass < 0.6 then return false end
+      return threatState.Sunk or not isStandingOnStairs()
     end
     return false
   end
@@ -15601,14 +15600,19 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
 
     -- Годмод топит персонажа в пол: подъём/спуск по лестнице в таком состоянии заканчивается падением.
     -- Пока угроза активна, а следующий участок пути идёт по уклону, стоим и ждём, пока она пройдёт.
-    if isGodmodeActive() then
+    if HasActiveThreat() then
       local nextPoint = WaypointPosition(waypoints[wpIndex])
       local prevPoint = WaypointPosition(waypoints[math.max(wpIndex - 1, 1)])
       if nextPoint and prevPoint and math.abs(nextPoint.Y - prevPoint.Y) > 1.0 then
-        figureHoldAt = tick()
-        KnobFarm.SetStatus("Entity active - waiting before the stairs")
-        h:Move(Vector3.zero, false)
-        return
+        if not threatState.IsClose(2) then
+          -- Угроза далеко (дальше 200 сзади / 100 спереди): поднимаемся без утопления, пока она не приблизилась
+          KnobFarm.StairsPass = tick()
+        elseif isGodmodeActive() then
+          figureHoldAt = tick()
+          KnobFarm.SetStatus("Entity active - waiting before the stairs")
+          h:Move(Vector3.zero, false)
+          return
+        end
       end
     end
 
