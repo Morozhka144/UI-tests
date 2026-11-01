@@ -1833,9 +1833,10 @@ local function isGodmodeActive()
       -- Уже утоплены — держим годмод до конца угрозы: утопленный персонаж находится внутри ступени, и проверка
       -- «на лестнице» мигала бы каждый кадр (годмод включался и выключался прямо под Rush).
       if not HasActiveThreat() then return false end
-      -- Топимся, только когда угроза близко; пока утоплены — держим с запасом, чтобы граница не мигала
-      if threatState.Sunk then return threatState.IsClose(1.5) end
-      return threatState.IsClose(1) and not isStandingOnStairs()
+      -- Защита (утопление) включается заранее: Rush пробегает 100+ стадов за секунду, а на лестнице топиться нельзя.
+      -- Радиус 2.5x от радиуса остановки (250 сзади / 125 спереди), пока утоплены — держим с запасом, чтобы граница не мигала.
+      if threatState.Sunk then return threatState.IsClose(3.5) end
+      return threatState.IsClose(2.5) and not isStandingOnStairs()
     end
     return false
   end
