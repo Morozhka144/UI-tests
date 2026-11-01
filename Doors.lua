@@ -14795,6 +14795,22 @@ end
 
 -- Единственное место, где живёт машина состояний погони Seek.
 -- Возвращает true, пока погоня идёт и нужно пропускать двери.
+-- Живой Seek в мире (SeekMovingNewClone на дне карты — это заготовка, а не погоня)
+local function SeekEntityNearby()
+  local root = GetRoot()
+  if not root then return false end
+  for _, name in ipairs({ "SeekMoving", "SeekMovingNewClone" }) do
+    local seek = workspace:FindFirstChild(name)
+    if seek then
+      local ok, pivot = pcall(function() return seek:GetPivot().Position end)
+      if ok and math.abs(pivot.Y - root.Position.Y) < 60 and (pivot - root.Position).Magnitude < 400 then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function UpdateSeekState(room, roomNum)
   local curNum = tonumber(roomNum) or GetLatestRoomNum() or 0
   local curRooms = workspace:FindFirstChild("CurrentRooms")
@@ -14816,7 +14832,10 @@ local function UpdateSeekState(room, roomNum)
   -- Начало погони: флаг игры или триггеры Seek в комнате
   local gameData = GetGameData()
   local chaseVal = gameData and gameData:FindFirstChild("ChaseInSession")
-  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or RoomHasSeekTrigger(targetRoom)
+  -- Погоня началась, когда игра подняла флаг ChaseInSession или Seek реально появился рядом.
+  -- Одного триггера в комнате мало: бот входил в режим погони заранее («Skipped 0/7» навсегда) и телепортировался
+  -- на уже открытую дверь, пока Seek не появится. Сам триггер бот просто проходит пешком.
+  local inChase = (chaseVal ~= nil and chaseVal.Value == true) or SeekEntityNearby()
   if inChase and curNum > 0 then
     KnobFarm.InSeekChase = true
     KnobFarm.SeekDoorsSkipped = 0
