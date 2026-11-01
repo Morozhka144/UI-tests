@@ -43,14 +43,14 @@ local RAW_URL = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/Moro
 local CACHE_FILE = "MoroElite.lua"
 local Lumina
 
-local ok, res = pcall(function()
+local success9, result2 = pcall(function()
     local src = game:HttpGet(RAW_URL)
     local lib = safeLoad(src, "MoroElite")
     if lib and writefile then pcall(writefile, CACHE_FILE, src) end
     return lib
 end)
-if ok and res then
-    Lumina = res
+if success9 and result2 then
+    Lumina = result2
 else
     pcall(function()
         if readfile and isfile and isfile(CACHE_FILE) then
@@ -79,7 +79,7 @@ library.TabButtons = {}
 library.ScreenGui = nil
 
 local MoroWindow = nil
-local element3 = nil
+local tabs = nil
 
 local dummyToggle = {
     Value = false,
@@ -144,8 +144,8 @@ local dummyTab = {
     AddRightTabbox = function() return { AddTab = function() return dummySection end } end,
     SetVisible = function() end,
     Show = function(self)
-        if element3 and element3.Main and element3.Main.Show then
-            element3.Main:Show()
+        if tabs and tabs.Main and tabs.Main.Show then
+            tabs.Main:Show()
         end
     end,
 }
@@ -166,6 +166,7 @@ local function wrapSection(luminaSec, tab, colName)
         local name = cfg.Text or flag
         local luminaTgl = luminaSec:AddToggle({
             Name = name,
+            Description = cfg.Tooltip,
             Default = cfg.Default or false,
             Flag = flag,
             Callback = cfg.Callback,
@@ -285,6 +286,7 @@ local function wrapSection(luminaSec, tab, colName)
         local sliderListeners = {}
         local luminaSlider = luminaSec:AddSlider({
             Name = cfg.Text or flag,
+            Description = cfg.Tooltip,
             Min = cfg.Min or 0,
             Max = cfg.Max or 100,
             Default = cfg.Default or cfg.Min or 0,
@@ -337,6 +339,7 @@ local function wrapSection(luminaSec, tab, colName)
             local multiProxy
             local luminaMulti = luminaSec:AddMultiDropdown({
                 Name = cfg.Text or flag,
+                Description = cfg.Tooltip,
                 Options = cfg.Values or {},
                 Default = defs,
                 Flag = flag,
@@ -399,6 +402,7 @@ local function wrapSection(luminaSec, tab, colName)
             local dropProxy
             local luminaDrop = luminaSec:AddDropdown({
                 Name = cfg.Text or flag,
+                Description = cfg.Tooltip,
                 Options = cfg.Values or {},
                 Default = def or (cfg.Values and cfg.Values[1]) or "",
                 Flag = flag,
@@ -448,6 +452,7 @@ local function wrapSection(luminaSec, tab, colName)
         local cb = cfg.Callback or cfg.Func
         return luminaSec:AddButton({
             Name = cfg.Text or "Button",
+            Description = cfg.Tooltip,
             Callback = cb,
         })
     end
@@ -510,6 +515,7 @@ local function wrapSection(luminaSec, tab, colName)
         local inputListeners = {}
         local luminaBox = luminaSec:AddTextbox({
             Name = cfg.Text or flag,
+            Description = cfg.Tooltip,
             Placeholder = cfg.Placeholder or "",
             Default = cfg.Default or "",
             Numeric = cfg.Numeric or false,
@@ -551,7 +557,43 @@ local function wrapSection(luminaSec, tab, colName)
     return secProxy
 end
 
-local function wrapTab(luminaTab, tabName)
+-- icons for the section headers (name -> lucide icon)
+local SECTION_ICONS = {
+    ["Character"] = "user", ["Phantom Noclip"] = "ghost", ["Other"] = "sliders-horizontal",
+    ["Knob Farm"] = "bot", ["Auto Door Skip"] = "door-open", ["Settings"] = "settings",
+    ["ESP"] = "eye", ["Camera"] = "camera", ["Entity Notifications"] = "bell", ["Item Notifications"] = "bell-ring",
+    ["Pre-Run"] = "rocket", ["Prompts"] = "mouse-pointer-click", ["Exploits"] = "zap", ["Crucifix Everything"] = "cross",
+    ["Bypasses"] = "shield-off", ["Removals"] = "eraser", ["Damage"] = "heart-crack", ["Automation"] = "cpu",
+    ["Miscellaneous"] = "wrench", ["Fun"] = "party-popper", ["Ladders"] = "arrow-up-down", ["Anticheat"] = "shield",
+    ["Visuals"] = "eye", ["Archives"] = "archive", ["Anticheat Bypass"] = "shield", ["Archives Addons"] = "puzzle",
+    ["Chams & Boxes"] = "box-select", ["Labels"] = "tag", ["Tracers & Arrows"] = "locate", ["Colors"] = "palette",
+    ["Targets"] = "crosshair", ["ESP Preset"] = "wand-sparkles",
+    ["HUD"] = "layout-dashboard", ["Model Library"] = "box", ["Model Search"] = "search", ["Swap Options"] = "sliders-horizontal",
+}
+
+-- subDefs = { { "Sub name", "icon", { "Groupbox name", ... } }, ... }: every groupbox / tabbox page of the
+-- tab is routed to a sub-tab by its name, so the existing code keeps calling AddLeftGroupbox("...") unchanged
+local function wrapTab(luminaTab, tabName, subDefs)
+    local routes, firstSub = {}, nil
+    if subDefs and luminaTab.SubTab then -- older MoroElite builds have no sub-tabs: everything stays on the tab
+        for _, def in ipairs(subDefs) do
+            local sub = luminaTab:SubTab({ Name = def[1], Icon = def[2] })
+            firstSub = firstSub or sub
+            for _, group in ipairs(def[3] or {}) do routes[group] = sub end
+        end
+    end
+    local function targetFor(...)
+        for i = 1, select("#", ...) do
+            local hit = routes[(select(i, ...))]
+            if hit then return hit end
+        end
+        return firstSub or luminaTab
+    end
+    local function makeSection(target, name, side)
+        target:Column(side)
+        return target:CreateSection({ Name = name, Icon = SECTION_ICONS[name], Collapsible = true })
+    end
+
     local tabProxy = {
         _raw = luminaTab,
         Name = tabName or (luminaTab and luminaTab.Name) or "Tab",
@@ -570,33 +612,29 @@ local function wrapTab(luminaTab, tabName)
     end
 
     function tabProxy:AddLeftGroupbox(name)
-        luminaTab:Column("left")
-        local sec = luminaTab:CreateSection({ Name = name, Collapsible = true })
-        return wrapSection(sec, luminaTab, "left")
+        local target = targetFor(name)
+        return wrapSection(makeSection(target, name, "left"), target, "left")
     end
 
     function tabProxy:AddRightGroupbox(name)
-        luminaTab:Column("right")
-        local sec = luminaTab:CreateSection({ Name = name, Collapsible = true })
-        return wrapSection(sec, luminaTab, "right")
+        local target = targetFor(name)
+        return wrapSection(makeSection(target, name, "right"), target, "right")
     end
 
     function tabProxy:AddLeftTabbox(name)
-        luminaTab:Column("left")
         return {
             AddTab = function(_, subName)
-                local sec = luminaTab:CreateSection({ Name = subName, Collapsible = true })
-                return wrapSection(sec, luminaTab, "left")
+                local target = targetFor(subName, name)
+                return wrapSection(makeSection(target, subName, "left"), target, "left")
             end
         }
     end
 
     function tabProxy:AddRightTabbox(name)
-        luminaTab:Column("right")
         return {
             AddTab = function(_, subName)
-                local sec = luminaTab:CreateSection({ Name = subName, Collapsible = true })
-                return wrapSection(sec, luminaTab, "right")
+                local target = targetFor(subName, name)
+                return wrapSection(makeSection(target, subName, "right"), target, "right")
             end
         }
     end
@@ -607,8 +645,8 @@ local function wrapTab(luminaTab, tabName)
             btn.Visible = (vis == true or vis == nil)
         end
         if not vis and library.ActiveTab == tabProxy then
-            if element3 and element3.Main and element3.Main.Show then
-                element3.Main:Show()
+            if tabs and tabs.Main and tabs.Main.Show then
+                tabs.Main:Show()
             end
         end
     end
@@ -655,12 +693,12 @@ function library:CreateWindow(cfg)
         end,
     }
 
-    function winProxy:AddTab(name, icon)
+    function winProxy:AddTab(name, icon, subDefs)
         local luminaTab = MoroWindow:CreateTab({
             Name = name,
             Icon = icon or "menu",
         })
-        local wrapped = wrapTab(luminaTab, name)
+        local wrapped = wrapTab(luminaTab, name, subDefs)
         wrapped.Button = luminaTab._btn or luminaTab.Button
         wrapped._Button = luminaTab._btn or luminaTab.Button
         wrapped._Label = luminaTab._label
@@ -796,30 +834,30 @@ end
 
 LoadStart = tick()
 if not string.split then
-  function string:split(p3)
-    local val41 = {}
-    local val42 = 1
+  function string:split(separator)
+    local parts = {}
+    local searchStart = 1
 
     while true do
-      local val43, findResult = string.find(self, p3, val42, true)
+      local separatorIndex, findResult = string.find(self, separator, searchStart, true)
 
-      if not val43 then
+      if not separatorIndex then
         break
       end
 
-      table.insert(val41, string.sub(self, val42, val43 - 1))
-      val42 = findResult + 1
+      table.insert(parts, string.sub(self, searchStart, separatorIndex - 1))
+      searchStart = findResult + 1
     end
 
-    table.insert(val41, string.sub(self, val42))
-    return val41
+    table.insert(parts, string.sub(self, searchStart))
+    return parts
   end
 end
 
 if not table.find then
-  function table:find(p4)
+  function table:find(value)
     for n = 1, #self do
-      if self[n] == p4 then
+      if self[n] == value then
         return n
       end
     end
@@ -829,63 +867,63 @@ if not table.find then
 end
 
 
-local function safeCall4(val45)
-  if typeof(val45) == "string" then
-    local val46, success2 = pcall(Color3.fromHex, val45)
+local function colorFromHex(hex)
+  if typeof(hex) == "string" then
+    local success, result = pcall(Color3.fromHex, hex)
 
-    if val46 then
-      return success2
+    if success then
+      return result
     end
   end
 
-  local function safeCall5(val47)
-    local val48, success3 = pcall(string.sub, val45, val47, val47 + 1)
+  local function parseHexByte(index)
+    local success, result = pcall(string.sub, hex, index, index + 1)
 
-    if not val48 then
+    if not success then
       return 0
     end
 
-    local val49, success4 = pcall(tonumber, success3, 16)
-    return val49 and success4 or 0
+    local success2, result3 = pcall(tonumber, result, 16)
+    return success2 and result3 or 0
   end
 
-  return Color3.fromRGB(safeCall5(1), safeCall5(3), safeCall5(5))
+  return Color3.fromRGB(parseHexByte(1), parseHexByte(3), parseHexByte(5))
 end
 
-local function helper2(val50)
-  if typeof(val50) == "string" then
-    return val50
+local function decodeJson(data)
+  if typeof(data) == "string" then
+    return data
   end
 
-  local val51, jsonData = pcall(function() return httpService:JSONDecode("\"" .. val50 .. "\"") end)
+  local success, result = pcall(function() return httpService:JSONDecode("\"" .. data .. "\"") end)
 
-  if val51 and typeof(jsonData) == "string" then
-    return jsonData
+  if success and typeof(result) == "string" then
+    return result
   end
 
-  local val52, success5 = pcall(string.len, val50)
+  local success2, result3 = pcall(string.len, data)
 
-  if val52 and success5 > 0 then
-    local val53 = {}
+  if success2 and result3 > 0 then
+    local bytes = {}
 
-    for i6 = 1, success5 do
-      local val54, success6 = pcall(string.byte, val50, i6)
-      local val55
+    for i = 1, result3 do
+      local success3, result4 = pcall(string.byte, data, i)
+      local byteValue
 
-      if val54 then
-        val55 = success6
+      if success3 then
+        byteValue = result4
       end
 
-      if val55 then
-        val53[#val53 + 1] = string.char(val55)
+      if byteValue then
+        bytes[#bytes + 1] = string.char(byteValue)
       end
     end
 
-    if #val53 > 0 then
-      local val56, success7 = pcall(table.concat, val53)
+    if #bytes > 0 then
+      local success3, result4 = pcall(table.concat, bytes)
 
-      if val56 then
-        return success7
+      if success3 then
+        return result4
       end
     end
   end
@@ -893,139 +931,711 @@ local function helper2(val50)
   return ""
 end
 
-local function helper3(val57)
-  if type(val57) ~= "table" then
+local function getTabButton(addTab)
+  if type(addTab) ~= "table" then
     return nil
   end
 
-  if val57.Button and typeof(val57.Button) == "Instance" then
-    return val57.Button
+  if addTab.Button and typeof(addTab.Button) == "Instance" then
+    return addTab.Button
   end
 
-  if val57._Button and typeof(val57._Button) == "Instance" then
-    return val57._Button
+  if addTab._Button and typeof(addTab._Button) == "Instance" then
+    return addTab._Button
   end
 
   return nil
 end
 
-local function safeCall6(val58)
-  local object = helper3(val58)
+local function getTabLabel(addTab)
+  local object = getTabButton(addTab)
 
   if object then
-    local val59, success8 = pcall(function() return object:FindFirstChild("TextLabel", true) end)
+    local success, result = pcall(function() return object:FindFirstChild("TextLabel", true) end)
 
-    if val59 and success8 then
-      return success8
+    if success and result then
+      return result
     end
   end
 
-  if val58._Label and typeof(val58._Label) == "Instance" then
-    return val58._Label
+  if addTab._Label and typeof(addTab._Label) == "Instance" then
+    return addTab._Label
   end
 
   return nil
 end
 
-local function helper4(val60)
-  if not val60 then
+local function isTabActive(tab)
+  if not tab then
     return false
   end
 
-  if library.ActiveTab == val60 then
+  if library.ActiveTab == tab then
     return true
   end
 
   local activeTab = library.ActiveTab
 
   if type(activeTab) == "string" then
-    if val60.Name == activeTab then
+    if tab.Name == activeTab then
       return true
     end
 
-    if val60.OriginalName == activeTab then
+    if tab.OriginalName == activeTab then
       return true
     end
   end
 
   return false
 end
-local val70 = 1
+local unusedFlag = 1
 
 if game.PlaceId ~= 6516141723 and game.PlaceId ~= 6839171747 and game.PlaceId ~= 110258689672370
   and game.PlaceId ~= 10549820578 then
   return
 end
 
-function TableClear(val71)
-  for key3 in pairs(val71) do
-    val71[key3] = nil
+function TableClear(list)
+  for key in pairs(list) do
+    list[key] = nil
   end
 end
 
-function TableFind(val72, val73)
-  for i7 = 1, #val72 do
-    if val72[i7] == val73 then
-      return i7
+function TableFind(list, item)
+  for i = 1, #list do
+    if list[i] == item then
+      return i
     end
   end
 
   return nil
 end
 
--- FinishedLoadingRoom kept intact to avoid RemoteListener crash
-local httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = game:HttpGet("https://raw.githubusercontent.com/bocaj111004/ESPLibrary/refs/heads/main/Library.lua")
-
-httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
-  "']</font>'", "'M]</font>'"
-)
-
-httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
-  "Frame%.Visible = OnScreen", "Frame.Visible = OnScreen and Library.ShowESPText ~= false"
-)
-
-httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
-  "local ScreenPoint, OnScreen = Camera:WorldToViewportPoint%(ObjectPos%)", "local ScreenPoint, OnScreen = Camera:WorldToViewportPoint(ObjectPos); if OnScreen then local Dist = (Camera.CFrame.Position - ObjectPos).Magnitude; local ObjMaxDist = Library.ObjectMaxDistance and Library.ObjectMaxDistance[Object]; if Dist > (ObjMaxDist or Library.MaxDistance) then OnScreen = false end end"
-)
-
-httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
-  "Tracers = false,", "Tracers = false, TracersEnabled = {},"
-)
-
-httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
-  "LineData%[1%].Visible = OnScreen", "LineData[1].Visible = OnScreen and (Library.Tracers == true or Library.TracersEnabled[Object])"
-)
-
-httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub(
-  "if LineData and CachedHighlight and Library.Tracers == true and OnScreen then", "if LineData and CachedHighlight and (Library.Tracers == true or Library.TracersEnabled[Object]) and OnScreen then"
-)
-
-httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua = httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua:gsub("TracersFrame.Parent = ScreenGui", [[
-TracersFrame.Parent = ScreenGui
-
-function Library:SetTracersEnabled(Object, Value)
-	if Value then
-		Library.TracersEnabled[Object] = true
-		TracersFrame.Visible = true
-	else
-		Library.TracersEnabled[Object] = nil
-		local any = false
-		for _ in pairs(Library.TracersEnabled) do any = true break end
-		TracersFrame.Visible = any or Library.Tracers
-	end
-end]])
-
-local loader = safeLoad(httpsRawGithubusercontentComBocaj111004ESPLibraryRefsHeadsMainLibraryLua, "ESPLibrary")
-if not loader then
-    warn("[Moro] Failed to load ESP Library, using fallback stub")
-    loader = {
-        ObjectMaxDistance = {},
+-- =====================================================================
+--                  MOROESP — собственный ESP-движок
+--  Боксы (Corners / Full / Rounded Glow / 3D Box), хамсы (Highlight),
+--  пилюли с именем и дистанцией, полоска HP, скелет, трейсеры, стрелки.
+--  API совместим со старой библиотекой: AddESP / RemoveESP / Set*.
+-- =====================================================================
+local loader -- локалов в этом файле много: движок живёт внутри do-блока
+do
+local function createESPEngine()
+    local Lib = {
+        MaxDistance = 250,
+        ShowESPText = true,
+        Tracers = false,
         TracersEnabled = {},
-        Add = function() return { Destroy = function() end } end,
-        Remove = function() end,
+        ObjectMaxDistance = {},
+        ColorTable = {},
     }
+
+    -- настройки отображения (меню пишет сюда через Lib.Settings или Set*)
+    local S = {
+        box = "Rounded Glow", boxThick = 1.6, boxFill = 0.88,
+        chams = "Flat", chamLimit = 31,
+        nameStyle = "Pill", textSize = 15, font = Enum.Font.GothamBold, showDist = true,
+        hpBar = true, hpText = true, skeleton = true, headDot = true, lookLine = true,
+        rainbow = false, distFade = true,
+        fillT = 0.6, outlineT = 0, textT = 0, textOutlineT = 0.4,
+        matchColors = true, outlineColor = Color3.new(1, 1, 1),
+        fadeTime = 0,
+        tracerFrom = "Bottom", tracerThick = 0.75,
+        arrows = false, arrowRadius = 250,
+    }
+    Lib.Settings = S
+
+    local entries = {}
+    local alive = true
+    local cam = workspace.CurrentCamera
+    local WHITE, BLACK = Color3.new(1, 1, 1), Color3.new(0, 0, 0)
+
+    -- ---------------------------------------------------------------- GUI
+    local parent = (gethui and gethui()) or coreGui
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "MoroESP"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 20
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
+    gui.Parent = parent
+
+    local layer = Instance.new("Frame")
+    layer.Name = "Layer"
+    layer.BackgroundTransparency = 1
+    layer.Size = UDim2.fromScale(1, 1)
+    layer.Parent = gui
+
+    local chamFolder = Instance.new("Folder")
+    chamFolder.Name = "MoroESPChams"
+    chamFolder.Parent = parent
+
+    -- --------------------------------------------------------- UI helpers
+    local function newFrame(par, props)
+        local f = Instance.new("Frame")
+        f.BorderSizePixel = 0
+        f.BackgroundColor3 = WHITE
+        f.Visible = false
+        for k, v in pairs(props or {}) do f[k] = v end
+        f.Parent = par
+        return f
+    end
+    local function newLine(par) return newFrame(par, { AnchorPoint = Vector2.new(0.5, 0.5) }) end
+    local function setLine(f, a, b, thick, col, transp)
+        local d = b - a
+        f.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+        f.Size = UDim2.fromOffset(d.Magnitude, thick)
+        f.Rotation = math.deg(math.atan2(d.Y, d.X))
+        f.BackgroundColor3 = col
+        f.BackgroundTransparency = transp
+        f.Visible = true
+    end
+    local function addStroke(f, thick, col, transp)
+        local s = Instance.new("UIStroke")
+        s.Thickness, s.Color, s.Transparency = thick, col, transp or 0
+        s.Parent = f
+        return s
+    end
+    local function addCorner(f, r)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = r
+        c.Parent = f
+        return c
+    end
+    local function newText(par, size)
+        local t = Instance.new("TextLabel")
+        t.BackgroundTransparency = 1
+        t.Font = S.font
+        t.TextSize = size or 13
+        t.RichText = true
+        t.TextColor3 = WHITE
+        t.Visible = false
+        t.Parent = par
+        t.TextStrokeTransparency = 1
+        local st = addStroke(t, 1, BLACK, 0.4)
+        return t, st
+    end
+    local function esc(s)
+        return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+    end
+    local function hex(c)
+        return string.format("#%02x%02x%02x", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+    end
+    local function rainbowAt(t, off) return Color3.fromHSV((t * 0.3 + off) % 1, 0.8, 1) end
+
+    local CUBE_EDGES = { { 1, 2 }, { 2, 4 }, { 4, 3 }, { 3, 1 }, { 5, 6 }, { 6, 8 }, { 8, 7 }, { 7, 5 }, { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 } }
+    local BONES_R15 = {
+        { "Head", "UpperTorso" }, { "UpperTorso", "LowerTorso" },
+        { "UpperTorso", "LeftUpperArm" }, { "LeftUpperArm", "LeftLowerArm" }, { "LeftLowerArm", "LeftHand" },
+        { "UpperTorso", "RightUpperArm" }, { "RightUpperArm", "RightLowerArm" }, { "RightLowerArm", "RightHand" },
+        { "LowerTorso", "LeftUpperLeg" }, { "LeftUpperLeg", "LeftLowerLeg" }, { "LeftLowerLeg", "LeftFoot" },
+        { "LowerTorso", "RightUpperLeg" }, { "RightUpperLeg", "RightLowerLeg" }, { "RightLowerLeg", "RightFoot" },
+    }
+    local BONES_R6 = { { "Head", "Torso" }, { "Torso", "Left Arm" }, { "Torso", "Right Arm" }, { "Torso", "Left Leg" }, { "Torso", "Right Leg" } }
+
+    -- ------------------------------------------------------------ entries
+    local function buildUI(e)
+        local u = {}
+        u.root = newFrame(layer, { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = true })
+        u.glow = newFrame(u.root, { BackgroundTransparency = 1 })
+        addCorner(u.glow, UDim.new(0, 12))
+        u.glowStroke = addStroke(u.glow, 5, WHITE, 0.8)
+        u.boxFull = newFrame(u.root, {})
+        u.boxCorner = addCorner(u.boxFull, UDim.new(0, 0))
+        u.boxStroke = addStroke(u.boxFull, 1.5, WHITE, 0)
+        u.fillGrad = Instance.new("UIGradient")
+        u.fillGrad.Rotation = 90
+        u.fillGrad.Parent = u.boxFull
+        u.corners = {}
+        for i = 1, 8 do u.corners[i] = newFrame(u.root, {}) end
+        u.cube, u.bones = {}, {}
+        u.hpBg = newFrame(u.root, { BackgroundColor3 = BLACK, BackgroundTransparency = 0.45 })
+        u.hpFill = newFrame(u.hpBg, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Visible = true })
+        u.pill = newFrame(u.root, { BackgroundColor3 = Color3.fromRGB(14, 14, 20), BackgroundTransparency = 0.15 })
+        addCorner(u.pill, UDim.new(0, 7))
+        u.pillStroke = addStroke(u.pill, 1, WHITE, 0.35)
+        u.accent = newFrame(u.pill, { Position = UDim2.new(0, 4, 0, 4), Size = UDim2.new(0, 3, 1, -8), Visible = true })
+        addCorner(u.accent, UDim.new(1, 0))
+        u.nameT, u.nameS = newText(u.pill, 13)
+        u.nameT.Visible = true
+        u.nameT.TextXAlignment = Enum.TextXAlignment.Left
+        u.nameT.Position = UDim2.fromOffset(13, 0)
+        u.nameT.Size = UDim2.new(1, -16, 1, 0)
+        u.plainT, u.plainS = newText(u.root, 13)
+        u.plainT.AnchorPoint = Vector2.new(0.5, 1)
+        u.plainT.Size = UDim2.fromOffset(260, 18)
+        u.infoT, u.infoS = newText(u.root, 12)
+        u.infoT.AnchorPoint = Vector2.new(0.5, 0)
+        u.infoT.Size = UDim2.fromOffset(260, 16)
+        u.tracer = newLine(u.root)
+        u.lookLine = newLine(u.root)
+        u.dot = newFrame(u.root, { AnchorPoint = Vector2.new(0.5, 0.5) })
+        addCorner(u.dot, UDim.new(1, 0))
+        addStroke(u.dot, 1, BLACK, 0.2)
+        u.arrow = newText(layer, 20)
+        u.arrow.Text = "▲"
+        u.arrow.AnchorPoint = Vector2.new(0.5, 0.5)
+        u.arrow.Size = UDim2.fromOffset(26, 26)
+        e.ui = u
+    end
+
+    local function destroyUI(e)
+        local u = e.ui
+        if u then
+            pcall(function() u.root:Destroy() end)
+            pcall(function() u.arrow:Destroy() end)
+            e.ui = nil
+        end
+        if e.hl then
+            pcall(function() e.hl:Destroy() end)
+            e.hl = nil
+        end
+    end
+
+    local function hideAll(e)
+        local u = e.ui
+        if u then
+            u.root.Visible = false
+            u.arrow.Visible = false
+        end
+        if e.hl then e.hl.Enabled = false end
+    end
+
+    local function newEntry(obj)
+        local e = {
+            obj = obj, text = "", color = WHITE, alpha = 0, target = 1,
+            hue = math.random(), nextBB = 0, wantHL = true,
+            isPart = obj:IsA("BasePart"), isModel = obj:IsA("Model"),
+        }
+        -- HP, скелет, точка на голове и линия взгляда рисуются только у игроков
+        if e.isModel and players:GetPlayerFromCharacter(obj) then
+            e.isPlayer = true
+            e.hum = obj:FindFirstChildOfClass("Humanoid")
+        end
+        return e
+    end
+
+    local function refreshBox(e)
+        local o = e.obj
+        if e.isPart then
+            e.size = o.Size
+            return true
+        elseif e.isModel then
+            local success, result, result3 = pcall(o.GetBoundingBox, o)
+            if success and result3 then
+                e.size = Vector3.new(math.max(result3.X, 0.5), math.max(result3.Y, 0.5), math.max(result3.Z, 0.5))
+                e.off = o:GetPivot():ToObjectSpace(result)
+                return true
+            end
+        end
+        return false
+    end
+
+    local function worldCF(e)
+        if e.isPart then return e.obj.CFrame end
+        return e.obj:GetPivot() * e.off
+    end
+
+    -- Highlight (хамсы) ---------------------------------------------------
+    local function applyChams(e, col, t, tr)
+        local style = S.chams
+        local want = style ~= "Off" and e.wantHL
+        if not want then
+            if e.hl then e.hl:Destroy() e.hl = nil end
+            return
+        end
+        if not e.hl then
+            local hl = Instance.new("Highlight")
+            hl.Adornee = e.obj
+            hl.Parent = chamFolder
+            e.hl = hl
+        end
+        local hl = e.hl
+        hl.Enabled = true
+        hl.DepthMode = style == "Visible Only" and Enum.HighlightDepthMode.Occluded or Enum.HighlightDepthMode.AlwaysOnTop
+        local fill, out = col, (S.matchColors and col or S.outlineColor)
+        local fillT = S.fillT
+        if style == "Glow" then
+            fillT = math.clamp(S.fillT - 0.3, 0.1, 1)
+            out = col:Lerp(WHITE, 0.5)
+        elseif style == "Pulse" then
+            fillT = math.clamp(S.fillT + math.sin(t * 3 + e.hue * 6) * 0.2, 0, 1)
+        elseif style == "Rainbow" then
+            fill = rainbowAt(t, e.hue)
+            out = S.matchColors and fill or S.outlineColor
+        elseif style == "Outline" then
+            fillT = 1
+        end
+        hl.FillColor, hl.OutlineColor = fill, out
+        hl.FillTransparency = tr(fillT)
+        hl.OutlineTransparency = tr(S.outlineT)
+    end
+
+    -- рендер одного объекта -------------------------------------------------
+    local function renderEntry(e, t, dt, camPos, vs, center)
+        local o = e.obj
+        if not o.Parent then e.dead = true return end
+        if not e.size or t >= e.nextBB then
+            if not refreshBox(e) then hideAll(e) return end
+            e.nextBB = t + 0.25 + (e.hue * 0.1)
+        end
+        local cf = worldCF(e)
+        local dist = (cf.Position - camPos).Magnitude
+        local maxD = Lib.ObjectMaxDistance[o] or Lib.MaxDistance
+        e.dist = dist
+
+        -- fade in / out
+        if S.fadeTime > 0 then
+            local step = dt / S.fadeTime
+            if e.alpha < e.target then e.alpha = math.min(e.alpha + step, e.target)
+            elseif e.alpha > e.target then e.alpha = math.max(e.alpha - step, e.target) end
+        else
+            e.alpha = e.target
+        end
+        if e.target == 0 and e.alpha <= 0 then e.dead = true return end
+
+        if dist > maxD then e.wantHL = false hideAll(e) return end
+        if not e.ui then buildUI(e) end
+        local u = e.ui
+
+        local col = e.color
+        if S.rainbow then col = rainbowAt(t, e.hue) end
+        local df = S.distFade and math.clamp(dist / maxD, 0, 1) * 0.55 or 0
+        local function tr(base) return 1 - (1 - base) * e.alpha * (1 - df) end
+
+        applyChams(e, col, t, tr)
+
+        -- проекция 8 углов
+        local half = e.size / 2
+        local pts, allIn, minX, minY, maxX, maxY, any = {}, true, math.huge, math.huge, -math.huge, -math.huge, false
+        local i = 0
+        for sx = -1, 1, 2 do
+            for sy = -1, 1, 2 do
+                for sz = -1, 1, 2 do
+                    i = i + 1
+                    local sp = cam:WorldToViewportPoint(cf * Vector3.new(half.X * sx, half.Y * sy, half.Z * sz))
+                    pts[i] = Vector2.new(sp.X, sp.Y)
+                    if sp.Z > 0 then
+                        any = true
+                        minX, maxX = math.min(minX, sp.X), math.max(maxX, sp.X)
+                        minY, maxY = math.min(minY, sp.Y), math.max(maxY, sp.Y)
+                    else
+                        allIn = false
+                    end
+                end
+            end
+        end
+        local cp = cam:WorldToViewportPoint(cf.Position)
+        local onScreen = any and cp.Z > 0 and maxX > -50 and minX < vs.X + 50 and maxY > -50 and minY < vs.Y + 50
+
+        if not onScreen then
+            u.root.Visible = false
+            if S.arrows and e.alpha > 0 then
+                local dir = Vector2.new(cp.X, cp.Y) - center
+                if cp.Z < 0 then dir = -dir end
+                if dir.Magnitude < 1 then dir = Vector2.new(0, 1) end
+                local d = dir.Unit
+                local rad = math.min(S.arrowRadius, math.min(vs.X, vs.Y) / 2 - 20)
+                u.arrow.Position = UDim2.fromOffset(center.X + d.X * rad, center.Y + d.Y * rad)
+                u.arrow.Rotation = math.deg(math.atan2(d.Y, d.X)) + 90
+                u.arrow.TextColor3 = col
+                u.arrow.TextTransparency = tr(S.textT)
+                u.arrow.TextSize = 16 + (1 - math.clamp(dist / maxD, 0, 1)) * 10
+                u.arrow.Visible = true
+            else
+                u.arrow.Visible = false
+            end
+            return
+        end
+        u.arrow.Visible = false
+        u.root.Visible = true
+
+        local x, y = minX, minY
+        local w, h = math.max(maxX - minX, 4), math.max(maxY - minY, 4)
+        local th = S.boxThick
+
+        -- бокс
+        u.boxFull.Visible, u.glow.Visible = false, false
+        for _, f in ipairs(u.corners) do f.Visible = false end
+        for _, f in ipairs(u.cube) do f.Visible = false end
+        local style = S.box
+        if style == "Full" or style == "Rounded Glow" then
+            u.boxFull.Visible = true
+            u.boxFull.Position, u.boxFull.Size = UDim2.fromOffset(x, y), UDim2.fromOffset(w, h)
+            u.boxFull.BackgroundTransparency = tr(S.boxFill)
+            u.fillGrad.Color = ColorSequence.new(col, col:Lerp(BLACK, 0.6))
+            u.boxStroke.Thickness, u.boxStroke.Color, u.boxStroke.Transparency = th, col, tr(0)
+            u.boxCorner.CornerRadius = UDim.new(0, style == "Rounded Glow" and 10 or 0)
+            if style == "Rounded Glow" then
+                u.glow.Visible = true
+                u.glow.Position, u.glow.Size = UDim2.fromOffset(x - 2, y - 2), UDim2.fromOffset(w + 4, h + 4)
+                u.glowStroke.Color, u.glowStroke.Transparency = col, tr(0.72)
+            end
+        elseif style == "Corners" then
+            local L = math.max(math.min(w, h) * 0.28, 6)
+            local defs = {
+                { x, y, L, th }, { x, y, th, L }, { x + w - L, y, L, th }, { x + w - th, y, th, L },
+                { x, y + h - th, L, th }, { x, y + h - L, th, L }, { x + w - L, y + h - th, L, th }, { x + w - th, y + h - L, th, L },
+            }
+            for k, d in ipairs(defs) do
+                local f = u.corners[k]
+                f.Position, f.Size = UDim2.fromOffset(d[1], d[2]), UDim2.fromOffset(d[3], d[4])
+                f.BackgroundColor3, f.BackgroundTransparency, f.Visible = col, tr(0), true
+            end
+        elseif style == "3D Box" and allIn then
+            for k, ed in ipairs(CUBE_EDGES) do
+                local f = u.cube[k]
+                if not f then f = newLine(u.root) u.cube[k] = f end
+                setLine(f, pts[ed[1]], pts[ed[2]], th, col, tr(0))
+            end
+        end
+
+        -- полоска HP
+        local hum = e.hum
+        if hum and not hum.Parent then hum = nil e.hum = nil end
+        if S.hpBar and hum and hum.MaxHealth > 0 then
+            local ratio = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+            u.hpBg.Visible = true
+            u.hpBg.Position, u.hpBg.Size = UDim2.fromOffset(x - 6, y), UDim2.fromOffset(3, h)
+            u.hpBg.BackgroundTransparency = tr(0.45)
+            u.hpFill.Size = UDim2.fromScale(1, ratio)
+            u.hpFill.BackgroundColor3 = Color3.fromRGB(255, 70, 70):Lerp(Color3.fromRGB(80, 235, 130), ratio)
+            u.hpFill.BackgroundTransparency = tr(0)
+        else
+            u.hpBg.Visible = false
+        end
+
+        -- подписи
+        u.pill.Visible, u.plainT.Visible, u.infoT.Visible = false, false, false
+        if Lib.ShowESPText ~= false and (e.text ~= "" or S.showDist) then
+            local distTxt = S.showDist and string.format("%dm", math.floor(dist)) or nil
+            local ts = S.textSize
+            if S.nameStyle == "Pill" then
+                local main = esc(e.text)
+                if distTxt then main = main .. (main ~= "" and '  <font color="#9aa0b4">' or '<font color="#9aa0b4">') .. distTxt .. "</font>" end
+                u.nameT.Font = S.font
+                u.nameT.TextSize = ts
+                u.nameT.Text = main
+                u.nameT.TextTransparency = tr(S.textT)
+                u.nameS.Transparency = tr(S.textOutlineT)
+                local pw = u.nameT.TextBounds.X + 22
+                local ph = ts + 10
+                u.pill.Size = UDim2.fromOffset(pw, ph)
+                u.pill.Position = UDim2.fromOffset(x + w / 2 - pw / 2, y - ph - 5)
+                u.pill.BackgroundTransparency = tr(0.15)
+                u.pill.Visible = true
+                u.accent.BackgroundColor3 = col
+                u.accent.BackgroundTransparency = tr(0)
+                u.pillStroke.Color, u.pillStroke.Transparency = col, tr(0.35)
+            else
+                local main = '<font color="' .. hex(col) .. '">' .. esc(e.text) .. "</font>"
+                if distTxt then main = main .. '  <font color="#c8ccda">' .. distTxt .. "</font>" end
+                u.plainT.Font = S.font
+                u.plainT.TextSize = ts
+                u.plainT.Text = main
+                u.plainT.TextTransparency = tr(S.textT)
+                u.plainS.Transparency = tr(S.textOutlineT)
+                u.plainT.Position = UDim2.fromOffset(x + w / 2, y - 3)
+                u.plainT.Visible = true
+            end
+            if S.hpText and hum and hum.MaxHealth > 0 and hum.Health > 0 then
+                u.infoT.Font = S.font
+                u.infoT.TextSize = math.max(ts - 2, 9)
+                u.infoT.Text = math.floor(hum.Health) .. " hp"
+                u.infoT.TextTransparency = tr(S.textT)
+                u.infoS.Transparency = tr(S.textOutlineT)
+                u.infoT.Position = UDim2.fromOffset(x + w / 2, y + h + 3)
+                u.infoT.Visible = true
+            end
+        end
+
+        -- скелет / точка на голове / линия взгляда (только персонажи)
+        local char = e.isModel and hum and o or nil
+        if S.skeleton and char then
+            local bones = char:FindFirstChild("UpperTorso") and BONES_R15 or BONES_R6
+            for k, b in ipairs(bones) do
+                local f = u.bones[k]
+                if not f then f = newLine(u.root) u.bones[k] = f end
+                local child, child2 = char:FindFirstChild(b[1]), char:FindFirstChild(b[2])
+                if child and child2 then
+                    local screenPoint, screenPoint2 = cam:WorldToViewportPoint(child.Position), cam:WorldToViewportPoint(child2.Position)
+                    if screenPoint.Z > 0 and screenPoint2.Z > 0 then
+                        setLine(f, Vector2.new(screenPoint.X, screenPoint.Y), Vector2.new(screenPoint2.X, screenPoint2.Y), 1.4, col, tr(0))
+                    else
+                        f.Visible = false
+                    end
+                else
+                    f.Visible = false
+                end
+            end
+        else
+            for _, f in ipairs(u.bones) do f.Visible = false end
+        end
+        local head = char and char:FindFirstChild("Head")
+        if S.headDot and head then
+            local sp = cam:WorldToViewportPoint(head.Position)
+            local d = math.clamp(h * 0.13, 5, 16)
+            u.dot.Size = UDim2.fromOffset(d, d)
+            u.dot.Position = UDim2.fromOffset(sp.X, sp.Y)
+            u.dot.BackgroundColor3, u.dot.BackgroundTransparency = col, tr(0)
+            u.dot.Visible = sp.Z > 0
+        else
+            u.dot.Visible = false
+        end
+        if S.lookLine and head then
+            local a = cam:WorldToViewportPoint(head.Position)
+            local b = cam:WorldToViewportPoint(head.Position + head.CFrame.LookVector * 7)
+            if a.Z > 0 and b.Z > 0 then
+                setLine(u.lookLine, Vector2.new(a.X, a.Y), Vector2.new(b.X, b.Y), 1.6, col, tr(0.15))
+            else
+                u.lookLine.Visible = false
+            end
+        else
+            u.lookLine.Visible = false
+        end
+
+        -- трейсер
+        if (Lib.Tracers == true or Lib.TracersEnabled[o]) and cp.Z > 0 then
+            local from
+            if S.tracerFrom == "Center" then from = center
+            elseif S.tracerFrom == "Top" then from = Vector2.new(vs.X / 2, 0)
+            else from = Vector2.new(vs.X / 2, vs.Y) end
+            setLine(u.tracer, from, Vector2.new(cp.X, cp.Y), math.max(S.tracerThick, 0.5) + 0.5, col, tr(0.2))
+        else
+            u.tracer.Visible = false
+        end
+    end
+
+    -- ближайшим N объектам даём Highlight (Roblox рисует не больше ~31)
+    local lastRank = 0
+    local function rankChams(camPos)
+        local list = {}
+        for _, e in pairs(entries) do
+            if e.size then list[#list + 1] = e end
+        end
+        table.sort(list, function(a, b) return (a.dist or 1e9) < (b.dist or 1e9) end)
+        local limit = math.min(S.chamLimit, 31)
+        for rank, e in ipairs(list) do e.wantHL = rank <= limit end
+    end
+
+    local conn
+    conn = runService.RenderStepped:Connect(function(dt)
+        cam = workspace.CurrentCamera
+        if not cam or not alive then return end
+        local t = os.clock()
+        local vs = cam.ViewportSize
+        local center = vs / 2
+        local camPos = cam.CFrame.Position
+        if t - lastRank > 0.2 then
+            lastRank = t
+            pcall(rankChams, camPos)
+        end
+        local dead
+        for obj, e in pairs(entries) do
+            local ok = pcall(renderEntry, e, t, dt, camPos, vs, center)
+            if not ok then hideAll(e) end
+            if e.dead then
+                dead = dead or {}
+                dead[#dead + 1] = obj
+            end
+        end
+        if dead then
+            for _, obj in ipairs(dead) do
+                local e = entries[obj]
+                if e then destroyUI(e) end
+                entries[obj] = nil
+                Lib.ColorTable[obj] = nil
+                Lib.TracersEnabled[obj] = nil
+            end
+        end
+    end)
+
+    -- ---------------------------------------------------------------- API
+    function Lib:AddESP(data)
+        local obj = data and data.Object
+        if typeof(obj) ~= "Instance" then return end
+        local e = entries[obj]
+        if not e then
+            e = newEntry(obj)
+            entries[obj] = e
+        end
+        e.dead, e.target = nil, 1
+        e.text = data.Text or ""
+        e.color = data.Color or WHITE
+        Lib.ColorTable[obj] = e.color
+        return e
+    end
+
+    function Lib:RemoveESP(obj)
+        local e = entries[obj]
+        if not e then return end
+        if S.fadeTime > 0 and e.ui then
+            e.target = 0
+        else
+            destroyUI(e)
+            entries[obj] = nil
+            Lib.ColorTable[obj] = nil
+        end
+    end
+
+    function Lib:UpdateObjectColor(obj, col)
+        local e = entries[obj]
+        if e then e.color = col end
+        if e or Lib.ColorTable[obj] then Lib.ColorTable[obj] = col end
+    end
+
+    function Lib:SetTracersEnabled(obj, value)
+        Lib.TracersEnabled[obj] = value and true or nil
+    end
+
+    function Lib:UpdateObjectText(obj, text)
+        local e = entries[obj]
+        if e then e.text = text or "" end
+    end
+
+    function Lib:SetSetting(key, value) S[key] = value end
+    function Lib:SetRainbow(v) S.rainbow = v and true or false end
+    function Lib:SetTracerOrigin(v) S.tracerFrom = v or "Bottom" end
+    function Lib:SetShowDistance(v) S.showDist = v and true or false end
+    function Lib:SetTextSize(v) S.textSize = v end
+    function Lib:SetFont(v) S.font = v or Enum.Font.GothamBold end
+    function Lib:SetRenderLimit(v) S.chamLimit = v end
+    function Lib:SetFillTransparency(v) S.fillT = v end
+    function Lib:SetOutlineTransparency(v) S.outlineT = v end
+    function Lib:SetTextTransparency(v) S.textT = v end
+    function Lib:SetTextOutlineTransparency(v) S.textOutlineT = v end
+    function Lib:SetFadeTime(v) S.fadeTime = v or 0 end
+    function Lib:SetArrows(v) S.arrows = v and true or false end
+    function Lib:SetArrowRadius(v) S.arrowRadius = v end
+    function Lib:SetTracerSize(v) S.tracerThick = v end
+    function Lib:SetMatchColors(v) S.matchColors = v and true or false end
+    function Lib:SetOutlineColor(v) S.outlineColor = v or WHITE end
+
+    function Lib:Unload()
+        if not alive then return end
+        alive = false
+        if conn then conn:Disconnect() end
+        for _, e in pairs(entries) do destroyUI(e) end
+        table.clear(entries)
+        pcall(function() gui:Destroy() end)
+        pcall(function() chamFolder:Destroy() end)
+    end
+
+    return Lib
 end
-loader.ObjectMaxDistance = {}
+
+local success, result = pcall(createESPEngine)
+if success and result then
+    loader = result
+else
+    warn("[Moro] ESP engine failed: " .. tostring(result))
+    loader = {
+        ObjectMaxDistance = {}, TracersEnabled = {}, ColorTable = {}, Settings = {},
+        AddESP = function() end, RemoveESP = function() end, Unload = function() end,
+    }
+    setmetatable(loader, { __index = function() return function() end end })
+end
+end
 
 SoundService = soundService
 Lighting = lighting
@@ -1036,8 +1646,8 @@ ProximityPromptService = proximityPromptService
 TweenService = tweenService
 ContextActionService = contextActionService
 VirtualInputManager = virtualInputManager
-local localPlayer2 = players.LocalPlayer
-local playerGui = localPlayer2:FindFirstChildOfClass("PlayerGui")
+local localPlayer = players.LocalPlayer
+local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
 local currentCamera = workspace.CurrentCamera
 local currentRooms = workspace:FindFirstChild("CurrentRooms")
 
@@ -1046,9 +1656,9 @@ _CameraChangedConn = workspace:GetPropertyChangedSignal("CurrentCamera"):Connect
 end)
 
 PartProperties = {}
-local element2
+local latestRoomValue
 
-local function helper5()
+local function trackLatestRoom()
   local latestRoom = replicatedStorage:FindFirstChild("GameData")
     and replicatedStorage.GameData:FindFirstChild("LatestRoom")
 
@@ -1057,15 +1667,15 @@ local function helper5()
       and replicatedStorage.FloorReplicated:FindFirstChild("LatestRoom")
   end
 
-  if latestRoom and latestRoom ~= element2 then
-    element2 = latestRoom
+  if latestRoom and latestRoom ~= latestRoomValue then
+    latestRoomValue = latestRoom
 
-    if element2.Value then
-      localPlayer2:SetAttribute("CurrentRoom", element2.Value)
+    if latestRoomValue.Value then
+      localPlayer:SetAttribute("CurrentRoom", latestRoomValue.Value)
     end
 
-    element2.Changed:Connect(function(p25)
-      localPlayer2:SetAttribute("CurrentRoom", p25)
+    latestRoomValue.Changed:Connect(function(value)
+      localPlayer:SetAttribute("CurrentRoom", value)
 
       if Toggles and Toggles.AmbientToggle and Toggles.AmbientToggle.Value then
         TweenService:Create(Lighting, TweenInfo.new(0.2, Enum.EasingStyle.Exponential), {
@@ -1077,28 +1687,28 @@ local function helper5()
   return latestRoom
 end
 
-helper5()
+trackLatestRoom()
 
-local function helper6(val82)
-  val82.ChildAdded:Connect(function(child)
+local function watchGameData(gameData)
+  gameData.ChildAdded:Connect(function(child)
     if child.Name == "LatestRoom" then
-      helper5()
+      trackLatestRoom()
     end
   end)
 
-  if val82:FindFirstChild("LatestRoom") then
-    helper5()
+  if gameData:FindFirstChild("LatestRoom") then
+    trackLatestRoom()
   end
 end
 
 local gameData = replicatedStorage:FindFirstChild("GameData")
 
 if gameData then
-  helper6(gameData)
+  watchGameData(gameData)
 else
-  replicatedStorage.ChildAdded:Connect(function(child2)
-    if child2.Name == "GameData" then
-      helper6(child2)
+  replicatedStorage.ChildAdded:Connect(function(child)
+    if child.Name == "GameData" then
+      watchGameData(child)
     end
   end)
 end
@@ -1107,9 +1717,9 @@ do
   local floorReplicated = replicatedStorage:FindFirstChild("FloorReplicated")
 
   if floorReplicated then
-    floorReplicated.ChildAdded:Connect(function(child3)
-      if child3.Name == "LatestRoom" then
-        helper5()
+    floorReplicated.ChildAdded:Connect(function(child)
+      if child.Name == "LatestRoom" then
+        trackLatestRoom()
       end
     end)
   end
@@ -1118,13 +1728,13 @@ end
 local toggles = library.Toggles
 local options = library.Options
 
-local val83 = {
+local threatState = {
   Sunk = false, ActiveThreats = {}, ThreatNames = {
     RushMoving = true, Rush = true, AmbushMoving = true, Ambush = true, A60 = true, A60Moving = true, ["A-60"] = true, A120 = true, A120Moving = true, ["A-120"] = true, BackdoorRush = true, BlitzMoving = true, Blitz = true, ["RNIUSHCG=="] = true, GlitchRush = true, AR0xMBUSH = true, GlitchAmbush = true, FrozenAmbush = true, CustomEntity = true, BashMoving = true, }, }
 
 local function HasActiveThreat()
-  if val83 and val83.ActiveThreats then
-    for threat, active in pairs(val83.ActiveThreats) do
+  if threatState and threatState.ActiveThreats then
+    for threat, active in pairs(threatState.ActiveThreats) do
       if active and threat and threat.Parent then
         return true, threat
       end
@@ -1153,21 +1763,21 @@ local function HasActiveThreat()
   return false, nil
 end
 
-local function helper7()
-  local value6 = options.GodmodeMethod and options.GodmodeMethod.Value
+local function getGodmodeMode()
+  local value = options.GodmodeMethod and options.GodmodeMethod.Value
 
-  if typeof(value6) == "number" then
-    return value6 == 2 and 2 or 1
+  if typeof(value) == "number" then
+    return value == 2 and 2 or 1
   end
 
-  if value6 == "On entity spawn" then
+  if value == "On entity spawn" then
     return 2
   end
 
   return 1
 end
 
-local function helper8()
+local function isGodmodeActive()
   if KnobFarm and KnobFarm.Active then
     if KnobFarm.DisableGodmodeForBoss then
       return false
@@ -1186,44 +1796,44 @@ local function helper8()
     return true
   end
 
-  if helper7() == 1 then
+  if getGodmodeMode() == 1 then
     return true
   end
 
-  if helper7() == 2 then
+  if getGodmodeMode() == 2 then
     return HasActiveThreat()
   end
 
   return false
 end
 
-local function helper9(val84)
-  if not val84 or not val83.ThreatNames[val84.Name] then
+local function trackThreat(descendant)
+  if not descendant or not threatState.ThreatNames[descendant.Name] then
     return
   end
 
-  if val83.ActiveThreats[val84] then
+  if threatState.ActiveThreats[descendant] then
     return
   end
 
-  val83.ActiveThreats[val84] = true
+  threatState.ActiveThreats[descendant] = true
 
-  val84.AncestryChanged:Connect(function(p28, p29)
-    if not p29 then
-      val83.ActiveThreats[val84] = nil
+  descendant.AncestryChanged:Connect(function(_, parent)
+    if not parent then
+      threatState.ActiveThreats[descendant] = nil
     end
   end)
 end
 
-workspace.DescendantAdded:Connect(helper9)
+workspace.DescendantAdded:Connect(trackThreat)
 
-for v94, v95 in workspace:GetDescendants() do
-  helper9(v95)
+for _, descendant in workspace:GetDescendants() do
+  trackThreat(descendant)
 end
 
 local character, humanoidRootPart
 
-local function helper10()
+local function setupCustomPhysics()
   if not character or not humanoidRootPart then
     return
   end
@@ -1234,18 +1844,18 @@ local function helper10()
     100, humanoidRootPart.CustomPhysicalProperties.Friction, humanoidRootPart.CustomPhysicalProperties.Elasticity, humanoidRootPart.CustomPhysicalProperties.FrictionWeight, humanoidRootPart.CustomPhysicalProperties.ElasticityWeight
   )
 
-  for v96, v97 in character:GetDescendants() do
-    if v97:IsA("BasePart") then
-      PartProperties[v97] = v97.CustomPhysicalProperties
+  for _, descendant in character:GetDescendants() do
+    if descendant:IsA("BasePart") then
+      PartProperties[descendant] = descendant.CustomPhysicalProperties
 
       if toggles.RemoveAcceleration and toggles.RemoveAcceleration.Value then
-        v97.CustomPhysicalProperties = CustomPhysics
+        descendant.CustomPhysicalProperties = CustomPhysics
       end
     end
   end
 end
 
-local function helper11()
+local function detectFloor()
   if workspace:FindFirstChild("Lobby") then
     return "Lobby"
   end
@@ -1256,19 +1866,19 @@ local function helper11()
     return "Lobby"
   end
 
-  local floor3 = gameData2:FindFirstChild("Floor")
+  local floor = gameData2:FindFirstChild("Floor")
 
-  if not floor3 then
+  if not floor then
     return "Lobby"
   end
 
-  local strVal2 = tostring(floor3.Value)
+  local text = tostring(floor.Value)
 
-  if strVal2 == "" then
+  if text == "" then
     return "Lobby"
   end
 
-  if strVal2 == "Hotel" then
+  if text == "Hotel" then
     local remotesFolder = replicatedStorage:FindFirstChild("RemotesFolder")
       or replicatedStorage:FindFirstChild("Bricks")
 
@@ -1277,14 +1887,14 @@ local function helper11()
     end
   end
 
-  return strVal2
+  return text
 end
 
 CurrentFloor = nil
 OldJump = false
 OldSlide = false
 
-local function helper12()
+local function applyCharacterAttributes()
   if JumpAttributeConnection then
     JumpAttributeConnection:Disconnect()
   end
@@ -1335,10 +1945,10 @@ local function helper12()
   end)
 end
 
-local humanoid, collision, collisionPart, val85
+local humanoid, collision, collisionPart, featureState
 
-local function helper13()
-  character = localPlayer2.Character
+local function setupCharacter()
+  character = localPlayer.Character
 
   if character then
     humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -1350,29 +1960,29 @@ local function helper13()
     collisionPart = character:FindFirstChild("CollisionPart")
       or character:FindFirstChild("Collision")
 
-    helper10()
-    helper12()
+    setupCustomPhysics()
+    applyCharacterAttributes()
 
-    if val85 then
+    if featureState then
       local lowerTorso = character:FindFirstChild("LowerTorso")
       local root = lowerTorso and lowerTorso:FindFirstChild("Root")
 
       if root then
-        val85.OriginalC1 = root.C1
+        featureState.OriginalC1 = root.C1
       end
 
-      val83.Sunk = false
+      threatState.Sunk = false
     end
   end
 end
 
 FakePrompts = {}
 Connections = {}
-local remotesFolder2
+local remotesFolder
 
 do
-  local connect, connect2
-  local connect3
+  local connect, anticheatConnection2
+  local anticheatConnection3
 
   function SetupCharacterAnticheat()
     if not character then
@@ -1384,49 +1994,49 @@ do
       connect = nil
     end
 
-    if connect2 then
-      connect2:Disconnect()
-      connect2 = nil
+    if anticheatConnection2 then
+      anticheatConnection2:Disconnect()
+      anticheatConnection2 = nil
     end
 
-    if connect3 then
-      connect3:Disconnect()
-      connect3 = nil
+    if anticheatConnection3 then
+      anticheatConnection3:Disconnect()
+      anticheatConnection3 = nil
     end
 
     connect = character:GetAttributeChangedSignal("Climbing"):Connect(function()
       if character:GetAttribute("Climbing") == true and toggles.DisableAnticheat.Value
-        and not val85.AnticheatDisabled then
+        and not featureState.AnticheatDisabled then
         task.wait(0.25)
         character:SetAttribute("Climbing", false)
-        val85.AnticheatDisabled = true
+        featureState.AnticheatDisabled = true
 
         library:Notify({
           Title = "Disabled anticheat", Description = "Re-enables after cutscenes or halt", Time = 5, })
       end
     end)
 
-    if remotesFolder2 then
-      connect2 = remotesFolder2:WaitForChild("Cutscene").OnClientEvent:Connect(function(p30)
-        if val85.AnticheatDisabled and not p30:find("SewerSeek") then
-          val85.AnticheatDisabled = false
+    if remotesFolder then
+      anticheatConnection2 = remotesFolder:WaitForChild("Cutscene").OnClientEvent:Connect(function(arg1)
+        if featureState.AnticheatDisabled and not arg1:find("SewerSeek") then
+          featureState.AnticheatDisabled = false
 
           library:Notify({
             Title = "Anticheat re-enabled", Description = "Interact with a ladder for re-disabling", Time = 5, })
         end
       end)
 
-      connect3 = remotesFolder2:WaitForChild("UseEnemyModule").OnClientEvent:Connect(function(p31)
-        if p31 == "Void" or p31 == "Glitch" then
-          if val85.AnticheatDisabled then
-            val85.AnticheatDisabled = false
+      anticheatConnection3 = remotesFolder:WaitForChild("UseEnemyModule").OnClientEvent:Connect(function(arg1)
+        if arg1 == "Void" or arg1 == "Glitch" then
+          if featureState.AnticheatDisabled then
+            featureState.AnticheatDisabled = false
 
             library:Notify({
               Title = "Anticheat re-enabled", Description = "Interact with a ladder for re-disabling", Time = 5, })
           end
 
-          if element2 then
-            localPlayer2:SetAttribute("CurrentRoom", element2.Value)
+          if latestRoomValue then
+            localPlayer:SetAttribute("CurrentRoom", latestRoomValue.Value)
           end
         end
       end)
@@ -1436,16 +2046,16 @@ do
   end
 end
 
-helper13()
-local helper14, helper15, helper16, helper17, helper18, onEvent
+setupCharacter()
+local refreshWalkspeed, refreshFly, refreshInfiniteJump, refreshNoclip, refreshThirdPerson, refreshPhase
 
-localPlayer2.CharacterAdded:Connect(function()
+localPlayer.CharacterAdded:Connect(function()
   task.wait(0.5)
-  helper13()
-  helper14()
+  setupCharacter()
+  refreshWalkspeed()
 
   if toggles.FlyToggle.Value then
-    helper15()
+    refreshFly()
   end
 
   if toggles.ArchiveChairFly.Value
@@ -1453,25 +2063,25 @@ localPlayer2.CharacterAdded:Connect(function()
     StopChairBypass()
   end
 
-  helper16()
-  helper17()
-  helper18()
-  onEvent()
+  refreshInfiniteJump()
+  refreshNoclip()
+  refreshThirdPerson()
+  refreshPhase()
 
   task.spawn(function()
     task.wait(1)
 
-    if helper8() and val83 and not val83.Sunk and CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
-      if humanoidRootPart and humanoid and remotesFolder2 then
+    if isGodmodeActive() and threatState and not threatState.Sunk and CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
+      if humanoidRootPart and humanoid and remotesFolder then
         humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, -2.346, 0)
         humanoid.HipHeight = 0.05
-        local crouch = remotesFolder2:FindFirstChild("Crouch")
+        local crouch = remotesFolder:FindFirstChild("Crouch")
 
         if crouch then
           crouch:FireServer(true, true)
         end
 
-        val83.Sunk = true
+        threatState.Sunk = true
       end
     end
   end)
@@ -1480,13 +2090,13 @@ localPlayer2.CharacterAdded:Connect(function()
   SetupBringItems()
 end)
 
-remotesFolder2 = replicatedStorage:FindFirstChild("RemotesFolder")
+remotesFolder = replicatedStorage:FindFirstChild("RemotesFolder")
 
-if not remotesFolder2 then
+if not remotesFolder then
   if replicatedStorage:FindFirstChild("EntityInfo") then
-    remotesFolder2 = replicatedStorage:FindFirstChild("EntityInfo")
+    remotesFolder = replicatedStorage:FindFirstChild("EntityInfo")
   elseif replicatedStorage:FindFirstChild("Bricks") then
-    remotesFolder2 = replicatedStorage:FindFirstChild("Bricks")
+    remotesFolder = replicatedStorage:FindFirstChild("Bricks")
   end
 end
 
@@ -1498,15 +2108,15 @@ FakeEvents.Shade.Name = "ShadeResult"
 FakeEvents.A90.Name = "A90"
 FakeEvents.Surge.Name = "SurgeRemote"
 
-if remotesFolder2 then
-  FakeEvents.Screech_Real = remotesFolder2:FindFirstChild("Screech") or remotesFolder2:WaitForChild("Screech", 2)
-  FakeEvents.Shade_Real = remotesFolder2:FindFirstChild("ShadeResult") or remotesFolder2:WaitForChild("ShadeResult", 2)
-  FakeEvents.A90_Real = remotesFolder2:FindFirstChild("A90") or remotesFolder2:WaitForChild("A90", 2)
-  FakeEvents.Surge_Real = remotesFolder2:FindFirstChild("SurgeRemote") or remotesFolder2:WaitForChild("SurgeRemote", 2)
+if remotesFolder then
+  FakeEvents.Screech_Real = remotesFolder:FindFirstChild("Screech") or remotesFolder:WaitForChild("Screech", 2)
+  FakeEvents.Shade_Real = remotesFolder:FindFirstChild("ShadeResult") or remotesFolder:WaitForChild("ShadeResult", 2)
+  FakeEvents.A90_Real = remotesFolder:FindFirstChild("A90") or remotesFolder:WaitForChild("A90", 2)
+  FakeEvents.Surge_Real = remotesFolder:FindFirstChild("SurgeRemote") or remotesFolder:WaitForChild("SurgeRemote", 2)
 end
 
-local function helper19()
-  local playerGui2 = localPlayer2:FindFirstChildOfClass("PlayerGui")
+local function getRemoteModules()
+  local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
   local mainUI = playerGui2 and playerGui2:FindFirstChild("MainUI")
   local initiator = mainUI and mainUI:FindFirstChild("Initiator")
   local mainGame = initiator and initiator:FindFirstChild("Main_Game")
@@ -1520,118 +2130,114 @@ local moroWindow = library:CreateWindow({
   ToggleKey = Enum.KeyCode.RightShift,
 })
 
-element3 = {
+tabs = {
   Home = dummyTab, -- Home tab removed as requested
-  Main = moroWindow:AddTab("Main", "house"),
-  AutoFarm = moroWindow:AddTab("Auto Farm", "bot"),
-  Visuals = moroWindow:AddTab("Visuals", "scan-eye"),
-  Exploits = moroWindow:AddTab("Exploits", "sparkle"),
-  Miscellaneous = moroWindow:AddTab("misc", "settings"),
-  Mines = moroWindow:AddTab("Mines", "gem"),
+  Main = moroWindow:AddTab("Main", "house", {
+    { "Character", "user", { "Character" } },
+    { "Noclip", "ghost", { "Phantom Noclip" } },
+    { "Other", "sliders-horizontal", { "Other" } },
+  }),
+  AutoFarm = moroWindow:AddTab("Auto Farm", "bot", {
+    { "Knob Farm", "bot", { "Knob Farm", "Settings" } },
+    { "Door Skip", "door-open", { "Auto Door Skip" } },
+  }),
+  Visuals = moroWindow:AddTab("Visuals", "scan-eye", {
+    { "ESP", "eye", { "Targets", "ESP Preset" } },
+    { "ESP Style", "box-select", { "Chams & Boxes", "Labels", "Tracers & Arrows", "Colors" } },
+    { "Notifications", "bell", { "Entity Notifications", "Item Notifications" } },
+    { "Camera", "camera", { "Camera" } },
+    { "Models", "box", { "Model Library", "Model Search", "Swap Options", "Swap: Players", "Swap: Figure", "Swap: Seek",
+      "Swap: Rush and clones", "Swap: Ambush and clones", "Swap: A-60 / A-120", "Swap: Eyes / Lookman", "Swap: Custom entity" } },
+    { "HUD", "layout-dashboard", { "HUD" } },
+  }),
+  Exploits = moroWindow:AddTab("Exploits", "sparkle", {
+    { "Pre-Run", "rocket", { "Pre-Run" } },
+    { "Bypasses", "shield-off", { "Bypasses", "Removals", "Damage" } },
+    { "Prompts", "mouse-pointer-click", { "Prompts", "Crucifix Everything" } },
+    { "Exploits", "zap", { "Exploits" } },
+    { "Automation", "cpu", { "Automation" } },
+  }),
+  Miscellaneous = moroWindow:AddTab("Misc", "settings", {
+    { "Misc", "wrench", { "Miscellaneous" } },
+    { "Fun", "party-popper", { "Fun" } },
+  }),
+  Mines = moroWindow:AddTab("Mines", "gem", {
+    { "Ladders", "arrow-up-down", { "Ladders", "Anticheat" } },
+    { "Automation", "cpu", { "Automation" } },
+    { "Visuals", "eye", { "Visuals" } },
+  }),
   FoolsHotel = moroWindow:AddTab("Hotel-/Fools", "party-popper"),
   Rooms = moroWindow:AddTab("Rooms", "bed-double"),
   Garden = moroWindow:AddTab("Outdoors", "tree-pine"),
-  Archives = moroWindow:AddTab("Archives", "archive"),
+  Archives = moroWindow:AddTab("Archives", "archive", {
+    { "Archives", "archive", { "Archives" } },
+    { "Anticheat", "shield", { "Anticheat Bypass" } },
+    { "Addons", "puzzle", { "Archives Addons" } },
+  }),
   Stairwell = moroWindow:AddTab("Stairwell", "tv"),
 }
 moroWindow:AddSettingsTab()
 do
-  local val86 = safeCall6(element3.FoolsHotel)
+  local tabLabel = getTabLabel(tabs.FoolsHotel)
 
-  if val86 then
-    element3.FoolsHotel.TabLabelRef = val86
+  if tabLabel then
+    tabs.FoolsHotel.TabLabelRef = tabLabel
   end
 end
 
 Groupboxes = {}
-Groupboxes.SubfloorsFools = element3.FoolsHotel:AddLeftGroupbox("Fools")
 
-Groupboxes.SubfloorsFools:AddToggle("BypassKillbricks", {
-  Text = "Anti Killbricks", Default = false, Tooltip = "Disables Lava from hurting you", })
+-- handlers (named callbacks of the menu) and per-block menu builders
+Handlers = {}
+Menus = {}
 
-Groupboxes.SubfloorsFools:AddToggle("BypassSeekingWall", {
-  Text = "Anti Seeking Wall", Default = false, Tooltip = "Disables ScaryWall from hurting you", })
 
-Groupboxes.SubfloorsFools:AddToggle("BypassBanana", {
-  Text = "Anti Banana", Default = false, Tooltip = "Disables Banana Peel from making you slip", })
+function Handlers.SkipCurrentRoom()
+  task.spawn(function()
+    local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-Groupboxes.SubfloorsFools:AddToggle("BypassJeff", {
-  Text = "Anti Jeff", Default = false, Tooltip = "Disables Jeff the Killer from stabbing you", })
+    if not currentRooms2 then
+      return
+    end
 
-Groupboxes.SubfloorsFools:AddDivider()
+    local value = latestRoomValue and latestRoomValue.Value or localPlayer:GetAttribute("CurrentRoom")
 
-Groupboxes.SubfloorsFools:AddToggle("RemoveSeekTrigger", {
-  Text = "Delete Seek Trigger", Default = false, Tooltip = "Deletes/disables the Seek cutscene trigger", DisabledTooltip = "Your executor doesn't support this feature :(", })
+    if not value then
+      return
+    end
 
-Groupboxes.SubfloorsFools:AddToggle("RemoveFigure", {
-  Text = "Delete Figure", Default = false, Tooltip = "Removes Figure, however this is inconsistent", DisabledTooltip = "Your executor doesn't support this feature :(", })
+    local findFirstChild = currentRooms2:FindFirstChild(tostring(value))
 
-Groupboxes.SubfloorsFools:AddToggle("AutoRevive", {
-  Text = "Infinite Revives", Default = false, Tooltip = "Automatically revives after dying without using a revive and having infinite usage", })
+    if not findFirstChild then
+      return
+    end
 
-Groupboxes.SubfloorsFools:AddToggle("FigureGodmode", {
-  Text = "Figure Godmode", Default = false, Tooltip = "Prevents Figure from hurting you", })
+    local door = findFirstChild:FindFirstChild("Door", true)
 
-Groupboxes.SubfloorsFools:AddDivider()
+    if not door or not door:IsA("MeshPart") then
+      local doorMeshes = {}
 
-Groupboxes.SubfloorsFools:AddToggle("RemoveBasementGate", {
-  Text = "Remove Basement Gate", Default = false, Tooltip = "Removes the gate from basement rooms", })
-
-Groupboxes.SubfloorsFools:AddToggle("RemovePaintingsDoor", {
-  Text = "Remove Paintings Door", Default = false, Tooltip = "Removes the fireplace doors from painting rooms", })
-
-Groupboxes.SubfloorsFools:AddToggle("RemoveSkeletonDoor", {
-  Text = "Remove Skeleton Door", Default = false, Tooltip = "Removes the skeleton door from the infirmary", })
-
-Groupboxes.SubfloorsFools:AddToggle("AutoRoomSkip", {
-  Text = "Auto Room-Skip", Default = false, Tooltip = "Automatically teleports to the next room", })
-
-Groupboxes.SubfloorsFools:AddButton({
-  Text = "Skip Current Room", Tooltip = "Teleports you to the current room's door", Func = function()
-    task.spawn(function()
-      local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
-
-      if not currentRooms2 then
-        return
-      end
-
-      local value7 = element2 and element2.Value or localPlayer2:GetAttribute("CurrentRoom")
-
-      if not value7 then
-        return
-      end
-
-      local findFirstChild = currentRooms2:FindFirstChild(tostring(value7))
-
-      if not findFirstChild then
-        return
-      end
-
-      local findFirstChild2 = findFirstChild:FindFirstChild("Door", true)
-
-      if not findFirstChild2 or not findFirstChild2:IsA("MeshPart") then
-        local val87 = {}
-
-        for v103, v104 in findFirstChild:GetDescendants() do
-          if v104:IsA("MeshPart") and v104.Name == "Door" then
-            table.insert(val87, v104)
-          end
-        end
-
-        findFirstChild2 = val87[#val87]
-
-        if not findFirstChild2 then
-          return
+      for _, descendant in findFirstChild:GetDescendants() do
+        if descendant:IsA("MeshPart") and descendant.Name == "Door" then
+          table.insert(doorMeshes, descendant)
         end
       end
 
-      local character2 = localPlayer2.Character
+      door = doorMeshes[#doorMeshes]
 
-      if character2 then
-        character2:PivotTo(CFrame.new(findFirstChild2.Position))
+      if not door then
+        return
       end
-    end)
-  end, })
+    end
+
+    local character2 = localPlayer.Character
+
+    if character2 then
+      character2:PivotTo(CFrame.new(door.Position))
+    end
+  end)
+end
+
 
 Groupboxes.SubfloorsOutdoors = false
 
@@ -1649,10 +2255,10 @@ local rawGenv = (type(getgenv) == "function" and getgenv()) or {}
 RootEnv = setmetatable({}, {
   __index = function(_, k)
     if rawGenv[k] ~= nil then return rawGenv[k] end
-    local ok, res = pcall(function() return getfenv(0)[k] end)
-    if ok and res ~= nil then return res end
-    local ok2, res2 = pcall(function() return getfenv()[k] end)
-    if ok2 and res2 ~= nil then return res2 end
+    local success, result = pcall(function() return getfenv(0)[k] end)
+    if success and result ~= nil then return result end
+    local success2, result3 = pcall(function() return getfenv()[k] end)
+    if success2 and result3 ~= nil then return result3 end
     return _G[k]
   end
 })
@@ -1660,10 +2266,9 @@ RootEnv = setmetatable({}, {
 Executor = {
   isnetworkowner = RootEnv.isnetworkowner, firetouchinterest = RootEnv.firetouchinterest, replicatesignal = RootEnv.replicatesignal, fireproximityprompt = RootEnv.fireproximityprompt, hookmetamethod = RootEnv.hookmetamethod, newcclosure = RootEnv.newcclosure, getnamecallmethod = RootEnv.getnamecallmethod, require = RootEnv.require, hookfunction = RootEnv.hookfunction or RootEnv.replaceclosure, getconnections = RootEnv.getconnections, }
 
-Groupboxes.HomeFunctions = element3.Home:AddLeftGroupbox("Functions & Features")
 
-local function helper20(val90)
-  return val90 and "â" or "â"
+local function statusIcon(enabled)
+  return enabled and "â" or "â"
 end
 
 hasFirePrompt = Executor.fireproximityprompt ~= nil
@@ -1676,242 +2281,224 @@ hasHookMeta = Executor.hookmetamethod ~= nil and Executor.newcclosure ~= nil
 
 hasRequire = Executor.require ~= nil
 
-Groupboxes.Misc = element3.Miscellaneous:AddLeftGroupbox("Miscellaneous")
 
-Groupboxes.Misc:AddButton({
-  Text = "Play Again", Callback = function()
-    pcall(function()
-      local playAgain = remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain")
+function Handlers.PlayAgain()
+  pcall(function()
+    local playAgain = remotesFolder and remotesFolder:FindFirstChild("PlayAgain")
 
-      if playAgain then
-        playAgain:FireServer()
+    if playAgain then
+      playAgain:FireServer()
+    end
+  end)
+end
+
+
+function Handlers.ReturnToLobby()
+  pcall(function()
+    local lobby = remotesFolder and remotesFolder:FindFirstChild("Lobby")
+
+    if lobby then
+      lobby:FireServer()
+    end
+  end)
+end
+
+
+function Handlers.ResetCharacter()
+  pcall(function()
+    if humanoid then
+      humanoid.Health = 0
+    end
+
+    local underwater = remotesFolder and remotesFolder:FindFirstChild("Underwater")
+
+    if underwater then
+      underwater:FireServer(true)
+    end
+  end)
+end
+
+
+function Handlers.GiveStarJug()
+  task.spawn(function()
+    local wait = character or localPlayer.CharacterAdded:Wait()
+    local humanoid2 = humanoid or wait:WaitForChild("Humanoid")
+    local parent = game:GetObjects("rbxassetid://119885581324516")[1]
+
+    if not parent then
+      return
+    end
+
+    local durability = 4
+    local isUsed = false
+    parent:SetAttribute("Durability", durability)
+    local instance = Instance.new("NumberValue", parent)
+    parent.Parent = localPlayer.Backpack
+    local animations = parent:WaitForChild("Animations")
+    local animationTracks = {}
+
+    for _, child in animations:GetChildren() do
+      animationTracks[child.Name] = humanoid2:LoadAnimation(child)
+
+      if child.Name == "idle" then
+        animationTracks[child.Name].Priority = Enum.AnimationPriority.Idle
+        animationTracks[child.Name].Looped = true
+      end
+    end
+
+    parent.Equipped:Connect(function()
+      animationTracks.equip:Play()
+      task.wait(animationTracks.equip.Length)
+
+      if parent:IsDescendantOf(wait) then
+        animationTracks.idle:Play()
       end
     end)
-  end, })
 
-Groupboxes.Misc:AddButton({
-  Text = "Return to Lobby", Callback = function()
-    pcall(function()
-      local lobby = remotesFolder2 and remotesFolder2:FindFirstChild("Lobby")
-
-      if lobby then
-        lobby:FireServer()
+    parent.Unequipped:Connect(function()
+      if animationTracks.idle.IsPlaying then
+        animationTracks.idle:Stop()
       end
     end)
-  end, })
 
-Groupboxes.Misc:AddButton({
-  Text = "Reset Character", Callback = function()
-    pcall(function()
-      if humanoid then
-        humanoid.Health = 0
-      end
-
-      local underwater = remotesFolder2 and remotesFolder2:FindFirstChild("Underwater")
-
-      if underwater then
-        underwater:FireServer(true)
-      end
-    end)
-  end, })
-
-Groupboxes.Misc:AddButton({
-  Text = "Give Star Jug", Tooltip = "Gives a star jug", Callback = function()
-    task.spawn(function()
-      local wait = character or localPlayer2.CharacterAdded:Wait()
-      local humanoid2 = humanoid or wait:WaitForChild("Humanoid")
-      local parent = game:GetObjects("rbxassetid://119885581324516")[1]
-
-      if not parent then
+    parent.Activated:Connect(function()
+      if isUsed then
         return
       end
 
-      local val91 = 4
-      local val92 = false
-      parent:SetAttribute("Durability", val91)
-      local instance = Instance.new("NumberValue", parent)
-      parent.Parent = localPlayer2.Backpack
-      local animations = parent:WaitForChild("Animations")
-      local element4 = {}
+      isUsed = true
+      animationTracks.open:Play()
 
-      for v113, v114 in animations:GetChildren() do
-        element4[v114.Name] = humanoid2:LoadAnimation(v114)
-
-        if v114.Name == "idle" then
-          element4[v114.Name].Priority = Enum.AnimationPriority.Idle
-          element4[v114.Name].Looped = true
-        end
+      if durability - 1 ~= 0 then
+        durability = durability - 1
+        parent:SetAttribute("Durability", durability)
+      else
+        parent:Destroy()
       end
 
-      parent.Equipped:Connect(function()
-        element4.equip:Play()
-        task.wait(element4.equip.Length)
+      local character2 = character
 
-        if parent:IsDescendantOf(wait) then
-          element4.idle:Play()
-        end
-      end)
+      if not character2 or not character2.Parent then
+        isUsed = false
+        return
+      end
 
-      parent.Unequipped:Connect(function()
-        if element4.idle.IsPlaying then
-          element4.idle:Stop()
-        end
-      end)
+      character2:SetAttribute("Starlight", true)
+      character2:SetAttribute("StarlightHuge", true)
 
-      parent.Activated:Connect(function()
-        if val92 then
-          return
-        end
+      local hasTriggered = false
 
-        val92 = true
-        element4.open:Play()
+      local collisionPart2 = character2:FindFirstChild("CollisionPart")
+        or character2:FindFirstChild("Collision")
 
-        if val91 - 1 ~= 0 then
-          val91 = val91 - 1
-          parent:SetAttribute("Durability", val91)
-        else
-          parent:Destroy()
-        end
+      local crouch = remotesFolder and remotesFolder:FindFirstChild("Crouch")
 
-        local parent2 = character
+      if collisionPart2 and not character2:FindFirstChild("CollisionClone") then
+        local collisionClone = collisionPart2:Clone()
+        collisionClone.CanCollide = false
+        collisionClone.Massless = true
+        collisionClone.RootPriority = 127
+        collisionClone.Anchored = false
+        collisionClone.Name = "CollisionClone"
 
-        if not parent2 or not parent2.Parent then
-          val92 = false
-          return
+        local collisionCrouch = collisionClone:FindFirstChild("CollisionCrouch")
+
+        if collisionCrouch then
+          collisionCrouch:Destroy()
         end
 
-        parent2:SetAttribute("Starlight", true)
-        parent2:SetAttribute("StarlightHuge", true)
+        collisionClone.Parent = character2
 
-        local val93 = false
+        task.spawn(function()
+          while not hasTriggered do
+            collisionClone.Massless = not collisionClone.Massless
 
-        local collisionPart2 = parent2:FindFirstChild("CollisionPart")
-          or parent2:FindFirstChild("Collision")
-
-        local crouch2 = remotesFolder2 and remotesFolder2:FindFirstChild("Crouch")
-
-        if collisionPart2 and not parent2:FindFirstChild("CollisionClone") then
-          local collisionClone = collisionPart2:Clone()
-          collisionClone.CanCollide = false
-          collisionClone.Massless = true
-          collisionClone.RootPriority = 127
-          collisionClone.Anchored = false
-          collisionClone.Name = "CollisionClone"
-
-          local collisionCrouch = collisionClone:FindFirstChild("CollisionCrouch")
-
-          if collisionCrouch then
-            collisionCrouch:Destroy()
-          end
-
-          collisionClone.Parent = parent2
-
-          task.spawn(function()
-            while not val93 do
-              collisionClone.Massless = not collisionClone.Massless
-
-              if crouch2 then
-                crouch2:FireServer(true, true)
-              end
-
-              task.wait(0.21)
+            if crouch then
+              crouch:FireServer(true, true)
             end
 
-            collisionClone.Massless = true
-            collisionClone:Destroy()
-          end)
-        end
-
-        instance.Value = 35
-        TweenService:Create(instance, TweenInfo.new(70, Enum.EasingStyle.Linear), { Value = 0 }):Play()
-
-        local connect4 = instance:GetPropertyChangedSignal("Value"):Connect(function()
-          if parent2 and parent2.Parent then
-            parent2:SetAttribute("SpeedBoost", instance.Value)
+            task.wait(0.21)
           end
+
+          collisionClone.Massless = true
+          collisionClone:Destroy()
         end)
+      end
 
-        task.wait(35)
-        val93 = true
-        connect4:Disconnect()
-        instance:Destroy()
+      instance.Value = 35
+      TweenService:Create(instance, TweenInfo.new(70, Enum.EasingStyle.Linear), { Value = 0 }):Play()
 
-        if parent2 and parent2.Parent then
-          parent2:SetAttribute("Starlight", false)
-          parent2:SetAttribute("StarlightHuge", false)
-          parent2:SetAttribute("SpeedBoost", 0)
+      local connection = instance:GetPropertyChangedSignal("Value"):Connect(function()
+        if character2 and character2.Parent then
+          character2:SetAttribute("SpeedBoost", instance.Value)
         end
-
-        val92 = false
       end)
+
+      task.wait(35)
+      hasTriggered = true
+      connection:Disconnect()
+      instance:Destroy()
+
+      if character2 and character2.Parent then
+        character2:SetAttribute("Starlight", false)
+        character2:SetAttribute("StarlightHuge", false)
+        character2:SetAttribute("SpeedBoost", 0)
+      end
+
+      isUsed = false
     end)
-  end, })
+  end)
+end
 
-Groupboxes.Misc:AddDivider()
 
+function Handlers.AntiLagChanged(value)
+  local currentRooms2 = workspace.CurrentRooms
 
-Groupboxes.Misc:AddToggle("ShowKeybinds", {
-  Text = "Show Keybinds", Default = false, Tooltip = "Shows all registered keybinds", })
-
-toggles.ShowKeybinds:OnChanged(function(visible2) library.KeybindFrame.Visible = visible2 end)
-
-Groupboxes.Misc:AddToggle("AntiLag", {
-  Text = "Anti-Lag", Default = false, Tooltip = "Reduces lag by setting all parts in the current rooms to Plastic material", })
-
-toggles.AntiLag:OnChanged(function(p34)
-  local currentRooms3 = workspace.CurrentRooms
-
-  if not currentRooms3 then
+  if not currentRooms2 then
     return
   end
 
-  if p34 then
-    for v120, v121 in currentRooms3:GetDescendants() do
-      if v121:IsA("BasePart") then
-        v121:SetAttribute("Mat", v121.Material)
-        v121.Material = "Plastic"
+  if value then
+    for _, descendant in currentRooms2:GetDescendants() do
+      if descendant:IsA("BasePart") then
+        descendant:SetAttribute("Mat", descendant.Material)
+        descendant.Material = "Plastic"
       end
     end
   else
-    for v122, v123 in currentRooms3:GetDescendants() do
-      if v123:IsA("BasePart") then
-        if v123:GetAttribute("Mat") then
-          v123.Material = v123:GetAttribute("Mat") or "Plastic"
+    for _, descendant in currentRooms2:GetDescendants() do
+      if descendant:IsA("BasePart") then
+        if descendant:GetAttribute("Mat") then
+          descendant.Material = descendant:GetAttribute("Mat") or "Plastic"
         end
       end
     end
   end
-end)
+end
 
-Groupboxes.Misc:AddDivider()
-
-Groupboxes.Misc:AddToggle("DisableIdleKick", {
-  Text = "Disable Idle Kick", Default = false, Tooltip = "Disables the kick from being afk for 20 minutes", })
 
 DisableIdleKickConn = nil
 
-toggles.DisableIdleKick:OnChanged(function(p35)
+function Handlers.DisableIdleKickChanged(value)
   if DisableIdleKickConn then
     DisableIdleKickConn:Disconnect()
     DisableIdleKickConn = nil
   end
 
-  if p35 then
-    DisableIdleKickConn = localPlayer2.Idled:Connect(function()
+  if value then
+    DisableIdleKickConn = localPlayer.Idled:Connect(function()
       VirtualUser:CaptureController()
       VirtualUser:ClickButton2(Vector2.new())
     end)
   end
-end)
+end
 
-Groupboxes.Misc:AddToggle("DisplayInfo", {
-  Text = "Display Info", Default = false, Tooltip = "Shows an overlay with FPS, ping, executor, and username", })
 
 DisplayInfoFPS = 60
 DisplayInfoFC = 0
 DisplayInfoFT = tick()
 
-toggles.DisplayInfo:OnChanged(function(p37)
+function Handlers.DisplayInfoChanged(value)
   if DisplayInfoLabel then
     DisplayInfoLabel:Destroy()
     DisplayInfoLabel = nil
@@ -1922,12 +2509,12 @@ toggles.DisplayInfo:OnChanged(function(p37)
     DisplayInfoConn = nil
   end
 
-  if p37 then
+  if value then
     DisplayInfoFC = 0
     DisplayInfoFT = tick()
     DisplayInfoLabel = library:AddDraggableLabel("moro | loading...")
 
-    if val85.UILibrary == "Obsidian" then
+    if featureState.UILibrary == "Obsidian" then
       local label = DisplayInfoLabel.Label or DisplayInfoLabel
       pcall(function() label.TextColor3 = Color3.fromHex("ebebeb") end)
     end
@@ -1938,47 +2525,43 @@ toggles.DisplayInfo:OnChanged(function(p37)
       end
 
       DisplayInfoFC = DisplayInfoFC + 1
-      local val95 = tick()
+      local now = tick()
 
-      if val95 - DisplayInfoFT >= 1 then
+      if now - DisplayInfoFT >= 1 then
         DisplayInfoFPS = DisplayInfoFC
-        DisplayInfoFT = val95
+        DisplayInfoFT = now
         DisplayInfoFC = 0
       end
 
-      local success15 = pcall(function()
+      local success = pcall(function()
         return math.floor(stats.Network.ServerStatsItem["Data Ping"]:GetValue())
       end) and math.floor(stats.Network.ServerStatsItem["Data Ping"]:GetValue()) or 0
 
-      local success16 = pcall(identifyexecutor) and identifyexecutor() or "Unknown"
+      local success2 = pcall(identifyexecutor) and identifyexecutor() or "Unknown"
 
       DisplayInfoLabel:SetText(("moro | FPS: %d | Ping: %dms | Executor: %s | User: %s"):format(
-        math.floor(DisplayInfoFPS), success15, success16, localPlayer2.Name
+        math.floor(DisplayInfoFPS), success, success2, localPlayer.Name
       ))
     end)
   end
-end)
+end
 
-Groupboxes.MiscFun = element3.Miscellaneous:AddRightGroupbox("Fun")
-
-Groupboxes.MiscFun:AddToggle("Uhhhh", {
-  Text = "uhhhh", Default = false, Tooltip = "content (this makes a lot of lag btw)", })
 
 UhhhhDecals = {}
 UhhhhConn = nil
 
-toggles.Uhhhh:OnChanged(function(p38)
-  if p38 then
-    for key4, value8 in pairs(workspace:GetDescendants()) do
-      if value8:IsA("BasePart") then
-        local model = value8:FindFirstAncestorWhichIsA("Model")
+function Handlers.UhhhhChanged(value)
+  if value then
+    for _, descendant in pairs(workspace:GetDescendants()) do
+      if descendant:IsA("BasePart") then
+        local model = descendant:FindFirstAncestorWhichIsA("Model")
 
         if not (model and model:FindFirstChild("Humanoid")) then
-          for index4, value9 in ipairs(Enum.NormalId:GetEnumItems()) do
+          for _, face in ipairs(Enum.NormalId:GetEnumItems()) do
             local decal = Instance.new("Decal")
             decal.Texture = "http://www.roblox.com/asset/?id=135666356081915"
-            decal.Face = value9
-            decal.Parent = value8
+            decal.Face = face
+            decal.Parent = descendant
 
             table.insert(UhhhhDecals, decal)
           end
@@ -1988,16 +2571,16 @@ toggles.Uhhhh:OnChanged(function(p38)
 
     UhhhhConn = workspace.DescendantAdded:Connect(function(descendant)
       if descendant:IsA("BasePart") then
-        local model2 = descendant:FindFirstAncestorWhichIsA("Model")
+        local model = descendant:FindFirstAncestorWhichIsA("Model")
 
-        if not (model2 and model2:WaitForChild("Humanoid")) then
-          for index5, value10 in ipairs(Enum.NormalId:GetEnumItems()) do
-            local decal2 = Instance.new("Decal")
-            decal2.Texture = "http://www.roblox.com/asset/?id=135666356081915"
-            decal2.Face = value10
-            decal2.Parent = descendant
+        if not (model and model:WaitForChild("Humanoid")) then
+          for _, face in ipairs(Enum.NormalId:GetEnumItems()) do
+            local decal = Instance.new("Decal")
+            decal.Texture = "http://www.roblox.com/asset/?id=135666356081915"
+            decal.Face = face
+            decal.Parent = descendant
 
-            table.insert(UhhhhDecals, decal2)
+            table.insert(UhhhhDecals, decal)
           end
         end
       end
@@ -2008,85 +2591,72 @@ toggles.Uhhhh:OnChanged(function(p38)
       UhhhhConn = nil
     end
 
-    for index6, value11 in ipairs(UhhhhDecals) do
-      if value11 and value11.Parent then
-        value11:Destroy()
+    for _, UhhhhDecal in ipairs(UhhhhDecals) do
+      if UhhhhDecal and UhhhhDecal.Parent then
+        UhhhhDecal:Destroy()
       end
     end
 
     TableClear(UhhhhDecals)
   end
-end)
+end
 
-Groupboxes.MiscFun:AddButton({
-  Text = "uhhhh val", Tooltip = "content", Callback = function()
-    local content = Instance.new("ScreenGui")
-    content.Name = "content"
-    content.ResetOnSpawn = false
-    content.IgnoreGuiInset = true
-    content.Parent = CoreGui
 
-    local frame5 = Instance.new("Frame")
-    frame5.Size = UDim2.new(1, 0, 1, 0)
-    frame5.BackgroundColor3 = Color3.new(0, 0, 0)
-    frame5.BackgroundTransparency = 1
-    frame5.Parent = content
+function Handlers.UhhhhVal()
+  local content = Instance.new("ScreenGui")
+  content.Name = "content"
+  content.ResetOnSpawn = false
+  content.IgnoreGuiInset = true
+  content.Parent = CoreGui
 
-    local textLabel2 = Instance.new("TextLabel")
-    textLabel2.Size = UDim2.new(1, -40, 1, -40)
-    textLabel2.Position = UDim2.new(0, 20, 0, 20)
-    textLabel2.BackgroundTransparency = 1
-    textLabel2.TextColor3 = Color3.fromRGB(255, 255, 255)
-    textLabel2.TextTransparency = 1
-    textLabel2.TextScaled = true
-    textLabel2.Font = Enum.Font.Code
-    textLabel2.TextXAlignment = Enum.TextXAlignment.Center
-    textLabel2.TextYAlignment = Enum.TextYAlignment.Center
+  local frame = Instance.new("Frame")
+  frame.Size = UDim2.new(1, 0, 1, 0)
+  frame.BackgroundColor3 = Color3.new(0, 0, 0)
+  frame.BackgroundTransparency = 1
+  frame.Parent = content
 
-    textLabel2.Text = "MORO"
+  local textLabel = Instance.new("TextLabel")
+  textLabel.Size = UDim2.new(1, -40, 1, -40)
+  textLabel.Position = UDim2.new(0, 20, 0, 20)
+  textLabel.BackgroundTransparency = 1
+  textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+  textLabel.TextTransparency = 1
+  textLabel.TextScaled = true
+  textLabel.Font = Enum.Font.Code
+  textLabel.TextXAlignment = Enum.TextXAlignment.Center
+  textLabel.TextYAlignment = Enum.TextYAlignment.Center
 
-    textLabel2.Parent = frame5
+  textLabel.Text = "MORO"
 
-    TweenService:Create(
-      frame5, TweenInfo.new(5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.1 }
-    ):Play()
+  textLabel.Parent = frame
 
-    TweenService:Create(
-      textLabel2, TweenInfo.new(5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0 }
-    ):Play()
+  TweenService:Create(
+    frame, TweenInfo.new(5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.1 }
+  ):Play()
 
-    library:Toggle(false)
-    task.wait(6)
+  TweenService:Create(
+    textLabel, TweenInfo.new(5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0 }
+  ):Play()
 
-    TweenService:Create(
-      frame5, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }
-    ):Play()
+  library:Toggle(false)
+  task.wait(6)
 
-    TweenService:Create(
-      textLabel2, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }
-    ):Play()
+  TweenService:Create(
+    frame, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }
+  ):Play()
 
-    task.wait(1)
-    content:Destroy()
-  end, })
+  TweenService:Create(
+    textLabel, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }
+  ):Play()
 
-Groupboxes.MiscFun:AddButton({
-  Text = "Death Farm", Tooltip = "Execute this in the hotel at a start of run, either use it from here or execute the actual script", Callback = function()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/doram44/cheesy/refs/heads/main/stuff/deathfarm.lua"))()
-  end, })
+  task.wait(1)
+  content:Destroy()
+end
 
-Groupboxes.MiscFun:AddToggle("OrbitItems", {
-  Text = "Orbit Items", Default = false, Tooltip = "Items that you have dropped will spin around you on the floor", DisabledTooltip = "This feature doesn't work in this floor", })
-
-Groupboxes.MiscFun:AddSlider("OrbitYOffset", {
-  Text = "Orbit Y Offset", Min = 0, Max = 2, Default = 2, Rounding = 1, Tooltip = "The Y position of the item orbit", })
-
-Groupboxes.MiscFun:AddSlider("OrbitSpeed", {
-  Text = "Orbit Speed", Min = 2, Max = 5, Default = 2, Rounding = 1, Tooltip = "The speed of the item orbit", })
 
 OrbitConn = nil
 
-toggles.OrbitItems:OnChanged(function()
+function Handlers.OrbitItemsChanged()
   if OrbitConn then
     OrbitConn:Disconnect()
     OrbitConn = nil
@@ -2120,58 +2690,59 @@ toggles.OrbitItems:OnChanged(function()
     end
 
     local getChildren = drops:GetChildren()
-    local val96 = #getChildren
+    local count = #getChildren
 
-    if val96 == 0 then
+    if count == 0 then
       return
     end
 
-    local val97 = tick()
+    local now = tick()
 
-    for index7, value12 in ipairs(getChildren) do
-      if value12:IsA("Model") then
-        local val98 = val97 * options.OrbitSpeed.Value + index7 / val96 * math.pi * 2
+    for index, getChildrenEntry in ipairs(getChildren) do
+      if getChildrenEntry:IsA("Model") then
+        local orbitAngle = now * options.OrbitSpeed.Value + index / count * math.pi * 2
 
         local vector = Vector3.new(
-          math.cos(val98) * 4, -options.OrbitYOffset.Value, math.sin(val98) * 4
+          math.cos(orbitAngle) * 4, -options.OrbitYOffset.Value, math.sin(orbitAngle) * 4
         )
 
-        value12:PivotTo(CFrame.new(humanoidRootPart.Position + vector))
+        getChildrenEntry:PivotTo(CFrame.new(humanoidRootPart.Position + vector))
       end
     end
   end)
-end)
+end
+
 
 BringItemsConn = nil
 BringItemsBVs = {}
 
-local function helper22()
+local function clearBringItemVelocities()
   TableClear(BringItemsBVs)
 end
 
-local function helper23()
+local function stopBringItems()
   if BringItemsConn then
     BringItemsConn:Disconnect()
     BringItemsConn = nil
   end
 
-  helper22()
+  clearBringItemVelocities()
 end
 
-local function helper24(val99)
-  if val99:IsA("BasePart") then
-    return val99
+local function getBasePart(child)
+  if child:IsA("BasePart") then
+    return child
   end
 
-  if val99:IsA("Model") then
-    return val99.PrimaryPart or val99:FindFirstChildWhichIsA("BasePart")
+  if child:IsA("Model") then
+    return child.PrimaryPart or child:FindFirstChildWhichIsA("BasePart")
   end
 
   return nil
 end
 
 function SetupBringItems()
-  helper23()
+  stopBringItems()
 
   if _Unloading then
     return
@@ -2194,220 +2765,112 @@ function SetupBringItems()
       return
     end
 
-    local character3 = character or localPlayer2.Character
-    local humanoid3 = character3 and character3:FindFirstChildOfClass("Humanoid")
+    local character2 = character or localPlayer.Character
+    local humanoid2 = character2 and character2:FindFirstChildOfClass("Humanoid")
     local currentCamera2 = workspace.CurrentCamera
 
-    if not humanoid3 or not currentCamera2 or humanoid3.Health <= 0
-      or humanoid3:GetState() == Enum.HumanoidStateType.Dead then
-      helper22()
+    if not humanoid2 or not currentCamera2 or humanoid2.Health <= 0
+      or humanoid2:GetState() == Enum.HumanoidStateType.Dead then
+      clearBringItemVelocities()
       return
     end
 
-    local val100 = currentCamera2.CFrame.Position + currentCamera2.CFrame.LookVector * 2
+    local holdPosition = currentCamera2.CFrame.Position + currentCamera2.CFrame.LookVector * 2
       + Vector3.new(0, -0.4, 0)
 
-    local drops2 = workspace:FindFirstChild("Drops")
+    local drops = workspace:FindFirstChild("Drops")
 
-    if not drops2 then
+    if not drops then
       return
     end
 
-    for index8, value13 in ipairs(drops2:GetChildren()) do
-      local element6 = helper24(value13)
+    for _, child in ipairs(drops:GetChildren()) do
+      local dropPart = getBasePart(child)
 
-      if not element6 then
+      if not dropPart then
         continue
       end
 
-      if element6.Anchored then
-        pcall(function() element6.Anchored = false end)
+      if dropPart.Anchored then
+        pcall(function() dropPart.Anchored = false end)
       end
 
-      local bringItemsVelocity = element6:FindFirstChildOfClass("BodyVelocity")
+      local bringItemsVelocity = dropPart:FindFirstChildOfClass("BodyVelocity")
 
       if not bringItemsVelocity then
         bringItemsVelocity = Instance.new("BodyVelocity")
         bringItemsVelocity.Name = "BringItemsVelocity"
         bringItemsVelocity.MaxForce = Vector3.new(9000000000, 9000000000, 9000000000)
-        bringItemsVelocity.Parent = element6
+        bringItemsVelocity.Parent = dropPart
 
         table.insert(BringItemsBVs, bringItemsVelocity)
       end
 
-      local element7 = val100 - element6.Position
+      local offsetToHold = holdPosition - dropPart.Position
 
-      if element7.Magnitude > 2 then
-        element6.CFrame = element6.CFrame:Lerp(CFrame.new(val100), 0.4)
+      if offsetToHold.Magnitude > 2 then
+        dropPart.CFrame = dropPart.CFrame:Lerp(CFrame.new(holdPosition), 0.4)
       end
 
-      bringItemsVelocity.Velocity = element7 * 40
+      bringItemsVelocity.Velocity = offsetToHold * 40
     end
   end)
 end
 
-Groupboxes.MiscFun:AddToggle("BringItems", {
-  Text = "Bring Items", Default = false, Tooltip = "Floats all dropped items in front of your mouse", })
-
-toggles.BringItems:OnChanged(SetupBringItems)
-
-Groupboxes.MiscFun:AddToggle("TwerkDance", {
-  Text = "Twerk", Default = false, Tooltip = "Plays the mspaint twerking animation (i think)", })
 
 local loadAnimation
 
-toggles.TwerkDance:OnChanged(function(p40)
-  local character4 = localPlayer2.Character
+function Handlers.TwerkDanceChanged(value)
+  local character2 = localPlayer.Character
 
-  if not character4 then
+  if not character2 then
     return
   end
 
-  if p40 then
+  if value then
     local animation = Instance.new("Animation")
     animation.AnimationId = "rbxassetid://12874447851"
 
-    local humanoid4 = character4:FindFirstChildOfClass("Humanoid")
+    local humanoid2 = character2:FindFirstChildOfClass("Humanoid")
 
-    if not humanoid4 then
+    if not humanoid2 then
       return
     end
 
-    loadAnimation = humanoid4:LoadAnimation(animation)
+    loadAnimation = humanoid2:LoadAnimation(animation)
     loadAnimation.Looped = true
     loadAnimation:Play()
   elseif loadAnimation then
     loadAnimation:Stop()
   end
-end)
+end
+
 
 Functions = {
   FirePrompt = nil, GetLibraryCode = nil, HasItem = nil, HandleHidingTransparency = nil, }
 
 Connections = {}
 
-if localPlayer2.Character and localPlayer2.Character:FindFirstChild("HumanoidRootPart")
-  and localPlayer2.Character:FindFirstChild("Collision") then
+if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+  and localPlayer.Character:FindFirstChild("Collision") then
 end
 
-Groupboxes.Character = element3.Main:AddLeftGroupbox("Character")
-Groupboxes.Other = element3.Main:AddRightGroupbox("Other")
-
-Groupboxes.AutoFarm = element3.AutoFarm:AddLeftGroupbox("Knob Farm")
-Groupboxes.AutoFarm_Settings = element3.AutoFarm:AddRightGroupbox("Settings")
-
-Groupboxes.AutoFarm:AddToggle("AutoFarmEnabled", {
-  Text = "Enable Knob Farm",
-  Default = false,
-  Tooltip = "Automates traversing rooms, looting gold, solving obstacles, and farming knobs",
-})
-
-Groupboxes.AutoFarm_Status = Groupboxes.AutoFarm:AddLabel("Status: Idle")
-Groupboxes.AutoFarm:AddDivider()
-Groupboxes.AutoFarm_StatsNet = Groupboxes.AutoFarm:AddLabel("Net Profit: +0 Knobs")
-Groupboxes.AutoFarm_StatsEarned = Groupboxes.AutoFarm:AddLabel("Total Earned: 0 Knobs")
-Groupboxes.AutoFarm_StatsRuns = Groupboxes.AutoFarm:AddLabel("Runs: 0 (Spent: 0)")
-
-Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmShowPath", {
-  Text = "Show Path (Neon Nodes)",
-  Default = true,
-  Tooltip = "Renders green neon pathfinding nodes along the walking path (like in the video)",
-})
-
-Groupboxes.AutoFarm_Settings:AddDropdown("AutoFarmMovementMode", {
-  Text = "Movement Mode",
-  Values = { "Straight", "Orthogonal" },
-  Default = "Straight",
-  Tooltip = "Straight: прямое плавное движение к цели. Orthogonal: движение строго под 90° вдоль осей X и Z.",
-})
-
-Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmSpeed", {
-  Text = "Farm Speed",
-  Min = 16,
-  Max = 80,
-  Default = 35,
-  Rounding = 0,
-  Compact = true,
-  Tooltip = "Movement speed for navigating paths between rooms and loot (default: 35)",
-})
-
-Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmLootDrawers", {
-  Text = "Loot Drawers & Tables",
-  Default = true,
-  Tooltip = "Visits nearby drawers, chests, and tables to collect gold",
-})
-
-Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmRunTo100", {
-  Text = "Farm to Door 100",
-  Default = true,
-  Tooltip = "OFF: фарм до комнаты 49, затем смерть и Play Again (быстрые заходы, для ночного AFK). ON: проходит Библиотеку (50) и доходит до лифта (100).",
-})
-
-Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmPlayAgain", {
-  Text = "Auto Play Again (7s)",
-  Default = true,
-  Tooltip = "Automatically clicks Play Again 7 seconds after dying or beating the game",
-})
-
-Groupboxes.AutoFarm_Settings:AddDivider()
-
-Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmMinesMode", {
-  Text = "Mines Mode (Ladder Bypass)",
-  Default = false,
-  Tooltip = "Phase 1: walk to nearest ladder to trigger AC bypass. Phase 2: fly+noclip through all rooms looting everything.",
-})
-
-Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmMinesAutoProtect", {
-  Text = "Auto-enable Mines Protections",
-  Default = true,
-  Tooltip = "Automatically enables Vacuum/Snare/Giggle/Gloombat bypass and DisableAnticheat on start",
-})
-
-Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmMinesFlySpeed", {
-  Text = "Fly Loot Speed",
-  Min = 20,
-  Max = 80,
-  Default = 35,
-  Rounding = 0,
-  Compact = true,
-  Tooltip = "Speed of flight during Phase 2 loot sweep",
-})
 
 -- ========================================================
 -- Auto Door Skip (Knob Farm / Room Cleared)
 -- ========================================================
-Groupboxes.AutoDoorSkip = element3.AutoFarm:AddLeftGroupbox("Auto Door Skip")
+
 
 do
-  Groupboxes.AutoDoorSkip:AddToggle("AutoDoorSkip", {
-    Text = "Auto Door Skip",
-    Tooltip = "Automatically clears rooms (visible gold, keys, levers) and solves doors.",
-    Default = false,
-  })
+  
 
-  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipFastLoot", {
-    Text = "Fast Loot (Золото / Пыль)",
-    Tooltip = "Teleports to visible gold piles and stardust on tables/floor.",
-    Default = true,
-  })
+  
 
-  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipWaitThreats", {
-    Text = "Wait Threat in Seek Zones (30-40, 80-90)",
-    Tooltip = "Waits for Rush/Ambush/Blitz to despawn ONLY in rooms 30-40 and 80-90 (Seek chase zones).",
-    Default = true,
-  })
+  
 
-  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipUnlock", {
-    Text = "Auto Key & Gate",
-    Tooltip = "Automatically teleports to keys and pulls gate levers if door is locked.",
-    Default = true,
-  })
+  
 
-  Groupboxes.AutoDoorSkip:AddToggle("AutoSkipSpecialRooms", {
-    Text = "Auto Room 50 & 100",
-    Tooltip = "Auto collects books + code in Room 50, and collects fuses + solves breaker + enters elevator in Room 100.",
-    Default = true,
-  })
+  
 
   local function safeFirePrompt(prompt)
     if not prompt or not prompt:IsA("ProximityPrompt") then return end
@@ -2426,121 +2889,115 @@ do
     end
   end
 
-  Groupboxes.AutoDoorSkip:AddButton({
-    Text = "TP to Book",
-    Tooltip = "Teleports to any uncollected book in Room 50",
-    Callback = function()
-      task.spawn(function()
-        local char = localPlayer2 and localPlayer2.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if not root then return end
-
-        local curRooms = workspace:FindFirstChild("CurrentRooms")
-        local targetRoom = (curRooms and curRooms:FindFirstChild("50")) or workspace
-        local targetBook = nil
-
-        for _, desc in ipairs(targetRoom:GetDescendants()) do
+    function Handlers.TPToBook()
+    task.spawn(function()
+      local char = localPlayer and localPlayer.Character
+      local root = char and char:FindFirstChild("HumanoidRootPart")
+      if not root then return end
+  
+      local curRooms = workspace:FindFirstChild("CurrentRooms")
+      local targetRoom = (curRooms and curRooms:FindFirstChild("50")) or workspace
+      local targetBook = nil
+  
+      for _, desc in ipairs(targetRoom:GetDescendants()) do
+        if desc.Name == "LiveHintBook" then
+          local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if pr and pr.Enabled then
+            targetBook = desc
+            break
+          end
+        end
+      end
+  
+      if not targetBook and curRooms then
+        for _, desc in ipairs(curRooms:GetDescendants()) do
           if desc.Name == "LiveHintBook" then
-            local pr = desc:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if pr and pr.Enabled then
-              targetBook = desc
-              break
-            end
+            targetBook = desc
+            break
           end
         end
-
-        if not targetBook and curRooms then
-          for _, desc in ipairs(curRooms:GetDescendants()) do
-            if desc.Name == "LiveHintBook" then
-              targetBook = desc
-              break
-            end
+      end
+  
+      if targetBook then
+        local pos = (targetBook:IsA("BasePart") and targetBook.Position)
+          or (targetBook:IsA("Model") and targetBook:GetPivot().Position)
+        if pos then
+          pcall(function()
+            if KnobFarm then KnobFarm.Teleporting = true end
+          end)
+          root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
+          root.AssemblyLinearVelocity = Vector3.zero
+          local pr = targetBook:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if pr then
+            safeFirePrompt(pr)
           end
-        end
-
-        if targetBook then
-          local pos = (targetBook:IsA("BasePart") and targetBook.Position)
-            or (targetBook:IsA("Model") and targetBook:GetPivot().Position)
-          if pos then
-            pcall(function()
-              if KnobFarm then KnobFarm.Teleporting = true end
-            end)
-            root.CFrame = CFrame.new(pos + Vector3.new(0, 1.2, 0))
-            root.AssemblyLinearVelocity = Vector3.zero
-            local pr = targetBook:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if pr then
-              safeFirePrompt(pr)
-            end
-            pcall(function()
-              if library and library.Notify then
-                library:Notify({ Title = "Teleported to Book!", Time = 3 })
-              end
-            end)
-          end
-        else
           pcall(function()
             if library and library.Notify then
-              library:Notify({ Title = "No Books found in Room 50!", Time = 3 })
+              library:Notify({ Title = "Teleported to Book!", Time = 3 })
             end
           end)
         end
-      end)
-    end
-  })
+      else
+        pcall(function()
+          if library and library.Notify then
+            library:Notify({ Title = "No Books found in Room 50!", Time = 3 })
+          end
+        end)
+      end
+    end)
+  end
 
-  Groupboxes.AutoDoorSkip:AddButton({
-    Text = "TP to Library Paper",
-    Tooltip = "Teleports to the hint paper with the code in Room 50",
-    Callback = function()
-      task.spawn(function()
-        local char = localPlayer2 and localPlayer2.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if not root then return end
 
-        local curRooms = workspace:FindFirstChild("CurrentRooms")
-        local targetRoom = (curRooms and curRooms:FindFirstChild("50")) or workspace
-        local paper = (targetRoom and targetRoom:FindFirstChild("LibraryHintPaper", true))
-          or (curRooms and curRooms:FindFirstChild("LibraryHintPaper", true))
-          or (targetRoom and targetRoom:FindFirstChild("PickupItem", true))
-
-        if not paper and targetRoom then
-          for _, pr in ipairs(targetRoom:GetDescendants()) do
-            if pr:IsA("ProximityPrompt") and pr.ObjectText:lower():find("paper", 1, true) then
-              paper = pr.Parent
-              break
-            end
+    function Handlers.TPToLibraryPaper()
+    task.spawn(function()
+      local char = localPlayer and localPlayer.Character
+      local root = char and char:FindFirstChild("HumanoidRootPart")
+      if not root then return end
+  
+      local curRooms = workspace:FindFirstChild("CurrentRooms")
+      local targetRoom = (curRooms and curRooms:FindFirstChild("50")) or workspace
+      local paper = (targetRoom and targetRoom:FindFirstChild("LibraryHintPaper", true))
+        or (curRooms and curRooms:FindFirstChild("LibraryHintPaper", true))
+        or (targetRoom and targetRoom:FindFirstChild("PickupItem", true))
+  
+      if not paper and targetRoom then
+        for _, pr in ipairs(targetRoom:GetDescendants()) do
+          if pr:IsA("ProximityPrompt") and pr.ObjectText:lower():find("paper", 1, true) then
+            paper = pr.Parent
+            break
           end
         end
-
-        if paper then
-          local pPos = (paper:IsA("BasePart") and paper.Position)
-            or (paper:IsA("Model") and paper:GetPivot().Position)
-          if pPos then
-            pcall(function()
-              if KnobFarm then KnobFarm.Teleporting = true end
-            end)
-            root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 0))
-            root.AssemblyLinearVelocity = Vector3.zero
-            local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if pr then
-              safeFirePrompt(pr)
-            end
-            pcall(function()
-              if library and library.Notify then
-                library:Notify({ Title = "Teleported to Library Paper!", Time = 3 })
-              end
-            end)
+      end
+  
+      if paper then
+        local pPos = (paper:IsA("BasePart") and paper.Position)
+          or (paper:IsA("Model") and paper:GetPivot().Position)
+        if pPos then
+          pcall(function()
+            if KnobFarm then KnobFarm.Teleporting = true end
+          end)
+          root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 0))
+          root.AssemblyLinearVelocity = Vector3.zero
+          local pr = paper:FindFirstChildWhichIsA("ProximityPrompt", true)
+          if pr then
+            safeFirePrompt(pr)
           end
-        else
           pcall(function()
             if library and library.Notify then
-              library:Notify({ Title = "Library Paper not found!", Time = 3 })
+              library:Notify({ Title = "Teleported to Library Paper!", Time = 3 })
             end
           end)
         end
-      end)
-    end
-  })
+      else
+        pcall(function()
+          if library and library.Notify then
+            library:Notify({ Title = "Library Paper not found!", Time = 3 })
+          end
+        end)
+      end
+    end)
+  end
+
 
   local function HasRushAmbushBlitz()
     local threatNames = {
@@ -2551,8 +3008,8 @@ do
       GlitchRush = true, GlitchAmbush = true, FrozenAmbush = true,
     }
 
-    if val83 and val83.ActiveThreats then
-      for threat, active in pairs(val83.ActiveThreats) do
+    if threatState and threatState.ActiveThreats then
+      for threat, active in pairs(threatState.ActiveThreats) do
         if active and threat and threat.Parent and threatNames[threat.Name] then
           return true, threat
         end
@@ -2691,7 +3148,7 @@ do
 
   local function fastLootRoom(room)
     local lootedPrompts = {}
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
 
@@ -2720,7 +3177,7 @@ do
     local gate = room:FindFirstChild("Gate", true)
     local lever = room:FindFirstChild("LeverForGate", true)
     if gate and lever then
-      local char = localPlayer2.Character
+      local char = localPlayer.Character
       local root = char and char:FindFirstChild("HumanoidRootPart")
       if root then
         local leverPart = (lever:IsA("BasePart") and lever) or lever:FindFirstChildWhichIsA("BasePart", true) or lever.PrimaryPart
@@ -2737,7 +3194,7 @@ do
   end
 
   local function handleKeyAndUnlock(room, door)
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not root then return end
@@ -2767,7 +3224,7 @@ do
           if item:IsA("Tool") and item.Name:lower():find("lockpick", 1, true) then return item end
         end
       end
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      local bp = localPlayer:FindFirstChildOfClass("Backpack")
       if bp then
         for _, item in ipairs(bp:GetChildren()) do
           if item:IsA("Tool") and item.Name:lower():find("lockpick", 1, true) then return item end
@@ -2823,7 +3280,7 @@ do
   end
 
   local function openRoomDoor(door)
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root or not door then return end
 
@@ -2838,8 +3295,8 @@ do
   end
 
   -- ROOM 50 SOLVER (Books, Paper, Padlock Code)
-  local function handleRoom50(room, door)
-    local char = localPlayer2.Character
+  local function handleRoom(room, door)
+    local char = localPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
 
@@ -2890,15 +3347,15 @@ do
 
     -- 4. Solve Padlock with code / brute force
     local code = Functions and Functions.GetLibraryCode and Functions.GetLibraryCode()
-    if code and remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
+    if code and remotesFolder and remotesFolder:FindFirstChild("PL") then
       if not string.find(code, "_") and code ~= "_____" then
-        remotesFolder2.PL:FireServer(code)
+        remotesFolder.PL:FireServer(code)
       else
         task.spawn(function()
           local function brute(s)
             local idx = string.find(s, "_")
             if not idx then
-              pcall(function() remotesFolder2.PL:FireServer(s) end)
+              pcall(function() remotesFolder.PL:FireServer(s) end)
               task.wait(0.02)
               return
             end
@@ -2924,8 +3381,8 @@ do
   end
 
   -- ROOM 100 SOLVER (Fuses, Gate Lever, Breaker Box, Elevator)
-  local function handleRoom100(room)
-    local char = localPlayer2.Character
+  local function handleRoom2(room)
+    local char = localPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not root then return end
@@ -2945,7 +3402,7 @@ do
     -- Открыть запертую электрическую дверь если есть
     local elecLock = room:FindFirstChild("KeyElectrical", true) or room:FindFirstChild("ElectricalLock", true)
     if elecLock then
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
+      local bp = localPlayer:FindFirstChildOfClass("Backpack")
       local keyTool = (char and char:FindFirstChild("KeyElectrical")) or (bp and bp:FindFirstChild("KeyElectrical"))
       if keyTool and hum and keyTool.Parent ~= char then
         pcall(function() hum:EquipTool(keyTool) end)
@@ -3003,8 +3460,8 @@ do
         end
         task.wait(0.5)
 
-        if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-          pcall(function() remotesFolder2.EBF:FireServer() end)
+        if remotesFolder and remotesFolder:FindFirstChild("EBF") then
+          pcall(function() remotesFolder.EBF:FireServer() end)
         end
         task.wait(2)
       end
@@ -3046,7 +3503,7 @@ do
           -- ROOM 50 LOGIC
           if (currentRoomNum == 50 or roomNum == "50") and toggles.AutoSkipSpecialRooms and toggles.AutoSkipSpecialRooms.Value then
             if lastProcessedRoom ~= roomNum then
-              handleRoom50(currentRoom, door)
+              handleRoom(currentRoom, door)
               lastProcessedRoom = roomNum
             else
               if door then openRoomDoor(door) end
@@ -3057,7 +3514,7 @@ do
           -- ROOM 100 LOGIC
           if (currentRoomNum >= 100 or roomNum == "100") and toggles.AutoSkipSpecialRooms and toggles.AutoSkipSpecialRooms.Value then
             if lastProcessedRoom ~= roomNum then
-              handleRoom100(currentRoom)
+              handleRoom2(currentRoom)
               lastProcessedRoom = roomNum
             end
             return
@@ -3073,7 +3530,7 @@ do
               if toggles.Noclip and toggles.Noclip.Value then
                 toggles.Noclip:SetValue(false)
               end
-              local char = localPlayer2.Character
+              local char = localPlayer.Character
               if char then
                 for _, p in ipairs(char:GetDescendants()) do
                   if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
@@ -3153,115 +3610,132 @@ do
       end
     end
   end)
+  -- menu of this block: built later, from the MENU section at the end of the file
+  Menus.AutoDoorSkip = function()
+    Groupboxes.AutoDoorSkip:AddToggle("AutoDoorSkip", {
+      Text = "Auto Door Skip",
+      Tooltip = "Automatically clears rooms (visible gold, keys, levers) and solves doors.",
+      Default = false,
+    })
+
+    Groupboxes.AutoDoorSkip:AddToggle("AutoSkipFastLoot", {
+      Text = "Fast Loot (Золото / Пыль)",
+      Tooltip = "Teleports to visible gold piles and stardust on tables/floor.",
+      Default = true,
+    })
+
+    Groupboxes.AutoDoorSkip:AddToggle("AutoSkipWaitThreats", {
+      Text = "Wait Threat in Seek Zones (30-40, 80-90)",
+      Tooltip = "Waits for Rush/Ambush/Blitz to despawn ONLY in rooms 30-40 and 80-90 (Seek chase zones).",
+      Default = true,
+    })
+
+    Groupboxes.AutoDoorSkip:AddToggle("AutoSkipUnlock", {
+      Text = "Auto Key & Gate",
+      Tooltip = "Automatically teleports to keys and pulls gate levers if door is locked.",
+      Default = true,
+    })
+
+    Groupboxes.AutoDoorSkip:AddToggle("AutoSkipSpecialRooms", {
+      Text = "Auto Room 50 & 100",
+      Tooltip = "Auto collects books + code in Room 50, and collects fuses + solves breaker + enters elevator in Room 100.",
+      Default = true,
+    })
+
+    Groupboxes.AutoDoorSkip:AddButton({
+      Text = "TP to Book",
+      Tooltip = "Teleports to any uncollected book in Room 50",
+      Callback = Handlers.TPToBook
+    })
+
+    Groupboxes.AutoDoorSkip:AddButton({
+      Text = "TP to Library Paper",
+      Tooltip = "Teleports to the hint paper with the code in Room 50",
+      Callback = Handlers.TPToLibraryPaper
+    })
+  end
+
 end
 
-Groupboxes.SpamBuy = element3.Exploits:AddLeftGroupbox("Pre-Run")
 
-Groupboxes.SpamBuy:AddButton({
-  Text = "Buy Items", DisabledTooltip = "This feature doesn't work in this floor", Callback = function()
-    task.spawn(function()
-      local preRunShop = replicatedStorage.RemotesFolder:FindFirstChild("PreRunShop")
+function Handlers.BuyItems()
+  task.spawn(function()
+    local preRunShop = replicatedStorage.RemotesFolder:FindFirstChild("PreRunShop")
 
-      if not preRunShop then
-        return
+    if not preRunShop then
+      return
+    end
+
+    local value = options.SpamBuyItems.Value
+    local spamItems = {}
+
+    if value then
+      for key, _ in pairs(value) do
+        table.insert(spamItems, key)
       end
+    end
 
-      local value14 = options.SpamBuyItems.Value
-      local val101 = {}
+    if #spamItems > 0 then
+      local buyCount = options.SpamBuyCount.Value
+      local spamQueue = {}
 
-      if value14 then
-        for key5, value15 in pairs(value14) do
-          table.insert(val101, key5)
+      for _ = 1, buyCount do
+        for _, spamItem in ipairs(spamItems) do
+          table.insert(spamQueue, spamItem)
         end
       end
 
-      if #val101 > 0 then
-        local value16 = options.SpamBuyCount.Value
-        local val102 = {}
+      preRunShop:FireServer(spamQueue, false)
+    end
+  end)
+end
 
-        for i8 = 1, value16 do
-          for index9, value17 in ipairs(val101) do
-            table.insert(val102, value17)
-          end
-        end
 
-        preRunShop:FireServer(val102, false)
-      end
-    end)
-  end, })
-
-Groupboxes.SpamBuy:AddSlider("SpamBuyCount", {
-  Text = "Purchase Count", Min = 1, Max = 6, Default = 3, Rounding = 0, Compact = true, DisabledTooltip = "This feature doesn't work in this floor", })
-
-Groupboxes.SpamBuy:AddDropdown("SpamBuyItems", {
-  Text = "Items to Buy", Values = { "Lockpick", "Lighter", "Flashlight", "Vitamins", "Crucifix", "Skeleton Key" }, Multi = true, AllowNull = true, DisabledTooltip = "This feature doesn't work in this floor", })
-
-Groupboxes.SpamBuy:AddToggle("ShowCrucifix", {
-  Text = "Show Crucifix", Default = false, Tooltip = "Shows/hides the crucifix in the item shop", DisabledTooltip = "This feature doesn't work in this floor", })
-
-toggles.ShowCrucifix:OnChanged(function(visible3)
-  if helper11() ~= "OldHotel" then
+function Handlers.ShowCrucifixChanged(visible)
+  if detectFloor() ~= "OldHotel" then
     return
   end
 
-  local itemShopCrucifix = localPlayer2 and localPlayer2.PlayerGui
-    and localPlayer2.PlayerGui:FindFirstChild("MainUI")
-    and localPlayer2.PlayerGui.MainUI:FindFirstChild("ItemShop")
-    and localPlayer2.PlayerGui.MainUI.ItemShop:FindFirstChild("Items")
-    and localPlayer2.PlayerGui.MainUI.ItemShop.Items:FindFirstChild("ItemShop_Crucifix")
+  local itemShopCrucifix = localPlayer and localPlayer.PlayerGui
+    and localPlayer.PlayerGui:FindFirstChild("MainUI")
+    and localPlayer.PlayerGui.MainUI:FindFirstChild("ItemShop")
+    and localPlayer.PlayerGui.MainUI.ItemShop:FindFirstChild("Items")
+    and localPlayer.PlayerGui.MainUI.ItemShop.Items:FindFirstChild("ItemShop_Crucifix")
 
   if itemShopCrucifix then
-    itemShopCrucifix.Visible = visible3
+    itemShopCrucifix.Visible = visible
   end
-end)
+end
 
-Groupboxes.SpamBuy:AddToggle("ShowSkeletonKey", {
-  Text = "Show Skeleton Key", Default = false, Tooltip = "Shows/hides the skeleton key in the item shop", DisabledTooltip = "This feature doesn't work in this floor", })
 
-toggles.ShowSkeletonKey:OnChanged(function(visible4)
-  if helper11() ~= "OldHotel" then
+function Handlers.ShowSkeletonKeyChanged(visible)
+  if detectFloor() ~= "OldHotel" then
     return
   end
 
-  local itemShopSkeletonKey = localPlayer2 and localPlayer2.PlayerGui
-    and localPlayer2.PlayerGui:FindFirstChild("MainUI")
-    and localPlayer2.PlayerGui.MainUI:FindFirstChild("ItemShop")
-    and localPlayer2.PlayerGui.MainUI.ItemShop:FindFirstChild("Items")
-    and localPlayer2.PlayerGui.MainUI.ItemShop.Items:FindFirstChild("ItemShop_Skeleton Key")
+  local itemShopSkeletonKey = localPlayer and localPlayer.PlayerGui
+    and localPlayer.PlayerGui:FindFirstChild("MainUI")
+    and localPlayer.PlayerGui.MainUI:FindFirstChild("ItemShop")
+    and localPlayer.PlayerGui.MainUI.ItemShop:FindFirstChild("Items")
+    and localPlayer.PlayerGui.MainUI.ItemShop.Items:FindFirstChild("ItemShop_Skeleton Key")
 
   if itemShopSkeletonKey then
-    itemShopSkeletonKey.Visible = visible4
+    itemShopSkeletonKey.Visible = visible
   end
-end)
+end
 
-Groupboxes.SpamBuy:AddToggle("AutoBuyLockpicks", {
-  Text = "Auto Buy Lockpicks (1x)",
-  Default = false,
-  Tooltip = "Automatically purchases 1 lockpick in pre-run shop",
-  DisabledTooltip = "This feature doesn't work in this floor",
-})
 
-Groupboxes.SpamBuy:AddToggle("AutoClosePreRunShop", {
-  Text = "Auto Close Shop (Confirm)",
-  Default = true,
-  Tooltip = "Automatically clicks Confirm and closes the pre-run shop",
-  DisabledTooltip = "This feature doesn't work in this floor",
-})
+function Handlers.ConfirmShop()
+  if Functions and Functions.ConfirmPreRunShop then
+    Functions.ConfirmPreRunShop()
+  end
+end
 
-Groupboxes.SpamBuy:AddButton({
-  Text = "Confirm Shop",
-  Tooltip = "Clicks Confirm and closes the pre-run shop",
-  Callback = function()
-    if Functions and Functions.ConfirmPreRunShop then
-      Functions.ConfirmPreRunShop()
-    end
-  end,
-})
 
 local lastAutoLockpickBuy = 0
 
 function Functions.ConfirmPreRunShop()
-  local mainUI = localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") and localPlayer2.PlayerGui:FindFirstChild("MainUI")
+  local mainUI = localPlayer and localPlayer:FindFirstChild("PlayerGui") and localPlayer.PlayerGui:FindFirstChild("MainUI")
   local itemShop = mainUI and mainUI:FindFirstChild("ItemShop")
 
   local buttonClicked = false
@@ -3340,7 +3814,7 @@ function Functions.ConfirmPreRunShop()
   -- 2. Серверный вызов удаленного события PreRunShop (второй аргумент true = confirm)
   pcall(function()
     local preRunShop = (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder") and replicatedStorage.RemotesFolder:FindFirstChild("PreRunShop"))
-      or (remotesFolder2 and remotesFolder2:FindFirstChild("PreRunShop"))
+      or (remotesFolder and remotesFolder:FindFirstChild("PreRunShop"))
     if preRunShop then
       preRunShop:FireServer({}, true)
     end
@@ -3358,8 +3832,8 @@ function Functions.CheckAndAutoBuyLockpick()
     return
   end
 
-  local char = (localPlayer2 and localPlayer2.Character) or character
-  local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+  local char = (localPlayer and localPlayer.Character) or character
+  local bp = localPlayer and localPlayer:FindFirstChildOfClass("Backpack")
   if (char and char:FindFirstChild("Lockpick")) or (bp and bp:FindFirstChild("Lockpick")) then
     return
   end
@@ -3369,7 +3843,7 @@ function Functions.CheckAndAutoBuyLockpick()
   end
 
   local preRunShop = (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder") and replicatedStorage.RemotesFolder:FindFirstChild("PreRunShop"))
-    or (remotesFolder2 and remotesFolder2:FindFirstChild("PreRunShop"))
+    or (remotesFolder and remotesFolder:FindFirstChild("PreRunShop"))
 
   if preRunShop then
     lastAutoLockpickBuy = tick()
@@ -3382,11 +3856,12 @@ function Functions.CheckAndAutoBuyLockpick()
   end
 end
 
-toggles.AutoBuyLockpicks:OnChanged(function(enabled)
+function Handlers.AutoBuyLockpicksChanged(enabled)
   if enabled then
     task.spawn(Functions.CheckAndAutoBuyLockpick)
   end
-end)
+end
+
 
 task.spawn(function()
   local function setupItemShopListener(mainUI)
@@ -3420,12 +3895,12 @@ task.spawn(function()
     end
   end
 
-  if localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") then
-    local mainUI = localPlayer2.PlayerGui:FindFirstChild("MainUI")
+  if localPlayer and localPlayer:FindFirstChild("PlayerGui") then
+    local mainUI = localPlayer.PlayerGui:FindFirstChild("MainUI")
     if mainUI then
       setupItemShopListener(mainUI)
     end
-    localPlayer2.PlayerGui.ChildAdded:Connect(function(child)
+    localPlayer.PlayerGui.ChildAdded:Connect(function(child)
       if child.Name == "MainUI" then
         setupItemShopListener(child)
       end
@@ -3433,264 +3908,242 @@ task.spawn(function()
   end
 end)
 
-Groupboxes.Prompts = element3.Exploits:AddLeftGroupbox("Prompts")
-
-Groupboxes.Prompts:AddToggle("InstantInteract", {
-  Text = "Instant Interact", Default = false, Tooltip = "Removes the wait time for interactions e.g. locks", })
-
-Groupboxes.Prompts:AddToggle("PromptClip", {
-  Text = "Prompt Clip", Default = false, Tooltip = "Allows you to interact through walls", })
-
-Groupboxes.Prompts:AddToggle("PromptReach", {
-  Text = "Prompt Reach", Default = false, Tooltip = "Increases the range of all proximity prompts", })
-
-Groupboxes.Prompts:AddSlider("PromptRange", {
-  Text = "Prompt Range", Min = 1, Max = 2, Default = 1, Rounding = 1, Compact = true, })
 
 _TrackedPrompts = {}
 
-options.PromptRange:OnChanged(function(p41)
+function Handlers.PromptRangeChanged(value)
   if toggles.PromptReach.Value then
-    for index10, value18 in ipairs(_TrackedPrompts) do
-      value18.MaxActivationDistance = value18:GetAttribute("MaxActivationDistance_Old") * p41
+    for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
+      _TrackedPrompt.MaxActivationDistance = _TrackedPrompt:GetAttribute("MaxActivationDistance_Old") * value
     end
   end
-end)
+end
 
-Groupboxes.Exploits = element3.Exploits:AddLeftGroupbox("Exploits")
 
-Groupboxes.Exploits:AddToggle("InfiniteItemsToggle", {
-  Text = "Infinite Items", Default = false, Tooltip = "Allows you to use lockpicks, shears, skeleton keys, and multitools without draining the usage", DisabledTooltip = "Your executor doesn't support this feature :(", })
+local lastPrompt
 
-local val103
-
-Connections.InfiniteItemsHandler = ProximityPromptService.PromptTriggered:Connect(function(p42)
-  if not p42:GetAttribute("FakePrompt") then
+Connections.InfiniteItemsHandler = ProximityPromptService.PromptTriggered:Connect(function(prompt)
+  if not prompt:GetAttribute("FakePrompt") then
     return
   end
 
-  local curChar = localPlayer2 and localPlayer2.Character
-  local val104 = {
+  local curChar = localPlayer and localPlayer.Character
+  local lockItemNames = {
     "Lockpick", "Lockpicks", "Shears", "SkeletonKey", "Key", "GeneratorFuse", "KeyElectrical", "KeyBackdoor", "KeyIron", "Multitool", }
 
-  local val105 = {
+  local toolItemNames = {
     "Lockpick", "Lockpicks", "Shears", "SkeletonKey", "Key", "KeyElectrical", "KeyBackdoor", "KeyIron", "Multitool", }
 
-  local findFirstChild3
+  local findFirstChild
 
   if curChar then
-    for index11, value19 in ipairs(val104) do
-      findFirstChild3 = curChar:FindFirstChild(value19)
+    for _, lockItemName in ipairs(lockItemNames) do
+      findFirstChild = curChar:FindFirstChild(lockItemName)
 
-      if findFirstChild3 then
+      if findFirstChild then
         break
       end
     end
   end
 
-  local val106 = {
+  local lockPromptNames = {
     UnlockPrompt = true, SkullPrompt = true, LockPrompt = true, ThingToEnable = true, FusesPrompt = true, }
 
-  local parent = val106[p42.Name]
-    or p42.Parent and p42.Parent:GetAttribute("Locked") == true
-    or p42.Parent and p42.Parent.Parent and p42.Parent.Parent.Name == "Locker_Small_Locked"
-      and p42.Name == "ActivateEventPrompt"
+  local parent = lockPromptNames[prompt.Name]
+    or prompt.Parent and prompt.Parent:GetAttribute("Locked") == true
+    or prompt.Parent and prompt.Parent.Parent and prompt.Parent.Parent.Name == "Locker_Small_Locked"
+      and prompt.Name == "ActivateEventPrompt"
 
   if parent then
     if options.AutoInteractIgnoreList.Value.Locks then
       return
     end
 
-    local val107 = {
+    local unlockItemNames = {
       "Key", "GeneratorFuse", "KeyBackdoor", "KeyElectrical", "KeyIron", "Lockpick", "Lockpicks", "SkeletonKey", "Shears", "Multitool", }
 
-    local val108 = { "Key", "GeneratorFuse", "KeyElectrical", "KeyIron" }
-    local val109 = false
+    local keyItemNames = { "Key", "GeneratorFuse", "KeyElectrical", "KeyIron" }
+    local hasUnlockItem = false
 
-    for index12, value20 in ipairs(val107) do
-      if Functions.HasItem(value20, true) then
-        val109 = true
+    for _, unlockItemName in ipairs(unlockItemNames) do
+      if Functions.HasItem(unlockItemName, true) then
+        hasUnlockItem = true
         break
       end
     end
 
-    for index13, value21 in ipairs(val108) do
-      if Functions.HasItem(value21) then
-        val109 = true
+    for _, keyItemName in ipairs(keyItemNames) do
+      if Functions.HasItem(keyItemName) then
+        hasUnlockItem = true
         break
       end
     end
 
-    if not val109 then
+    if not hasUnlockItem then
       return
     end
   end
 
-  if p42.Parent.Name == "CuttableVines" and not Functions.HasItem("Shears", true)
+  if prompt.Parent.Name == "CuttableVines" and not Functions.HasItem("Shears", true)
       and not Functions.HasItem("Multitool", true)
-    or p42.Parent.Name == "Chest_Vine" and not Functions.HasItem("Shears", true)
+    or prompt.Parent.Name == "Chest_Vine" and not Functions.HasItem("Shears", true)
       and not Functions.HasItem("Multitool", true)
-    or p42.Parent.Name == "Cellar" and not Functions.HasItem("Shears", true)
+    or prompt.Parent.Name == "Cellar" and not Functions.HasItem("Shears", true)
       and not Functions.HasItem("Multitool", true) then
     return
   end
 
-  if p42.Parent.Name == "SkullLock" and not Functions.HasItem("SkeletonKey", true) then
+  if prompt.Parent.Name == "SkullLock" and not Functions.HasItem("SkeletonKey", true) then
     return
   end
 
-  if p42.Parent.Name == "Lock1" and not Functions.HasItem("Lockpick", true)
+  if prompt.Parent.Name == "Lock1" and not Functions.HasItem("Lockpick", true)
       and not Functions.HasItem("Multitool", true)
-    or p42.Parent.Name == "Lock2" and not Functions.HasItem("Lockpick", true)
+    or prompt.Parent.Name == "Lock2" and not Functions.HasItem("Lockpick", true)
       and not Functions.HasItem("Multitool", true) then
     return
   end
 
-  if Functions.HasItem("Shears", true) and parent and p42.Parent.Name ~= "CuttableVines"
-    and p42.Parent.Name ~= "Chest_Vine" and p42.Parent.Name ~= "Cellar" then
+  if Functions.HasItem("Shears", true) and parent and prompt.Parent.Name ~= "CuttableVines"
+    and prompt.Parent.Name ~= "Chest_Vine" and prompt.Parent.Name ~= "Cellar" then
     return
   end
 
-  if findFirstChild3 and TableFind(val105, findFirstChild3.Name) and val85.UseAnimation
-    and val85.UseAnimationBreak then
-    val85.UseAnimation:Stop()
-    val85.UseAnimationBreak:Stop()
-    val85.UseAnimationBreak:Play()
+  if findFirstChild and TableFind(toolItemNames, findFirstChild.Name) and featureState.UseAnimation
+    and featureState.UseAnimationBreak then
+    featureState.UseAnimation:Stop()
+    featureState.UseAnimationBreak:Stop()
+    featureState.UseAnimationBreak:Play()
 
-    if findFirstChild3.Name == "Shears" then
-      findFirstChild3:WaitForChild("Handle"):WaitForChild("sound_prompt"):Play()
+    if findFirstChild.Name == "Shears" then
+      findFirstChild:WaitForChild("Handle"):WaitForChild("sound_prompt"):Play()
     end
   end
 
   local tool = character:FindFirstChildOfClass("Tool")
-  local val110 = tool and val103[tool.Name]
+  local tool2 = tool and lastPrompt[tool.Name]
 
-  if tool and val110 and toggles.InfiniteItemsToggle.Value and ({
-    Lockpicks = true, ["Skeleton Key"] = true, Shears = true, Multitool = true, })[val110] then
-    workspace:FindFirstChild("Drops").ChildAdded:Once(function(p43)
-      local modulePrompt = p43:FindFirstChild("ModulePrompt")
+  if tool and tool2 and toggles.InfiniteItemsToggle.Value and ({
+    Lockpicks = true, ["Skeleton Key"] = true, Shears = true, Multitool = true, })[tool2] then
+    workspace:FindFirstChild("Drops").ChildAdded:Once(function(child)
+      local modulePrompt = child:FindFirstChild("ModulePrompt")
       Functions.FirePrompt(modulePrompt)
-      Functions.FirePrompt(FakePrompts[p42])
+      Functions.FirePrompt(FakePrompts[prompt])
     end)
 
-    character.ChildAdded:Once(function(p44)
-      if p44.Name == "Shears" then
-        p44:WaitForChild("Handle"):WaitForChild("sound_promptend"):Play()
+    character.ChildAdded:Once(function(child)
+      if child.Name == "Shears" then
+        child:WaitForChild("Handle"):WaitForChild("sound_promptend"):Play()
       end
     end)
 
-    remotesFolder2.DropItem:FireServer(tool)
+    remotesFolder.DropItem:FireServer(tool)
   else
-    Functions.FirePrompt(FakePrompts[p42])
+    Functions.FirePrompt(FakePrompts[prompt])
   end
 end)
 
-Groupboxes.Exploits:AddToggle("InfiniteCrucifix", {
-  Text = "Infinite Crucifix", Default = false, Tooltip = "Performs a glitch that doesn't use up your crucifix when used on a rushlike entity (rush, ambush, a60, a120, blitz), however, this is inconsistent", DisabledTooltip = "Your executor doesn't support this feature :(", })
 
-Groupboxes.Exploits:AddToggle("AutoHeartbeatMinigame", {
-  Text = "Win Heartbeat Minigame", Default = false, Tooltip = "Automatically passes the heartbeat minigame when it starts", DisabledTooltip = "Your executor doesn't support this feature :(", })
+function Handlers.FakeRevive()
+  task.spawn(function()
+    local gravity = workspace.Gravity
+    local deathConnection
 
-Groupboxes.Exploits:AddButton({
-  Text = "Fake Revive", Tooltip = "This doesnt always work, and interacting with a bandage will disable it, and will not be able to enable it back. Sometimes you will not be able to fully finish the run, but you can still go through doors/finish", DisabledTooltip = "Your executor doesn't support this feature :(", Callback = function()
-    task.spawn(function()
-      local gravity = workspace.Gravity
-      local connect5
+    local function setupDeathHandler()
+      local humanoid2 = localPlayer.Character
+          and localPlayer.Character:FindFirstChild("Humanoid")
+        or localPlayer.Character:WaitForChild("Humanoid")
 
-      local function helper25()
-        local humanoid5 = localPlayer2.Character
-            and localPlayer2.Character:FindFirstChild("Humanoid")
-          or localPlayer2.Character:WaitForChild("Humanoid")
+      if deathConnection then
+        deathConnection:Disconnect()
+      end
 
-        if connect5 then
-          connect5:Disconnect()
-        end
+      deathConnection = humanoid2.Died:Connect(function()
+        task.delay(0.5, function()
+          workspace.Gravity = 0
+          local character2 = localPlayer.Character
 
-        connect5 = humanoid5.Died:Connect(function()
-          task.delay(0.5, function()
-            workspace.Gravity = 0
-            local character5 = localPlayer2.Character
+          if not character2 then
+            return
+          end
 
-            if not character5 then
-              return
-            end
+          local humanoid3 = character2:FindFirstChild("Humanoid")
+          local humanoidRootPart2 = character2:FindFirstChild("HumanoidRootPart")
 
-            local humanoid6 = character5:FindFirstChild("Humanoid")
-            local humanoidRootPart2 = character5:FindFirstChild("HumanoidRootPart")
+          if not humanoid3 or not humanoidRootPart2 then
+            return
+          end
 
-            if not humanoid6 or not humanoidRootPart2 then
-              return
-            end
+          local playerGui2 = localPlayer:FindFirstChild("PlayerGui")
 
-            local playerGui3 = localPlayer2:FindFirstChild("PlayerGui")
+          if playerGui2 then
+            local mainUI = playerGui2:FindFirstChild("MainUI")
 
-            if playerGui3 then
-              local mainUI2 = playerGui3:FindFirstChild("MainUI")
+            if mainUI then
+              local deathPanel = mainUI:FindFirstChild("DeathPanel")
 
-              if mainUI2 then
-                local deathPanel = mainUI2:FindFirstChild("DeathPanel")
+              if deathPanel then
+                deathPanel:Destroy()
+              end
 
-                if deathPanel then
-                  deathPanel:Destroy()
-                end
+              local death = mainUI:FindFirstChild("Death")
 
-                local death = mainUI2:FindFirstChild("Death")
-
-                if death then
-                  death:Destroy()
-                end
+              if death then
+                death:Destroy()
               end
             end
+          end
 
-            humanoid6.Health = humanoid6.MaxHealth
-            humanoid6.AutomaticScalingEnabled = true
+          humanoid3.Health = humanoid3.MaxHealth
+          humanoid3.AutomaticScalingEnabled = true
 
-            if character5:GetAttribute("Stunned") then
-              character5:SetAttribute("Stunned", false)
+          if character2:GetAttribute("Stunned") then
+            character2:SetAttribute("Stunned", false)
+          end
+
+          task.delay(1, function()
+            if deathConnection then
+              workspace.Gravity = gravity
             end
-
-            task.delay(1, function()
-              if connect5 then
-                workspace.Gravity = gravity
-              end
-            end)
           end)
         end)
+      end)
+    end
+
+    local currentRoom = localPlayer:GetAttribute("CurrentRoom")
+      or replicatedStorage:FindFirstChild("GameData")
+        and replicatedStorage.GameData:FindFirstChild("LatestRoom")
+        and replicatedStorage.GameData.LatestRoom.Value
+
+    if currentRoom and currentRoom >= 1 then
+      setupDeathHandler()
+      localPlayer.CharacterAdded:Connect(function() setupDeathHandler() end)
+      task.wait(1)
+
+      if Executor.replicatesignal then
+        Executor.replicatesignal(localPlayer.kill)
+      elseif remotesFolder and remotesFolder:FindFirstChild("Underwater") then
+        remotesFolder.Underwater:FireServer(true)
+      else
+        localPlayer.Character.Humanoid.Health = 0
       end
 
-      local currentRoom = localPlayer2:GetAttribute("CurrentRoom")
-        or replicatedStorage:FindFirstChild("GameData")
-          and replicatedStorage.GameData:FindFirstChild("LatestRoom")
-          and replicatedStorage.GameData.LatestRoom.Value
+      task.wait(1)
+      coreGui:FindFirstChild("RobloxGui").Backpack.Visible = true
 
-      if currentRoom and currentRoom >= 1 then
-        helper25()
-        localPlayer2.CharacterAdded:Connect(function() helper25() end)
-        task.wait(1)
+      localPlayer:SetAttribute("Alive", true)
+      localPlayer:SetAttribute("FakeDeath", true)
 
-        if Executor.replicatesignal then
-          Executor.replicatesignal(localPlayer2.kill)
-        elseif remotesFolder2 and remotesFolder2:FindFirstChild("Underwater") then
-          remotesFolder2.Underwater:FireServer(true)
-        else
-          localPlayer2.Character.Humanoid.Health = 0
-        end
+      library:Notify({ Title = "Pick up a bandage to restore all interactions", Time = 5 })
+    end
+  end)
+end
 
-        task.wait(1)
-        coreGui:FindFirstChild("RobloxGui").Backpack.Visible = true
-
-        localPlayer2:SetAttribute("Alive", true)
-        localPlayer2:SetAttribute("FakeDeath", true)
-
-        library:Notify({ Title = "Pick up a bandage to restore all interactions", Time = 5 })
-      end
-    end)
-  end, })
 
 -- ========================================================
 -- Crucifix Everything (Exploits Left Groupbox)
 -- ========================================================
-Groupboxes.CrucifixEverything = element3.Exploits:AddLeftGroupbox("Crucifix Everything")
+
 
 do
   local CRUCIFIX_URL = "https://raw.githubusercontent.com/RegularVynixu/DOORS-Crucifix-Everything/main/init.luau"
@@ -3721,162 +4174,188 @@ do
   local crucifixCustomColor = nil
   local crucifixIgnoreList = {}
 
-  Groupboxes.CrucifixEverything:AddDropdown("CrucifixType", {
-    Text = "Crucifix Type",
-    Values = { "guiding light", "curious light" },
-    Default = "guiding light",
-    Callback = function(val)
-      if val == "guiding light" then
-        crucifixType = 1
-      elseif val == "curious light" then
-        crucifixType = 2
-      end
-    end,
-  })
-
-  Groupboxes.CrucifixEverything:AddInput("CrucifixUses", {
-    Text = "Crucifix Uses",
-    Default = "nil",
-    Placeholder = "number or nil (infinite)",
-    Callback = function(val)
-      local lowerVal = string.lower(tostring(val or ""))
-      if lowerVal == "nil" or lowerVal == "" then
-        crucifixUses = nil
-      else
-        local n = tonumber(val)
-        if n then crucifixUses = n end
-      end
-    end,
-  })
-
-  Groupboxes.CrucifixEverything:AddToggle("CrucifixResist", {
-    Text = "Resist",
-    Tooltip = "Whether the crucifix succeeds or fails against the entity.",
-    Default = false,
-    Callback = function(val)
-      crucifixResist = val
-    end,
-  })
-
-  Groupboxes.CrucifixEverything:AddToggle("CrucifixEntitiesOnly", {
-    Text = "Entities Only",
-    Tooltip = "Only target custom entity models.",
-    Default = false,
-    Callback = function(val)
-      crucifixEntitiesOnly = val
-    end,
-  })
-
-  Groupboxes.CrucifixEverything:AddInput("CrucifixColor", {
-    Text = "Custom Color",
-    Default = "",
-    Placeholder = "r, g, b (e.g. 255, 0, 0)",
-    Callback = function(val)
-      val = tostring(val or "")
-      if val == "" then
-        crucifixCustomColor = nil
-        return
-      end
-      local r, g, b = string.match(val, "(%d+)%s*,%s*(%d+)%s*,%s*(%d+)")
-      if r and g and b then
-        crucifixCustomColor = Color3.fromRGB(math.clamp(tonumber(r), 0, 255), math.clamp(tonumber(g), 0, 255), math.clamp(tonumber(b), 0, 255))
-      else
-        crucifixCustomColor = nil
-      end
-    end,
-  })
-
-  Groupboxes.CrucifixEverything:AddInput("CrucifixIgnoreList", {
-    Text = "Ignore List",
-    Default = "",
-    Placeholder = "entity1, entity2",
-    Callback = function(val)
-      val = tostring(val or "")
-      crucifixIgnoreList = {}
-      if val == "" then return end
-      for name in string.gmatch(val, "([^,]+)") do
-        name = name:gsub("^%s+", ""):gsub("%s+$", "")
-        if name ~= "" then
-          table.insert(crucifixIgnoreList, name)
-        end
-      end
-    end,
-  })
-
-  Groupboxes.CrucifixEverything:AddButton({
-    Text = "Give Crucifix",
-    Tooltip = "Spawns the configured crucifix in your inventory.",
-    Callback = function()
-      local lib = LoadCrucifix()
-      if not lib then
-        library:Notify({ Title = "Crucifix", Description = "Failed to load Crucifix library", Time = 5 })
-        return
-      end
-      local ok, err = pcall(function()
-        lib:GiveCrucifix({
-          Type = crucifixType,
-          Uses = crucifixUses,
-          Resist = crucifixResist,
-          EntitiesOnly = crucifixEntitiesOnly,
-          CustomColor = crucifixCustomColor,
-          IgnoreList = crucifixIgnoreList,
-        })
-      end)
-      if ok then
-        library:Notify({ Title = "Crucifix", Description = "Crucifix given successfully!", Time = 4 })
-      else
-        library:Notify({ Title = "Crucifix", Description = "Error: " .. tostring(err), Time = 5 })
-      end
-    end,
-  })
-
-  Groupboxes.CrucifixEverything:AddButton({
-    Text = "Remove Crucifix",
-    Tooltip = "Removes any Crucifix from backpack and character.",
-    Callback = function()
-      local removed = false
-      local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-      if bp then
-        local c = bp:FindFirstChild("Crucifix")
-        if c then c:Destroy(); removed = true end
-      end
-      local ch = localPlayer2.Character
-      if ch then
-        local c = ch:FindFirstChild("Crucifix")
-        if c then c:Destroy(); removed = true end
-      end
-      if removed then
-        library:Notify({ Title = "Crucifix", Description = "Crucifix removed!", Time = 3 })
-      else
-        library:Notify({ Title = "Crucifix", Description = "No Crucifix found in inventory.", Time = 3 })
-      end
-    end,
-  })
-end
-
-local function helper26(val111)
-  if not val111:GetAttribute("HoldDuration_Old") then
-    val111:SetAttribute("HoldDuration_Old", val111.HoldDuration)
-    val111:SetAttribute("RequiresLineOfSight_Old", val111.RequiresLineOfSight)
-    local curDist = val111.MaxActivationDistance
-    if curDist and curDist >= 900 then curDist = 12 end
-    val111:SetAttribute("MaxActivationDistance_Old", curDist)
+    function Handlers.CrucifixType(val)
+    if val == "guiding light" then
+      crucifixType = 1
+    elseif val == "curious light" then
+      crucifixType = 2
+    end
   end
 
-  if val111.MaxActivationDistance and val111.MaxActivationDistance >= 900 then
-    val111.MaxActivationDistance = val111:GetAttribute("MaxActivationDistance_Old") or 12
+
+    function Handlers.CrucifixUses(val)
+    local lowerVal = string.lower(tostring(val or ""))
+    if lowerVal == "nil" or lowerVal == "" then
+      crucifixUses = nil
+    else
+      local n = tonumber(val)
+      if n then crucifixUses = n end
+    end
+  end
+
+
+  
+
+  
+
+    function Handlers.CrucifixColor(val)
+    val = tostring(val or "")
+    if val == "" then
+      crucifixCustomColor = nil
+      return
+    end
+    local r, g, b = string.match(val, "(%d+)%s*,%s*(%d+)%s*,%s*(%d+)")
+    if r and g and b then
+      crucifixCustomColor = Color3.fromRGB(math.clamp(tonumber(r), 0, 255), math.clamp(tonumber(g), 0, 255), math.clamp(tonumber(b), 0, 255))
+    else
+      crucifixCustomColor = nil
+    end
+  end
+
+
+    function Handlers.CrucifixIgnoreList(val)
+    val = tostring(val or "")
+    crucifixIgnoreList = {}
+    if val == "" then return end
+    for name in string.gmatch(val, "([^,]+)") do
+      name = name:gsub("^%s+", ""):gsub("%s+$", "")
+      if name ~= "" then
+        table.insert(crucifixIgnoreList, name)
+      end
+    end
+  end
+
+
+    function Handlers.GiveCrucifix()
+    local lib = LoadCrucifix()
+    if not lib then
+      library:Notify({ Title = "Crucifix", Description = "Failed to load Crucifix library", Time = 5 })
+      return
+    end
+    local success, result = pcall(function()
+      lib:GiveCrucifix({
+        Type = crucifixType,
+        Uses = crucifixUses,
+        Resist = crucifixResist,
+        EntitiesOnly = crucifixEntitiesOnly,
+        CustomColor = crucifixCustomColor,
+        IgnoreList = crucifixIgnoreList,
+      })
+    end)
+    if success then
+      library:Notify({ Title = "Crucifix", Description = "Crucifix given successfully!", Time = 4 })
+    else
+      library:Notify({ Title = "Crucifix", Description = "Error: " .. tostring(result), Time = 5 })
+    end
+  end
+
+
+    function Handlers.RemoveCrucifix()
+    local removed = false
+    local bp = localPlayer:FindFirstChildOfClass("Backpack")
+    if bp then
+      local c = bp:FindFirstChild("Crucifix")
+      if c then c:Destroy(); removed = true end
+    end
+    local ch = localPlayer.Character
+    if ch then
+      local c = ch:FindFirstChild("Crucifix")
+      if c then c:Destroy(); removed = true end
+    end
+    if removed then
+      library:Notify({ Title = "Crucifix", Description = "Crucifix removed!", Time = 3 })
+    else
+      library:Notify({ Title = "Crucifix", Description = "No Crucifix found in inventory.", Time = 3 })
+    end
+  end
+
+
+  -- menu of this block: built later, from the MENU section at the end of the file
+  Menus.CrucifixEverything = function()
+    Groupboxes.CrucifixEverything:AddDropdown("CrucifixType", {
+      Text = "Crucifix Type",
+      Values = { "guiding light", "curious light" },
+      Default = "guiding light",
+      Callback = Handlers.CrucifixType,
+    })
+
+    Groupboxes.CrucifixEverything:AddInput("CrucifixUses", {
+      Text = "Crucifix Uses",
+      Default = "nil",
+      Placeholder = "number or nil (infinite)",
+      Callback = Handlers.CrucifixUses,
+    })
+
+    Groupboxes.CrucifixEverything:AddToggle("CrucifixResist", {
+      Text = "Resist",
+      Tooltip = "Whether the crucifix succeeds or fails against the entity.",
+      Default = false,
+      Callback = function(val)
+        crucifixResist = val
+      end,
+    })
+
+    Groupboxes.CrucifixEverything:AddToggle("CrucifixEntitiesOnly", {
+      Text = "Entities Only",
+      Tooltip = "Only target custom entity models.",
+      Default = false,
+      Callback = function(val)
+        crucifixEntitiesOnly = val
+      end,
+    })
+
+    Groupboxes.CrucifixEverything:AddInput("CrucifixColor", {
+      Text = "Custom Color",
+      Default = "",
+      Placeholder = "r, g, b (e.g. 255, 0, 0)",
+      Callback = Handlers.CrucifixColor,
+    })
+
+    Groupboxes.CrucifixEverything:AddInput("CrucifixIgnoreList", {
+      Text = "Ignore List",
+      Default = "",
+      Placeholder = "entity1, entity2",
+      Callback = Handlers.CrucifixIgnoreList,
+    })
+
+    Groupboxes.CrucifixEverything:AddButton({
+      Text = "Give Crucifix",
+      Tooltip = "Spawns the configured crucifix in your inventory.",
+      Callback = Handlers.GiveCrucifix,
+    })
+
+    Groupboxes.CrucifixEverything:AddButton({
+      Text = "Remove Crucifix",
+      Tooltip = "Removes any Crucifix from backpack and character.",
+      Callback = Handlers.RemoveCrucifix,
+    })
+  end
+
+end
+
+local function patchPromptDefaults(prompt)
+  if not prompt:GetAttribute("HoldDuration_Old") then
+    prompt:SetAttribute("HoldDuration_Old", prompt.HoldDuration)
+    prompt:SetAttribute("RequiresLineOfSight_Old", prompt.RequiresLineOfSight)
+    local curDist = prompt.MaxActivationDistance
+    if curDist and curDist >= 900 then curDist = 12 end
+    prompt:SetAttribute("MaxActivationDistance_Old", curDist)
+  end
+
+  if prompt.MaxActivationDistance and prompt.MaxActivationDistance >= 900 then
+    prompt.MaxActivationDistance = prompt:GetAttribute("MaxActivationDistance_Old") or 12
   end
 
   if toggles.InstantInteract.Value then
-    val111.HoldDuration = 0
+    prompt.HoldDuration = 0
   end
 
   if toggles.PromptClip.Value then
-    val111.RequiresLineOfSight = false
+    prompt.RequiresLineOfSight = false
   end
 
   if toggles.PromptReach.Value then
-    val111.MaxActivationDistance = val111:GetAttribute("MaxActivationDistance_Old")
+    prompt.MaxActivationDistance = prompt:GetAttribute("MaxActivationDistance_Old")
       * options.PromptRange.Value
   end
 end
@@ -3887,44 +4366,44 @@ local promptContainer = Instance.new("Folder")
 promptContainer.Name = "PromptContainer"
 promptContainer.Parent = CoreGui
 
-local function helper27(val112)
-  if val112.ClassName ~= "ProximityPrompt" or val112:GetAttribute("FakePrompt") then
+local function registerPrompt(prompt)
+  if prompt.ClassName ~= "ProximityPrompt" or prompt:GetAttribute("FakePrompt") then
     return
   end
 
-  table.insert(_TrackedPrompts, val112)
-  helper26(val112)
+  table.insert(_TrackedPrompts, prompt)
+  patchPromptDefaults(prompt)
 
-  local val113 = {
+  local lockPromptNames = {
     UnlockPrompt = true, SkullPrompt = true, LockPrompt = true, ThingToEnable = true, FusesPrompt = true, }
 
   if Executor.fireproximityprompt then
-    local currentFloor = localPlayer2:GetAttribute("CurrentFloor") or ""
+    local currentFloor = localPlayer:GetAttribute("CurrentFloor") or ""
 
     if currentFloor ~= "OldHotel" and currentFloor ~= "Fools" then
-      if toggles.InfiniteItemsToggle and toggles.InfiniteItemsToggle.Value and (val113[val112.Name]
-        or val112.Parent and val112.Parent:GetAttribute("Locked") == true
-        or val112.Parent and val112.Parent.Parent and val112.Parent.Parent.Name == "Locker_Small_Locked"
-          and val112.Name == "ActivateEventPrompt") then
-        local clone = val112:Clone()
+      if toggles.InfiniteItemsToggle and toggles.InfiniteItemsToggle.Value and (lockPromptNames[prompt.Name]
+        or prompt.Parent and prompt.Parent:GetAttribute("Locked") == true
+        or prompt.Parent and prompt.Parent.Parent and prompt.Parent.Parent.Name == "Locker_Small_Locked"
+          and prompt.Name == "ActivateEventPrompt") then
+        local clone = prompt:Clone()
         clone:SetAttribute("FakePrompt", true)
 
         task.wait()
 
-        clone.Parent = val112.Parent
-        clone:SetAttribute("HoldDuration_Old", val112:GetAttribute("HoldDuration_Old"))
+        clone.Parent = prompt.Parent
+        clone:SetAttribute("HoldDuration_Old", prompt:GetAttribute("HoldDuration_Old"))
 
         clone:SetAttribute(
-          "RequiresLineOfSight_Old", val112:GetAttribute("RequiresLineOfSight_Old")
+          "RequiresLineOfSight_Old", prompt:GetAttribute("RequiresLineOfSight_Old")
         )
 
         clone:SetAttribute(
-          "MaxActivationDistance_Old", val112:GetAttribute("MaxActivationDistance_Old")
+          "MaxActivationDistance_Old", prompt:GetAttribute("MaxActivationDistance_Old")
         )
 
-        clone.HoldDuration = val112.HoldDuration
-        clone.RequiresLineOfSight = val112.RequiresLineOfSight
-        clone.MaxActivationDistance = val112.MaxActivationDistance
+        clone.HoldDuration = prompt.HoldDuration
+        clone.RequiresLineOfSight = prompt.RequiresLineOfSight
+        clone.MaxActivationDistance = prompt.MaxActivationDistance
 
         if toggles.InstantInteract.Value then
           clone.HoldDuration = 0
@@ -3937,77 +4416,76 @@ local function helper27(val112)
         clone.MaxActivationDistance = clone:GetAttribute("MaxActivationDistance_Old")
           * options.PromptRange.Value
 
-        FakePrompts[clone] = val112
+        FakePrompts[clone] = prompt
         table.insert(_TrackedPrompts, clone)
-        clone.Destroying:Once(function() local v146 = TableFind(_TrackedPrompts, clone) end)
-        pcall(function() val112.Parent = promptContainer end)
+        clone.Destroying:Once(function() local _ = TableFind(_TrackedPrompts, clone) end)
+        pcall(function() prompt.Parent = promptContainer end)
 
-        local connect6 = val112:GetPropertyChangedSignal("Enabled"):Connect(function()
-          clone.Enabled = val112.Enabled
+        local connection = prompt:GetPropertyChangedSignal("Enabled"):Connect(function()
+          clone.Enabled = prompt.Enabled
         end)
 
-        val112:GetPropertyChangedSignal("ActionText"):Once(function()
-          val112.Parent = clone.Parent
+        prompt:GetPropertyChangedSignal("ActionText"):Once(function()
+          prompt.Parent = clone.Parent
           clone:Destroy()
-          connect6:Disconnect()
+          connection:Disconnect()
         end)
 
-        val112.Destroying:Once(function()
+        prompt.Destroying:Once(function()
           clone:Destroy()
-          connect6:Disconnect()
+          connection:Disconnect()
         end)
 
         clone.Enabled = false
         task.wait()
-        clone.Enabled = val112.Enabled
+        clone.Enabled = prompt.Enabled
       end
     end
   end
 
-  val112.Destroying:Once(function() local v147 = TableFind(_TrackedPrompts, val112) end)
+  prompt.Destroying:Once(function() local _ = TableFind(_TrackedPrompts, prompt) end)
 end
 
-toggles.InstantInteract:OnChanged(function()
-  for index14, value22 in ipairs(_TrackedPrompts) do
-    value22.HoldDuration = toggles.InstantInteract.Value and 0
-      or value22:GetAttribute("HoldDuration_Old")
+function Handlers.InstantInteractChanged()
+  for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
+    _TrackedPrompt.HoldDuration = toggles.InstantInteract.Value and 0
+      or _TrackedPrompt:GetAttribute("HoldDuration_Old")
   end
-end)
+end
 
-toggles.PromptClip:OnChanged(function()
-  for index15, value23 in ipairs(_TrackedPrompts) do
+
+function Handlers.PromptClipChanged()
+  for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
     if toggles.PromptClip.Value then
-      value23.RequiresLineOfSight = false
+      _TrackedPrompt.RequiresLineOfSight = false
     else
-      value23.RequiresLineOfSight = value23:GetAttribute("RequiresLineOfSight_Old")
+      _TrackedPrompt.RequiresLineOfSight = _TrackedPrompt:GetAttribute("RequiresLineOfSight_Old")
     end
   end
-end)
+end
 
-toggles.PromptReach:OnChanged(function()
-  for index16, value24 in ipairs(_TrackedPrompts) do
+
+function Handlers.PromptReachChanged()
+  for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
     if toggles.PromptReach.Value then
-      value24.MaxActivationDistance = value24:GetAttribute("MaxActivationDistance_Old")
+      _TrackedPrompt.MaxActivationDistance = _TrackedPrompt:GetAttribute("MaxActivationDistance_Old")
         * options.PromptRange.Value
     else
-      value24.MaxActivationDistance = value24:GetAttribute("MaxActivationDistance_Old")
+      _TrackedPrompt.MaxActivationDistance = _TrackedPrompt:GetAttribute("MaxActivationDistance_Old")
     end
   end
-end)
+end
 
-options.PromptRange:OnChanged(function()
+
+function Handlers.PromptRangeChanged2()
   if toggles.PromptReach.Value then
-    for index17, value25 in ipairs(_TrackedPrompts) do
-      value25.MaxActivationDistance = value25:GetAttribute("MaxActivationDistance_Old")
+    for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
+      _TrackedPrompt.MaxActivationDistance = _TrackedPrompt:GetAttribute("MaxActivationDistance_Old")
         * options.PromptRange.Value
     end
   end
-end)
+end
 
-Groupboxes.Exploits_BypassBox = element3.Exploits:AddRightTabbox("Bypasses")
-Groupboxes.Exploits_Bypasses = Groupboxes.Exploits_BypassBox:AddTab("Bypasses")
-Groupboxes.Exploits_Removals = Groupboxes.Exploits_BypassBox:AddTab("Removals")
-Groupboxes.Exploits_Damage = Groupboxes.Exploits_BypassBox:AddTab("Damage")
 
 local function createProxyToggle(flag)
   local proxy = {
@@ -4040,20 +4518,6 @@ local function createProxyToggle(flag)
   return proxy
 end
 
-Groupboxes.Exploits_Bypasses:AddToggle("AntiEntityMaster", {
-  Text = "Anti-Entity",
-  Default = false,
-  Tooltip = "Master toggle to protect against selected entities",
-})
-
-Groupboxes.Exploits_Bypasses:AddDropdown("AntiEntityList", {
-  Text = "Entities Selection",
-  Values = { "Giggle", "Dupe", "Eyes", "Lookman", "Gloombat Eggs", "Seek Obstructions", "Vacuum", "Snare" },
-  Default = { "Giggle", "Dupe", "Eyes", "Lookman", "Gloombat Eggs", "Seek Obstructions", "Vacuum", "Snare" },
-  Multi = true,
-  AllowNull = true,
-  Tooltip = "Select which entities to protect against",
-})
 
 local AntiEntityMapping = {
   ["Giggle"] = "BypassGiggle",
@@ -4066,9 +4530,6 @@ local AntiEntityMapping = {
   ["Snare"] = "BypassSnare",
 }
 
-for _, flag in pairs(AntiEntityMapping) do
-  createProxyToggle(flag)
-end
 
 local function syncAntiEntity()
   local master = toggles.AntiEntityMaster and toggles.AntiEntityMaster.Value
@@ -4081,38 +4542,36 @@ local function syncAntiEntity()
   end
 end
 
-toggles.AntiEntityMaster:OnChanged(syncAntiEntity)
-options.AntiEntityList:OnChanged(syncAntiEntity)
 
-local val114 = {
+local worldObjects = {
   Entities = {}, EventTriggers = {}, Obstructions = {}, HidingSpots = {}, SeekObstructions = {}, SeekBridges = {}, SeekNodes = {}, SeekDuckBoards = {}, SeekHighlights = {}, EyestalkHighlights = {}, PathLights = {}, }
 
 EntityNames = {
   GiggleCeiling = true, DoorFake = true, FakeDoor = true, GloombatEgg = true, GloombatEggs = true, Snare = true, Figure = true, FigureRig = true, FigureRagdoll = true, GloomPile = true, TriggerEventCollision = true, Seek_Arm = true, ChandelierObstruction = true, SeekFloodline = true, Bridge = true, MinecartRig = true, RunnerNodes = true, DuckBoard = true, PathLights = true, SeekMovingNewClone = true, SideroomSpace = true, MandrakeLive = true, }
 
-local function helper28(val115)
-  if not val115 or not val115.Parent then
+local function handleEntity(entity)
+  if not entity or not entity.Parent then
     return
   end
 
-  local name = val115.Name
+  local name = entity.Name
 
   if not EntityNames[name] then
     return
   end
 
   if name == "GiggleCeiling" then
-    table.insert(val114.Entities, val115)
+    table.insert(worldObjects.Entities, entity)
 
     if toggles.BypassGiggle.Value then
-      local hitbox = val115:WaitForChild("Hitbox")
+      local hitbox = entity:WaitForChild("Hitbox")
       hitbox.CanTouch = false
     end
   elseif name == "DoorFake" or name == "FakeDoor" then
-    if val115.Parent and val115:FindFirstChild("Hidden") then
+    if entity.Parent and entity:FindFirstChild("Hidden") then
       if toggles.BypassDupe.Value then
-        val115:WaitForChild("Hidden").CanTouch = false
-        local lock = val115:FindFirstChild("Lock")
+        entity:WaitForChild("Hidden").CanTouch = false
+        local lock = entity:FindFirstChild("Lock")
 
         if lock and lock:FindFirstChild("UnlockPrompt") then
           lock.UnlockPrompt.Enabled = false
@@ -4120,105 +4579,105 @@ local function helper28(val115)
       end
 
       if toggles.EntitiesESP.Value then
-        local value26 = options.EntitiesESPAllowed and options.EntitiesESPAllowed.Value
+        local value = options.EntitiesESPAllowed and options.EntitiesESPAllowed.Value
 
-        if not value26 or next(value26) == nil or value26.Dupe then
+        if not value or next(value) == nil or value.Dupe then
           Functions.AddESP({
-            Object = val115, Text = "Dupe", Color = options.EntitiesESPColor.Value, })
+            Object = entity, Text = "Dupe", Color = options.EntitiesESPColor.Value, })
         end
       end
 
-      table.insert(val114.Entities, val115)
+      table.insert(worldObjects.Entities, entity)
     end
   elseif name == "SideroomSpace" then
     if toggles.BypassVacuum.Value then
-      val115:WaitForChild("Collision").CanCollide = true
-      val115:WaitForChild("Collision").CanTouch = false
+      entity:WaitForChild("Collision").CanCollide = true
+      entity:WaitForChild("Collision").CanTouch = false
     end
 
-    table.insert(val114.Entities, val115)
+    table.insert(worldObjects.Entities, entity)
   elseif name == "GloombatEgg" or name == "GloombatEggs" or name == "GloomPile" then
     if toggles.BypassGloombatEggs.Value then
-      for v149, v150 in val115:GetDescendants() do
-        if v150:IsA("BasePart") then
-          v150.CanTouch = false
+      for _, descendant in entity:GetDescendants() do
+        if descendant:IsA("BasePart") then
+          descendant.CanTouch = false
         end
       end
     end
 
-    local connect7 = val115.DescendantAdded:Connect(function(descendant2)
-      if descendant2:IsA("BasePart") then
-        descendant2.CanTouch = false
+    local connection = entity.DescendantAdded:Connect(function(descendant)
+      if descendant:IsA("BasePart") then
+        descendant.CanTouch = false
       end
     end)
 
-    table.insert(val114.Entities, val115)
+    table.insert(worldObjects.Entities, entity)
   elseif name == "Snare" then
-    for v151, v152 in val115:GetDescendants() do
-      if v152:IsA("BasePart") then
-        v152.CanTouch = not toggles.BypassSnare.Value
+    for _, descendant in entity:GetDescendants() do
+      if descendant:IsA("BasePart") then
+        descendant.CanTouch = not toggles.BypassSnare.Value
       end
     end
 
-    local connect8 = val115.DescendantAdded:Connect(function(descendant3)
-      if descendant3:IsA("BasePart") then
-        descendant3.CanTouch = not toggles.BypassSnare.Value
+    local connection = entity.DescendantAdded:Connect(function(descendant)
+      if descendant:IsA("BasePart") then
+        descendant.CanTouch = not toggles.BypassSnare.Value
       end
     end)
 
-    table.insert(val114.Entities, val115)
+    table.insert(worldObjects.Entities, entity)
 
-    if val115:FindFirstChild("Snare") then
-      val115:WaitForChild("Snare"):WaitForChild("Roots").Transparency = 1
-      val115:WaitForChild("Snare"):WaitForChild("SnareBase").Transparency = 1
+    if entity:FindFirstChild("Snare") then
+      entity:WaitForChild("Snare"):WaitForChild("Roots").Transparency = 1
+      entity:WaitForChild("Snare"):WaitForChild("SnareBase").Transparency = 1
     end
 
-    if val115:FindFirstChild("Void") then
-      val115.Void.Transparency = 0
-      val115.Void.Color = Color3.fromRGB(76, 67, 55)
+    if entity:FindFirstChild("Void") then
+      entity.Void.Transparency = 0
+      entity.Void.Color = Color3.fromRGB(76, 67, 55)
     end
   elseif name == "Figure" or name == "FigureRig" or name == "FigureRagdoll" then
-    for v153, v154 in val115:GetDescendants() do
-      if v154:IsA("BasePart") then
-        v154.CanTouch = false
+    for _, descendant in entity:GetDescendants() do
+      if descendant:IsA("BasePart") then
+        descendant.CanTouch = false
       end
     end
 
-    table.insert(val114.Entities, val115)
+    table.insert(worldObjects.Entities, entity)
 
     if (toggles.RemoveFigure and toggles.RemoveFigure.Value
         or toggles.RemoveFigureMines and toggles.RemoveFigureMines.Value)
       and Executor.isnetworkowner then
-      local val116 = helper11()
+      local floorName = detectFloor()
 
-      if val116 == "Mines" then
-        for v156, v157 in val115:GetDescendants() do
-          local element8 = v157
+      if floorName == "Mines" then
+        for _, descendant in entity:GetDescendants() do
+          local part = descendant
 
-          if v157:IsA("BasePart") then
+          if descendant:IsA("BasePart") then
             task.spawn(function()
-              if pcall(function() return Executor.isnetworkowner(element8) end) then
-                element8.Position = Vector3.new(-49999, -49999, -49999)
+              if pcall(function() return Executor.isnetworkowner(part) end) then
+                part.Position = Vector3.new(-49999, -49999, -49999)
               end
             end)
           end
         end
-      elseif val116 == "OldHotel" or val116 == "Fools" then
-        local currentRooms4 = workspace:FindFirstChild("CurrentRooms")
+      elseif floorName == "OldHotel" or floorName == "Fools" then
+        local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-        if currentRooms4 then
-          currentRooms4.ChildAdded:Wait()
+        if currentRooms2 then
+          currentRooms2.ChildAdded:Wait()
         end
 
-        for v159, v160 in val115:GetDescendants() do
-          local element9 = v160
+        for _, descendant in entity:GetDescendants() do
+          local part = descendant
 
-          if v160:IsA("BasePart") then
-            v160.CanCollide = false
+          if descendant:IsA("BasePart") then
+            descendant.CanCollide = false
 
             task.spawn(function()
-              while pcall(function() return Executor.isnetworkowner(element9) end) do
-                element9.Position = Vector3.new(
+              while pcall(function() return Executor.isnetworkowner(part) end) do
+                part.Position = Vector3.new(
                   math.random(-29999, 29999), math.random(-29999, 29999), math.random(-29999, 29999)
                 )
 
@@ -4230,167 +4689,167 @@ local function helper28(val115)
       end
     end
   elseif name == "TriggerEventCollision" then
-    table.insert(val114.EventTriggers, val115)
-    table.insert(val114.Entities, val115)
+    table.insert(worldObjects.EventTriggers, entity)
+    table.insert(worldObjects.Entities, entity)
   elseif name == "Seek_Arm" or name == "ChandelierObstruction" then
-    local function helper29(val117)
-      if val117:IsA("BasePart") then
-        val117.CanTouch = not toggles.BypassSeekObstructions.Value
-        table.insert(val114.SeekObstructions, val117)
+    local function trackSeekObstruction(descendant)
+      if descendant:IsA("BasePart") then
+        descendant.CanTouch = not toggles.BypassSeekObstructions.Value
+        table.insert(worldObjects.SeekObstructions, descendant)
       end
     end
 
-    for v162, v163 in val115:GetDescendants() do
-      helper29(v163)
+    for _, descendant in entity:GetDescendants() do
+      trackSeekObstruction(descendant)
     end
 
-    val115.DescendantAdded:Connect(helper29)
+    entity.DescendantAdded:Connect(trackSeekObstruction)
   elseif name == "SeekFloodline" then
-    val115.CanCollide = toggles.BypassSeekObstructions.Value
+    entity.CanCollide = toggles.BypassSeekObstructions.Value
 
-    local connect9 = val115:GetPropertyChangedSignal("CanCollide"):Connect(function()
-      if val115.CanCollide ~= toggles.BypassSeekObstructions.Value then
-        val115.CanCollide = toggles.BypassSeekObstructions.Value
+    local connection = entity:GetPropertyChangedSignal("CanCollide"):Connect(function()
+      if entity.CanCollide ~= toggles.BypassSeekObstructions.Value then
+        entity.CanCollide = toggles.BypassSeekObstructions.Value
       end
     end)
 
-    val115.Destroying:Once(function() connect9:Disconnect() end)
-    table.insert(val114.SeekObstructions, val115)
+    entity.Destroying:Once(function() connection:Disconnect() end)
+    table.insert(worldObjects.SeekObstructions, entity)
   elseif name == "Bridge" then
-    for v164, v165 in val115:GetChildren() do
-      if v165.Name == "PlayerBarrier" and v165.Size.Y == 2.75
-        and (v165.Rotation.X == 0 or v165.Rotation.X == 180) then
-        local clone2 = v165:Clone()
-        clone2.CFrame = clone2.CFrame * CFrame.new(0, 0, -5)
-        clone2.Name = tostring(math.random(100000000, 999999999))
-        clone2.Size = Vector3.new(clone2.Size.X, clone2.Size.Y, 11)
-        clone2.Parent = val115
-        clone2.CanCollide = toggles.BypassSeekObstructions.Value
-        clone2.Color = Color3.fromRGB(0, 255, 255)
-        clone2.Transparency = toggles.BypassSeekObstructions.Value and 0 or 1
-        clone2.Material = Enum.Material.ForceField
+    for _, child in entity:GetChildren() do
+      if child.Name == "PlayerBarrier" and child.Size.Y == 2.75
+        and (child.Rotation.X == 0 or child.Rotation.X == 180) then
+        local clone = child:Clone()
+        clone.CFrame = clone.CFrame * CFrame.new(0, 0, -5)
+        clone.Name = tostring(math.random(100000000, 999999999))
+        clone.Size = Vector3.new(clone.Size.X, clone.Size.Y, 11)
+        clone.Parent = entity
+        clone.CanCollide = toggles.BypassSeekObstructions.Value
+        clone.Color = Color3.fromRGB(0, 255, 255)
+        clone.Transparency = toggles.BypassSeekObstructions.Value and 0 or 1
+        clone.Material = Enum.Material.ForceField
 
-        table.insert(val114.SeekBridges, clone2)
+        table.insert(worldObjects.SeekBridges, clone)
       end
 
       task.wait()
     end
   elseif name == "MinecartRig" then
-    val85.Minecart = val115
+    featureState.Minecart = entity
   elseif name == "RunnerNodes" then
-    local function helper30(val118, val119)
-      local position = (val118.CFrame + val118.CFrame.LookVector).Position
-      local position2 = (val118.CFrame + val118.CFrame.LookVector * -1).Position
-      return (position - val119.Position).Magnitude > (position2 - val119.Position).Magnitude
+    local function isTargetBehind(node, target)
+      local position = (node.CFrame + node.CFrame.LookVector).Position
+      local position2 = (node.CFrame + node.CFrame.LookVector * -1).Position
+      return (position - target.Position).Magnitude > (position2 - target.Position).Magnitude
     end
 
-    local function helper31(val120, val121)
-      local dot = val120.CFrame.RightVector:Dot(val120.Position - val121.Position)
+    local function getTurnDirection(node, target)
+      local dot = node.CFrame.RightVector:Dot(node.Position - target.Position)
 
       if dot > 0.5 then
-        return helper30(val120, val121) and "Right" or "Left"
+        return isTargetBehind(node, target) and "Right" or "Left"
       end
 
       if dot < -0.5 then
-        return helper30(val120, val121) and "Left" or "Right"
+        return isTargetBehind(node, target) and "Left" or "Right"
       end
 
       return "Straight"
     end
 
-    local function helper32(val122)
-      local val123, huge = nil, math.huge
-      local numVal = tonumber(val122.Name:split("MinecartNode")[2])
+    local function findNextMinecartNode(child2)
+      local closestNode, huge = nil, math.huge
+      local numVal = tonumber(child2.Name:split("MinecartNode")[2])
 
-      for v168, v169 in val115:GetChildren() do
-        local numVal2 = tonumber(v169.Name:split("MinecartNode")[2])
+      for _, child in entity:GetChildren() do
+        local number = tonumber(child.Name:split("MinecartNode")[2])
 
-        if v169 ~= val122 and numVal2 and numVal and numVal2 > numVal then
-          local magnitude = (val122.Position - v169.Position).Magnitude
+        if child ~= child2 and number and numVal and number > numVal then
+          local magnitude = (child2.Position - child.Position).Magnitude
 
-          if magnitude < huge and v169:GetAttribute("DistanceBlacklist") ~= true then
+          if magnitude < huge and child:GetAttribute("DistanceBlacklist") ~= true then
             huge = magnitude
-            val123 = v169
+            closestNode = child
           end
         end
       end
 
-      return val123
+      return closestNode
     end
 
-    for v171, v172 in val115:GetChildren() do
-      local numVal3 = tonumber(v172.Name:split("MinecartNode")[2])
+    for _, child in entity:GetChildren() do
+      local number = tonumber(child.Name:split("MinecartNode")[2])
 
-      if v172:GetAttribute("DeathType") then
-        v172:SetAttribute("DistanceBlacklist", true)
+      if child:GetAttribute("DeathType") then
+        child:SetAttribute("DistanceBlacklist", true)
       end
 
-      for i9 = 1, 20 do
-        local findFirstChild4 = numVal3 and val115:FindFirstChild("MinecartNode" .. numVal3 + i9)
+      for i = 1, 20 do
+        local findFirstChild = number and entity:FindFirstChild("MinecartNode" .. number + i)
 
-        if findFirstChild4 and findFirstChild4:GetAttribute("DeathType") ~= nil then
-          v172:SetAttribute("DistanceBlacklist", true)
+        if findFirstChild and findFirstChild:GetAttribute("DeathType") ~= nil then
+          child:SetAttribute("DistanceBlacklist", true)
         end
       end
 
-      local findFirstChild5 = numVal3 and val115:FindFirstChild("MinecartNode" .. numVal3 - 1)
+      local findFirstChild = number and entity:FindFirstChild("MinecartNode" .. number - 1)
 
-      if findFirstChild5 and findFirstChild5:GetAttribute("ForceConnect") then
-        v172:SetAttribute("DistanceBlacklist", nil)
+      if findFirstChild and findFirstChild:GetAttribute("ForceConnect") then
+        child:SetAttribute("DistanceBlacklist", nil)
       end
 
       task.wait()
     end
 
-    for v174, v175 in val115:GetChildren() do
-      if v175:GetAttribute("ForceConnect") then
-        local val124 = helper32(v175)
+    for _, child in entity:GetChildren() do
+      if child:GetAttribute("ForceConnect") then
+        local nextNode = findNextMinecartNode(child)
 
-        if val124 then
-          v175:SetAttribute("Turn", helper31(v175, val124))
-          table.insert(val114.SeekNodes, v175)
+        if nextNode then
+          child:SetAttribute("Turn", getTurnDirection(child, nextNode))
+          table.insert(worldObjects.SeekNodes, child)
         end
       end
 
       task.wait()
     end
   elseif name == "DuckBoard" then
-    table.insert(val114.SeekDuckBoards, val115)
+    table.insert(worldObjects.SeekDuckBoards, entity)
   elseif name == "PathLights" then
-    local val125 = {}
-    local connect10 = val115.ChildAdded:Connect(function(child4) table.insert(val125, child4) end)
+    local pendingChildren = {}
+    local connection = entity.ChildAdded:Connect(function(child) table.insert(pendingChildren, child) end)
 
-    for v178, v179 in val115:GetChildren() do
-      table.insert(val125, v179)
+    for _, child in entity:GetChildren() do
+      table.insert(pendingChildren, child)
     end
 
-    local val126
+    local onLightAdded
 
-    local function helper33(val127)
-      if val127.Name ~= "SeekGuidingLight" or val127:GetAttribute("Highlighted") then
+    local function markSeekGuidingLight(light)
+      if light.Name ~= "SeekGuidingLight" or light:GetAttribute("Highlighted") then
         return
       end
 
-      val127:SetAttribute("Highlighted", true)
+      light:SetAttribute("Highlighted", true)
 
       local seekLightNode = Instance.new("Part")
       seekLightNode.Size = Vector3.one
       seekLightNode.Transparency = 1
-      seekLightNode.Parent = val85.SeekNodesFolder
+      seekLightNode.Parent = featureState.SeekNodesFolder
       seekLightNode.Anchored = true
-      seekLightNode.CFrame = val127.CFrame
+      seekLightNode.CFrame = light.CFrame
       seekLightNode.CanCollide = false
       seekLightNode.Name = "SeekLightNode"
 
-      local val128 = val126 or seekLightNode
-      val126 = seekLightNode
+      local seekLightNode2 = onLightAdded or seekLightNode
+      onLightAdded = seekLightNode
       local beam = Instance.new("Beam")
 
-      local value27 = rawget(toggles, "ShowSeekPathColor") and options.ShowSeekPathColor.Value
+      local value = rawget(toggles, "ShowSeekPathColor") and options.ShowSeekPathColor.Value
         or Color3.fromRGB(0, 255, 0)
 
       beam.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, value27), ColorSequenceKeypoint.new(1, value27), })
+        ColorSequenceKeypoint.new(0, value), ColorSequenceKeypoint.new(1, value), })
 
       beam.FaceCamera = true
       beam.Width0 = 0.2
@@ -4400,64 +4859,64 @@ local function helper28(val115)
       beam.LightEmission = 0
       beam.Enabled = true
 
-      local value28 = rawget(toggles, "ShowSeekPathToggle") and toggles.ShowSeekPathToggle.Value
+      local pathVisible = rawget(toggles, "ShowSeekPathToggle") and toggles.ShowSeekPathToggle.Value
           and 0
         or 1
 
       beam.Transparency = NumberSequence.new({
-        NumberSequenceKeypoint.new(0, value28), NumberSequenceKeypoint.new(1, value28), })
+        NumberSequenceKeypoint.new(0, pathVisible), NumberSequenceKeypoint.new(1, pathVisible), })
 
-      beam.Parent = val85.SeekNodesFolder
+      beam.Parent = featureState.SeekNodesFolder
 
-      local instance2 = Instance.new("Attachment", seekLightNode)
-      local instance3 = Instance.new("Attachment", val128)
+      local instance = Instance.new("Attachment", seekLightNode)
+      local instance2 = Instance.new("Attachment", seekLightNode2)
 
-      beam.Attachment0 = instance2
-      beam.Attachment1 = instance3
+      beam.Attachment0 = instance
+      beam.Attachment1 = instance2
 
-      table.insert(val114.SeekHighlights, beam)
+      table.insert(worldObjects.SeekHighlights, beam)
     end
 
     task.spawn(function()
       while task.wait() do
-        local val129 = table.remove(val125, 1)
+        local nextLight = table.remove(pendingChildren, 1)
 
-        if val129 then
-          helper33(val129)
+        if nextLight then
+          markSeekGuidingLight(nextLight)
         end
       end
     end)
 
-    table.insert(Connections, connect10)
-    table.insert(val114.PathLights, val115)
+    table.insert(Connections, connection)
+    table.insert(worldObjects.PathLights, entity)
 
-    val115.Destroying:Once(function() connect10:Disconnect() end)
+    entity.Destroying:Once(function() connection:Disconnect() end)
   elseif name == "SeekMovingNewClone" then
-    local connect11 = val115.Destroying:Connect(function()
-      for key6, value29 in pairs(val114.PathLights) do
+    local connection = entity.Destroying:Connect(function()
+      for _, _ in pairs(worldObjects.PathLights) do
       end
 
-      if val85.SeekNodesFolder then
-        val85.SeekNodesFolder:ClearAllChildren()
+      if featureState.SeekNodesFolder then
+        featureState.SeekNodesFolder:ClearAllChildren()
       end
     end)
   elseif name == "MandrakeLive" then
-    local mandrake = val115:FindFirstChild("Mandrake")
+    local mandrake = entity:FindFirstChild("Mandrake")
 
     if mandrake then
-      local root2 = mandrake:FindFirstChild("Root")
+      local root = mandrake:FindFirstChild("Root")
 
-      if root2 then
-        table.insert(val114.Entities, val115.Hole)
-        table.insert(val114.Entities, root2)
+      if root then
+        table.insert(worldObjects.Entities, entity.Hole)
+        table.insert(worldObjects.Entities, root)
 
         if toggles.RemoveMandrake and toggles.RemoveMandrake.Value then
-          local antiMandrakeForce = root2:FindFirstChild("AntiMandrakeForce")
+          local antiMandrakeForce = root:FindFirstChild("AntiMandrakeForce")
 
           if not antiMandrakeForce then
             antiMandrakeForce = Instance.new("BodyForce")
             antiMandrakeForce.Name = "AntiMandrakeForce"
-            antiMandrakeForce.Parent = root2
+            antiMandrakeForce.Parent = root
           end
 
           antiMandrakeForce.Force = Vector3.new(100000, -99999999, 100000)
@@ -4467,36 +4926,36 @@ local function helper28(val115)
   end
 end
 
-for v183, v184 in workspace:GetDescendants() do
-  task.spawn(helper28, v184)
+for _, descendant in workspace:GetDescendants() do
+  task.spawn(handleEntity, descendant)
 end
 
-workspace.DescendantAdded:Connect(helper28)
+workspace.DescendantAdded:Connect(handleEntity)
 
-local function helper34(val130)
-  if val130.Name ~= "ForgetMeNotVineDoors" then
+local function handleVineDoor(vineDoor)
+  if vineDoor.Name ~= "ForgetMeNotVineDoors" then
     return
   end
 
-  if not (val130.Parent and localPlayer2 and val130.Parent.Name == localPlayer2.Name) then
+  if not (vineDoor.Parent and localPlayer and vineDoor.Parent.Name == localPlayer.Name) then
     return
   end
 
   task.spawn(function()
-    local waitForChild = val130:WaitForChild("Base", 10)
+    local waitForChild = vineDoor:WaitForChild("Base", 10)
 
     if not waitForChild then
       return
     end
 
-    local val131 = tick() + 15
+    local deadline = tick() + 15
 
-    while waitForChild.Parent and val130.Parent and not waitForChild:GetAttribute("BaseDirection")
-      and tick() < val131 do
+    while waitForChild.Parent and vineDoor.Parent and not waitForChild:GetAttribute("BaseDirection")
+      and tick() < deadline do
       task.wait(0.2)
     end
 
-    if waitForChild.Parent and val130.Parent and waitForChild:GetAttribute("BaseDirection") then
+    if waitForChild.Parent and vineDoor.Parent and waitForChild:GetAttribute("BaseDirection") then
       if toggles.EntitiesESP and toggles.EntitiesESP.Value then
         Functions.AddESP({
           Object = waitForChild, Text = "Wrong Door", Color = options.EntitiesESPColor and options.EntitiesESPColor.Value
@@ -4506,141 +4965,120 @@ local function helper34(val130)
   end)
 end
 
-for v186, v187 in workspace:GetDescendants() do
-  task.spawn(helper34, v187)
+for _, descendant in workspace:GetDescendants() do
+  task.spawn(handleVineDoor, descendant)
 end
 
-workspace.DescendantAdded:Connect(helper34)
+workspace.DescendantAdded:Connect(handleVineDoor)
 
-toggles.BypassGiggle:OnChanged(function(p56)
-  for index18, value30 in ipairs(val114.Entities) do
-    if value30.Name == "GiggleCeiling" then
-      local hitbox2 = value30:FindFirstChild("Hitbox")
+function Handlers.BypassGiggleChanged(value)
+  for _, entity in ipairs(worldObjects.Entities) do
+    if entity.Name == "GiggleCeiling" then
+      local hitbox = entity:FindFirstChild("Hitbox")
 
-      if hitbox2 then
-        hitbox2.CanTouch = not p56
+      if hitbox then
+        hitbox.CanTouch = not value
       end
     end
   end
-end)
+end
 
-toggles.BypassDupe:OnChanged(function(p57)
-  for v188, v189 in val114.Entities do
-    if v189.Name == "DoorFake" or v189.Name == "FakeDoor" then
-      v189:WaitForChild("Hidden").CanTouch = not p57
 
-      if v189:FindFirstChild("Lock") then
-        v189.Lock.UnlockPrompt.Enabled = not p57
+function Handlers.BypassDupeChanged(value)
+  for _, entity in worldObjects.Entities do
+    if entity.Name == "DoorFake" or entity.Name == "FakeDoor" then
+      entity:WaitForChild("Hidden").CanTouch = not value
+
+      if entity:FindFirstChild("Lock") then
+        entity.Lock.UnlockPrompt.Enabled = not value
       end
     end
   end
-end)
+end
 
-toggles.BypassEyes:OnChanged(function(p58)
-  if p58 and val85.IsEyes then
-    local val132 = helper11()
 
-    if val132 == "Fools" or val132 == "OldHotel" then
-      remotesFolder2.MotorReplication:FireServer(
-        0, val85.SpoofOffset == 200 and 65 or -65, 0, false
+function Handlers.BypassEyesChanged(value)
+  if value and featureState.IsEyes then
+    local floorName = detectFloor()
+
+    if floorName == "Fools" or floorName == "OldHotel" then
+      remotesFolder.MotorReplication:FireServer(
+        0, featureState.SpoofOffset == 200 and 65 or -65, 0, false
       )
     else
-      remotesFolder2.MotorReplication:FireServer(-650)
+      remotesFolder.MotorReplication:FireServer(-650)
     end
   end
-end)
+end
 
-toggles.BypassLookman:OnChanged(function(p59)
-  if p59 and val85.IsLookman then
-    local val133 = helper11()
 
-    if val133 == "Fools" or val133 == "OldHotel" then
-      remotesFolder2.MotorReplication:FireServer(
-        0, val85.SpoofOffset == 200 and 65 or -65, 0, false
+function Handlers.BypassLookmanChanged(value)
+  if value and featureState.IsLookman then
+    local floorName = detectFloor()
+
+    if floorName == "Fools" or floorName == "OldHotel" then
+      remotesFolder.MotorReplication:FireServer(
+        0, featureState.SpoofOffset == 200 and 65 or -65, 0, false
       )
     else
-      remotesFolder2.MotorReplication:FireServer(-650)
+      remotesFolder.MotorReplication:FireServer(-650)
     end
   end
-end)
+end
 
-toggles.BypassGloombatEggs:OnChanged(function(p60)
-  for index19, value31 in ipairs(val114.Entities) do
-    if value31.Name == "GloombatEgg" or value31.Name == "GloombatEggs"
-      or value31.Name == "GloomPile" then
-      for v192, v193 in value31:GetDescendants() do
-        if v193:IsA("BasePart") then
-          v193.CanTouch = not p60
+
+function Handlers.BypassGloombatEggsChanged(value)
+  for _, entity in ipairs(worldObjects.Entities) do
+    if entity.Name == "GloombatEgg" or entity.Name == "GloombatEggs"
+      or entity.Name == "GloomPile" then
+      for _, descendant in entity:GetDescendants() do
+        if descendant:IsA("BasePart") then
+          descendant.CanTouch = not value
         end
       end
     end
   end
-end)
+end
 
-toggles.BypassSeekObstructions:OnChanged(function(p61)
-  for index20, value32 in ipairs(val114.SeekObstructions) do
-    value32.CanTouch = not p61
 
-    if value32.Name == "SeekFloodline" then
-      value32.CanCollide = p61
+function Handlers.BypassSeekObstructionsChanged(value)
+  for _, seekObstruction in ipairs(worldObjects.SeekObstructions) do
+    seekObstruction.CanTouch = not value
+
+    if seekObstruction.Name == "SeekFloodline" then
+      seekObstruction.CanCollide = value
     end
   end
 
-  for index21, value33 in ipairs(val114.SeekBridges) do
-    value33.CanCollide = p61
-    value33.Transparency = p61 and 0 or 1
+  for _, seekBridge in ipairs(worldObjects.SeekBridges) do
+    seekBridge.CanCollide = value
+    seekBridge.Transparency = value and 0 or 1
   end
-end)
+end
 
-toggles.BypassVacuum:OnChanged(function(p62)
-  for v194, v195 in val114.Entities do
-    if v195.Name == "SideroomSpace" then
-      v195:WaitForChild("Collision").CanCollide = p62
-      v195:WaitForChild("Collision").CanTouch = not p62
+
+function Handlers.BypassVacuumChanged(value)
+  for _, entity in worldObjects.Entities do
+    if entity.Name == "SideroomSpace" then
+      entity:WaitForChild("Collision").CanCollide = value
+      entity:WaitForChild("Collision").CanTouch = not value
     end
   end
-end)
+end
 
-toggles.BypassSnare:OnChanged(function(p63)
-  for index22, value34 in ipairs(val114.Entities) do
-    if value34.Name == "Snare" then
-      for v196, v197 in value34:GetDescendants() do
-        if v197:IsA("BasePart") then
-          v197.CanTouch = not p63
+
+function Handlers.BypassSnareChanged(value)
+  for _, entity in ipairs(worldObjects.Entities) do
+    if entity.Name == "Snare" then
+      for _, descendant in entity:GetDescendants() do
+        if descendant:IsA("BasePart") then
+          descendant.CanTouch = not value
         end
       end
     end
   end
-end)
+end
 
-Groupboxes.Exploits_Removals:AddToggle("RemoveScreech", {
-  Text = "Remove Screech",
-  Default = false,
-  Tooltip = "Prevents 'Screech' from spawning and destroys active Screech.",
-})
-
-Groupboxes.Exploits_Removals:AddToggle("RemoveHalt", {
-  Text = "Remove Halt",
-  Default = false,
-  Tooltip = "Prevents 'Halt' from spawning.",
-})
-
-Groupboxes.Exploits_Removals:AddDivider()
-
-Groupboxes.Exploits_Removals:AddToggle("RemoveMaster", {
-  Text = "Remove Features",
-  Default = false,
-  Tooltip = "Master toggle to remove selected features/sounds/delays",
-})
-
-Groupboxes.Exploits_Removals:AddDropdown("RemoveList", {
-  Text = "Removals Selection",
-  Values = { "A-90", "Dread", "Footstep Sounds", "Jammin Music", "Interacting Sounds", "Haste Sound", "Closet Delay" },
-  Default = { "A-90", "Dread", "Footstep Sounds", "Jammin Music", "Interacting Sounds", "Haste Sound", "Closet Delay" },
-  Multi = true,
-  AllowNull = true,
-  Tooltip = "Select which features/sounds to remove",
-})
 
 local RemoveMapping = {
   ["A-90"] = "RemoveA90",
@@ -4652,9 +5090,6 @@ local RemoveMapping = {
   ["Closet Delay"] = "RemoveClosetDelay",
 }
 
-for _, flag in pairs(RemoveMapping) do
-  createProxyToggle(flag)
-end
 
 local function syncRemove()
   local master = toggles.RemoveMaster and toggles.RemoveMaster.Value
@@ -4667,8 +5102,6 @@ local function syncRemove()
   end
 end
 
-toggles.RemoveMaster:OnChanged(syncRemove)
-options.RemoveList:OnChanged(syncRemove)
 
 local function disableScreechModule(moduleScript)
   if not moduleScript or not moduleScript:IsA("ModuleScript") then
@@ -4711,7 +5144,7 @@ end
 
 local function setScreechConnections(enabled)
   pcall(function()
-    local realRemote = (FakeEvents and FakeEvents.Screech_Real) or (remotesFolder2 and remotesFolder2:FindFirstChild("Screech"))
+    local realRemote = (FakeEvents and FakeEvents.Screech_Real) or (remotesFolder and remotesFolder:FindFirstChild("Screech"))
     local getconns = Executor.getconnections or RootEnv.getconnections
     if realRemote and getconns then
       for _, conn in ipairs(getconns(realRemote.OnClientEvent)) do
@@ -4727,12 +5160,12 @@ local function setScreechConnections(enabled)
   end)
 end
 
-toggles.RemoveScreech:OnChanged(function(Value)
+function Handlers.RemoveScreechChanged(Value)
   setScreechConnections(not Value)
 
-  local object2 = helper19()
-  if object2 then
-    local screech = object2:FindFirstChild("Screech") or object2:FindFirstChild("Screech_Disabled")
+  local remoteModules = getRemoteModules()
+  if remoteModules then
+    local screech = remoteModules:FindFirstChild("Screech") or remoteModules:FindFirstChild("Screech_Disabled")
     if screech then
       screech.Name = Value and "Screech_Disabled" or "Screech"
       if Value then
@@ -4764,15 +5197,15 @@ toggles.RemoveScreech:OnChanged(function(Value)
     end
   end
 
-  if remotesFolder2 and FakeEvents then
+  if remotesFolder and FakeEvents then
     if Value then
       if FakeEvents.Screech_Real and FakeEvents.Screech_Real.Parent then
-        FakeEvents.Screech.Parent = remotesFolder2
+        FakeEvents.Screech.Parent = remotesFolder
         FakeEvents.Screech_Real.Parent = nil
       end
     elseif not (toggles.NoScreechDamage and toggles.NoScreechDamage.Value) then
       if FakeEvents.Screech_Real then
-        FakeEvents.Screech_Real.Parent = remotesFolder2
+        FakeEvents.Screech_Real.Parent = remotesFolder
         FakeEvents.Screech.Parent = nil
       end
     end
@@ -4812,7 +5245,7 @@ toggles.RemoveScreech:OnChanged(function(Value)
             end
 
             pcall(function()
-              local rem = (remotesFolder2 and remotesFolder2:FindFirstChild("Screech")) or (FakeEvents and FakeEvents.Screech_Real)
+              local rem = (remotesFolder and remotesFolder:FindFirstChild("Screech")) or (FakeEvents and FakeEvents.Screech_Real)
               if rem then
                 rem:FireServer(true)
               end
@@ -4832,9 +5265,10 @@ toggles.RemoveScreech:OnChanged(function(Value)
       end
     end)
   end
-end)
+end
 
-toggles.RemoveHalt:OnChanged(function(Value)
+
+function Handlers.RemoveHaltChanged(Value)
   local clientModules = replicatedStorage:FindFirstChild("ModulesClient") or replicatedStorage:FindFirstChild("ClientModules")
   local entityModules = clientModules and clientModules:FindFirstChild("EntityModules")
   if entityModules then
@@ -4844,68 +5278,72 @@ toggles.RemoveHalt:OnChanged(function(Value)
     end
   end
 
-  local object2 = helper19()
-  if object2 then
-    local shade = object2:FindFirstChild("Shade") or object2:FindFirstChild("Shade_Disabled")
+  local remoteModules = getRemoteModules()
+  if remoteModules then
+    local shade = remoteModules:FindFirstChild("Shade") or remoteModules:FindFirstChild("Shade_Disabled")
     if shade then
       shade.Name = Value and "Shade_Disabled" or "Shade"
     end
   end
-end)
+end
 
-toggles.RemoveA90:OnChanged(function(p64)
-  local object2 = helper19()
 
-  if not object2 then
+function Handlers.RemoveA90Changed(value)
+  local remoteModules = getRemoteModules()
+
+  if not remoteModules then
     return
   end
 
-  local a90 = object2:FindFirstChild("A90")
+  local a90Module = remoteModules:FindFirstChild("A90")
 
-  if a90 then
-    a90.Name = p64 and "A90_Disabled" or "A90"
+  if a90Module then
+    a90Module.Name = value and "A90_Disabled" or "A90"
   end
-end)
+end
 
-toggles.RemoveDread:OnChanged(function(p65)
-  local object3 = helper19()
 
-  if not object3 then
+function Handlers.RemoveDreadChanged(value)
+  local remoteModules = getRemoteModules()
+
+  if not remoteModules then
     return
   end
 
-  local dread = object3:FindFirstChild("Dread")
+  local dread = remoteModules:FindFirstChild("Dread")
 
   if dread then
-    dread.Name = p65 and "Dread_Disabled" or "Dread"
+    dread.Name = value and "Dread_Disabled" or "Dread"
   end
-end)
+end
 
-toggles.RemoveFootstepSounds:OnChanged(function(p66)
-  local character6 = localPlayer2.Character
 
-  if not character6 then
+function Handlers.RemoveFootstepSoundsChanged(value)
+  local character2 = localPlayer.Character
+
+  if not character2 then
     return
   end
 
-  for v200, v201 in character6:GetDescendants() do
-    if v201:IsA("Sound") and v201.Name == "Sound" then
-      v201.Volume = p66 and 0 or 1
+  for _, descendant in character2:GetDescendants() do
+    if descendant:IsA("Sound") and descendant.Name == "Sound" then
+      descendant.Volume = value and 0 or 1
     end
   end
-end)
+end
 
-toggles.RemoveJamminMusic:OnChanged(function(p67)
-  local playerGui4 = localPlayer2:FindFirstChildOfClass("PlayerGui")
-  local mainUI3 = playerGui4 and playerGui4:FindFirstChild("MainUI")
-  local initiator2 = mainUI3 and mainUI3:FindFirstChild("Initiator")
-  local mainGame2 = initiator2 and initiator2:FindFirstChild("Main_Game")
 
-  if not mainGame2 then
+function Handlers.RemoveJamminMusicChanged(value)
+  local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
+  local mainUI = playerGui2 and playerGui2:FindFirstChild("MainUI")
+  local initiator = mainUI and mainUI:FindFirstChild("Initiator")
+  local mainGame = initiator and initiator:FindFirstChild("Main_Game")
+
+  if not mainGame then
     return
   end
 
-  local health = mainGame2:FindFirstChild("Health")
+  local health = mainGame:FindFirstChild("Health")
 
   if not health then
     return
@@ -4914,67 +5352,54 @@ toggles.RemoveJamminMusic:OnChanged(function(p67)
   local jam = health:FindFirstChild("Jam")
 
   if jam then
-    jam.Volume = p67 and 0 or 0.45
+    jam.Volume = value and 0 or 0.45
   end
-end)
+end
 
-toggles.RemoveInteractingSounds:OnChanged(function(p68)
-  local playerGui5 = localPlayer2:FindFirstChildOfClass("PlayerGui")
-  local mainUI4 = playerGui5 and playerGui5:FindFirstChild("MainUI")
-  local initiator3 = mainUI4 and mainUI4:FindFirstChild("Initiator")
-  local mainGame3 = initiator3 and initiator3:FindFirstChild("Main_Game")
 
-  if not mainGame3 then
+function Handlers.RemoveInteractingSoundsChanged(value)
+  local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
+  local mainUI = playerGui2 and playerGui2:FindFirstChild("MainUI")
+  local initiator = mainUI and mainUI:FindFirstChild("Initiator")
+  local mainGame = initiator and initiator:FindFirstChild("Main_Game")
+
+  if not mainGame then
     return
   end
 
-  local promptService = mainGame3:FindFirstChild("PromptService")
+  local promptService = mainGame:FindFirstChild("PromptService")
 
   if promptService then
     local triggered = promptService:FindFirstChild("Triggered")
 
     if triggered then
-      triggered.Volume = p68 and 0 or 0.04
+      triggered.Volume = value and 0 or 0.04
     end
 
     local holding = promptService:FindFirstChild("Holding")
 
     if holding then
-      holding.Volume = p68 and 0 or 0.1
+      holding.Volume = value and 0 or 0.1
     end
 
     local notification = promptService:FindFirstChild("Notification")
 
     if notification then
-      notification.Volume = p68 and 0 or 0.03
+      notification.Volume = value and 0 or 0.03
     end
   end
 
-  local reminder = mainGame3:FindFirstChild("Reminder")
+  local reminder = mainGame:FindFirstChild("Reminder")
 
   if reminder then
     local caption = reminder:FindFirstChild("Caption")
 
     if caption then
-      caption.Volume = p68 and 0 or 0.1
+      caption.Volume = value and 0 or 0.1
     end
   end
-end)
+end
 
-Groupboxes.Exploits_Damage:AddToggle("NoDamageMaster", {
-  Text = "No Damage",
-  Default = false,
-  Tooltip = "Master toggle to prevent damage from selected entities",
-})
-
-Groupboxes.Exploits_Damage:AddDropdown("NoDamageList", {
-  Text = "No Damage Selection",
-  Values = { "Screech", "A-90", "Halt" },
-  Default = { "Screech", "A-90", "Halt" },
-  Multi = true,
-  AllowNull = true,
-  Tooltip = "Select entities that should not damage you",
-})
 
 local NoDamageMapping = {
   ["Screech"] = "NoScreechDamage",
@@ -4982,9 +5407,6 @@ local NoDamageMapping = {
   ["Halt"] = "NoHaltDamage",
 }
 
-for _, flag in pairs(NoDamageMapping) do
-  createProxyToggle(flag)
-end
 
 local function syncNoDamage()
   local master = toggles.NoDamageMaster and toggles.NoDamageMaster.Value
@@ -4997,103 +5419,90 @@ local function syncNoDamage()
   end
 end
 
-toggles.NoDamageMaster:OnChanged(syncNoDamage)
-options.NoDamageList:OnChanged(syncNoDamage)
 
-toggles.NoScreechDamage:OnChanged(function(p69)
-  if not remotesFolder2 then
+function Handlers.NoScreechDamageChanged(value)
+  if not remotesFolder then
     return
   end
 
-  if p69 then
+  if value then
     if FakeEvents.Screech_Real and FakeEvents.Screech_Real.Parent then
-      FakeEvents.Screech.Parent = remotesFolder2
+      FakeEvents.Screech.Parent = remotesFolder
       FakeEvents.Screech_Real.Parent = nil
     end
   elseif FakeEvents.Screech_Real then
-    FakeEvents.Screech_Real.Parent = remotesFolder2
+    FakeEvents.Screech_Real.Parent = remotesFolder
     FakeEvents.Screech.Parent = nil
   end
-end)
+end
 
-toggles.NoHaltDamage:OnChanged(function(p70)
-  if not remotesFolder2 then
+
+function Handlers.NoHaltDamageChanged(value)
+  if not remotesFolder then
     return
   end
 
-  if p70 then
+  if value then
     if FakeEvents.Shade_Real and FakeEvents.Shade_Real.Parent then
-      FakeEvents.Shade.Parent = remotesFolder2
+      FakeEvents.Shade.Parent = remotesFolder
       FakeEvents.Shade_Real.Parent = nil
     end
   elseif FakeEvents.Shade_Real then
-    FakeEvents.Shade_Real.Parent = remotesFolder2
+    FakeEvents.Shade_Real.Parent = remotesFolder
     FakeEvents.Shade.Parent = nil
   end
-end)
+end
 
-toggles.NoA90Damage:OnChanged(function(p71)
-  if not remotesFolder2 then
+
+function Handlers.NoA90DamageChanged(value)
+  if not remotesFolder then
     return
   end
 
-  if p71 then
+  if value then
     if FakeEvents.A90_Real and FakeEvents.A90_Real.Parent then
-      FakeEvents.A90.Parent = remotesFolder2
+      FakeEvents.A90.Parent = remotesFolder
       FakeEvents.A90_Real.Parent = nil
     end
   elseif FakeEvents.A90_Real then
-    FakeEvents.A90_Real.Parent = remotesFolder2
+    FakeEvents.A90_Real.Parent = remotesFolder
     FakeEvents.A90.Parent = nil
   end
-end)
+end
 
-Groupboxes.Exploits_Automation = element3.Exploits:AddRightGroupbox("Automation")
 
-Groupboxes.Exploits_Automation:AddToggle("AutoUnlockPadlockToggle", {
-  Text = "Auto Unlock Padlock", Default = false, Tooltip = "Instantly unlocks the room 50 padlock when you get close, but you need the books required", DisabledTooltip = "This feature doesn't work in this floor", })
+function Handlers.ShowLibraryCode()
+  local functions = Functions.GetLibraryCode()
 
-Groupboxes.Exploits_Automation:AddButton({
-  Text = "Show Library Code", Tooltip = "Displays the current library code in a notification", DisabledTooltip = "This feature doesn't work in this floor", Callback = function()
-    local functions = Functions.GetLibraryCode()
+  if functions then
+    library:Notify({ Title = "Library code: " .. functions, Time = 5 })
+  else
+    library:Notify({ Title = "Could not read library code", Time = 5 })
+  end
+end
 
-    if functions then
-      library:Notify({ Title = "Library code: " .. functions, Time = 5 })
-    else
-      library:Notify({ Title = "Could not read library code", Time = 5 })
-    end
-  end, })
-
-Groupboxes.Exploits_Automation:AddToggle("AutoBreakerBox", {
-  Text = "Auto Breaker Box", Default = false, Tooltip = "Automatically solves the breaker box.", DisabledTooltip = "This feature doesn't work in this floor", })
-
-Groupboxes.Exploits_Automation:AddDropdown("BreakerBoxMethod", {
-  Text = "Breaker Box Method", Values = { "Instant", "Legit" }, Default = 1, Multi = false, })
-
-Groupboxes.Exploits_Automation:AddToggle("AutoLibraryBruteForce", {
-  Text = "Auto Brute-Force Padlock", Default = false, Tooltip = "Automatically brute-forces codes in the library code when near the padlock until it finds the correct code", DisabledTooltip = "This feature doesn't work in this floor", })
 
 if replicatedStorage:FindFirstChild("FloorReplicated")
   and replicatedStorage.FloorReplicated:FindFirstChild("ClientRemote")
   and replicatedStorage.FloorReplicated.ClientRemote:FindFirstChild("Haste") then
-  local connect12 = replicatedStorage.FloorReplicated.ClientRemote.Haste.Ambience:GetPropertyChangedSignal("Playing"):Connect(function()
+  local connection = replicatedStorage.FloorReplicated.ClientRemote.Haste.Ambience:GetPropertyChangedSignal("Playing"):Connect(function()
     if toggles.RemoveHasteSound.Value then
       replicatedStorage.FloorReplicated.ClientRemote.Haste.Ambience.Playing = false
     end
   end)
 end
 
-table.insert(Connections, workspace.DescendantAdded:Connect(function(descendant4)
-  if toggles.AntiLag and toggles.AntiLag.Value and descendant4:IsA("BasePart") then
-    descendant4:SetAttribute("Mat", descendant4.Material)
-    descendant4.Material = "Plastic"
+table.insert(Connections, workspace.DescendantAdded:Connect(function(descendant)
+  if toggles.AntiLag and toggles.AntiLag.Value and descendant:IsA("BasePart") then
+    descendant:SetAttribute("Mat", descendant.Material)
+    descendant.Material = "Plastic"
   end
 end))
 
-val85 = {
+featureState = {
   UseAnimation = nil, UseAnimationBreak = nil, BreakerBoxNotified = false, BreakerBoxStartNotified = false, BreakerBoxInteracted = false, BreakerBoxFinishedNotified = false, FogInstances = {}, OldFog = nil, InLobby = false, LobbyGuardConnection = nil, RoomsAutoWalkActive = false, IsEyes = false, IsLookman = false, AnticheatDisabled = false, SeekNodesFolder = nil, AutoMinecartDucked = false, LastDuck = 0, NearestTurnNode = nil, Minecart = nil, OriginalGetMoveVector = nil, SurgeFrame = nil, KnobFarmActive = false, KnobFarmStarted = false, UILibrary = uiLibrary, RedeemingCodes = false, SpoofOffset = 0, }
 
-val85.CodesList = {
+featureState.CodesList = {
   "67", "54", "41", "CHEDDAR BALLS", "XQC", "PENGUINZ0", "KREEKCRAFT", "ISHOWSPEED", "DANTDM", "KUBZ SCOUTS", "FIND THE TROLLFACES", "THINKNOODLES", "W", "RAGDOLL UNIVERSE", "RAGDOLL MAYHEM", "BIJUU MIKE", "8BITRYAN", "SCREECHSUCKS", "LORE", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "FIND THE TROLLFACES", "3rd", "LAZYDEVS", "RAGDOLL COMBAT", "VOCAB HAVOC", "PATHSWAP", "JUMP OVER THE BRICK", }
 
 if character then
@@ -5104,36 +5513,36 @@ if Executor.fireproximityprompt then
   Functions.FirePrompt = Executor.fireproximityprompt
   Functions.ForceFirePrompt = Executor.fireproximityprompt
 else
-  local val134 = {}
-  local val135 = {}
+  local queue = {}
+  local firedPrompts = {}
 
-  function Functions.FirePrompt(p72)
-    if not p72:IsA("ProximityPrompt") or val135[p72] or not currentCamera then
+  function Functions.FirePrompt(prompt)
+    if not prompt:IsA("ProximityPrompt") or firedPrompts[prompt] or not currentCamera then
       return
     end
 
-    table.insert(val134, p72)
+    table.insert(queue, prompt)
   end
 
   Functions.ForceFirePrompt = Functions.FirePrompt
 
   task.spawn(function()
     while task.wait() do
-      local parent3 = table.remove(val134, 1)
+      local parent = table.remove(queue, 1)
 
-      if parent3 then
-        val135[parent3] = true
-        local parent2 = parent3.Parent
+      if parent then
+        firedPrompts[parent] = true
+        local parent2 = parent.Parent
 
-        local origDist = parent3:GetAttribute("MaxActivationDistance_Old") or parent3.MaxActivationDistance
-        local origHold = parent3:GetAttribute("HoldDuration_Old") or parent3.HoldDuration
-        local origLOS = parent3:GetAttribute("RequiresLineOfSight_Old") or parent3.RequiresLineOfSight
-        local origEnabled = parent3.Enabled
+        local origDist = parent:GetAttribute("MaxActivationDistance_Old") or parent.MaxActivationDistance
+        local origHold = parent:GetAttribute("HoldDuration_Old") or parent.HoldDuration
+        local origLOS = parent:GetAttribute("RequiresLineOfSight_Old") or parent.RequiresLineOfSight
+        local origEnabled = parent.Enabled
 
-        parent3.MaxActivationDistance = 99999
-        parent3.Enabled = true
-        parent3.HoldDuration = 0
-        parent3.RequiresLineOfSight = false
+        parent.MaxActivationDistance = 99999
+        parent.Enabled = true
+        parent.HoldDuration = 0
+        parent.RequiresLineOfSight = false
 
         local part = Instance.new("Part")
         part.Parent = workspace
@@ -5145,67 +5554,67 @@ else
         part.Size = Vector3.new(0.001, 0.001, 0.001)
         part.Position = currentCamera.CFrame:ToWorldSpace(CFrame.new(0, 0, -0.1)).Position
 
-        if parent3 and parent2 then
-          pcall(function() parent3.Parent = part end)
-          local val136, val137 = false, false
+        if parent and parent2 then
+          pcall(function() parent.Parent = part end)
+          local isShown, wasTriggered = false, false
 
-          local connect13 = proximityPromptService.PromptShown:Connect(function(p73)
-            if p73 == parent3 then
-              val136 = true
+          local connection = proximityPromptService.PromptShown:Connect(function(prompt)
+            if prompt == parent then
+              isShown = true
             end
           end)
 
-          local connect14 = parent3.Triggered:Connect(function() val137 = true end)
-          local count3 = 0
+          local connection2 = parent.Triggered:Connect(function() wasTriggered = true end)
+          local count = 0
 
-          while not val136 and count3 < 5 do
-            count3 = count3 + 1
+          while not isShown and count < 5 do
+            count = count + 1
             task.wait()
           end
 
-          local count4 = 0
+          local count2 = 0
 
-          while not val137 and count4 < 5 do
-            parent3:InputHoldBegin()
-            parent3:InputHoldEnd()
+          while not wasTriggered and count2 < 5 do
+            parent:InputHoldBegin()
+            parent:InputHoldEnd()
 
-            count4 = count4 + 1
+            count2 = count2 + 1
             task.wait()
           end
 
-          parent3.MaxActivationDistance = origDist
-          parent3.Enabled = origEnabled
-          parent3.HoldDuration = origHold
-          parent3.RequiresLineOfSight = origLOS
+          parent.MaxActivationDistance = origDist
+          parent.Enabled = origEnabled
+          parent.HoldDuration = origHold
+          parent.RequiresLineOfSight = origLOS
 
-          pcall(function() parent3.Parent = parent2 end)
+          pcall(function() parent.Parent = parent2 end)
           task.wait()
-          connect13:Disconnect()
-          connect14:Disconnect()
+          connection:Disconnect()
+          connection2:Disconnect()
         else
           part:Destroy()
         end
 
-        val135[parent3] = nil
+        firedPrompts[parent] = nil
       end
     end
   end)
 end
 
-function Functions.HasItem(p74, p75)
-  if not p74 then return nil end
-  local char = localPlayer2 and localPlayer2.Character
-  local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+function Functions.HasItem(itemName, includeEquipped)
+  if not itemName then return nil end
+  local char = localPlayer and localPlayer.Character
+  local bp = localPlayer and localPlayer:FindFirstChildOfClass("Backpack")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
 
-  local aliases = { p74 }
-  if p74 == "Lockpick" then
+  local aliases = { itemName }
+  if itemName == "Lockpick" then
     table.insert(aliases, "Lockpicks")
-  elseif p74 == "Lockpicks" then
+  elseif itemName == "Lockpicks" then
     table.insert(aliases, "Lockpick")
-  elseif p74 == "SkeletonKey" then
+  elseif itemName == "SkeletonKey" then
     table.insert(aliases, "Skeleton Key")
-  elseif p74 == "Skeleton Key" then
+  elseif itemName == "Skeleton Key" then
     table.insert(aliases, "SkeletonKey")
   end
 
@@ -5232,7 +5641,7 @@ function Functions.HasItem(p74, p75)
     for _, name in ipairs(aliases) do
       local it = bp:FindFirstChild(name)
       if it then
-        if p75 and hum then
+        if includeEquipped and hum then
           pcall(function() hum:EquipTool(it) end)
         end
         return it
@@ -5243,7 +5652,7 @@ function Functions.HasItem(p74, p75)
         local iname = it.Name:lower()
         for _, name in ipairs(aliases) do
           if iname == name:lower() or iname:find(name:lower(), 1, true) then
-            if p75 and hum then
+            if includeEquipped and hum then
               pcall(function() hum:EquipTool(it) end)
             end
             return it
@@ -5259,68 +5668,68 @@ end
 function Functions.GetLibraryCode()
   local libraryHintPaper = character:FindFirstChild("LibraryHintPaper")
     or character:FindFirstChild("LibraryHintPaperHard")
-    or localPlayer2.Backpack:FindFirstChild("LibraryHintPaper")
-    or localPlayer2.Backpack:FindFirstChild("LibraryHintPaperHard")
+    or localPlayer.Backpack:FindFirstChild("LibraryHintPaper")
+    or localPlayer.Backpack:FindFirstChild("LibraryHintPaperHard")
 
   if libraryHintPaper and libraryHintPaper:FindFirstChild("UI") then
-    local val138 = {}
+    local icons = {}
 
-    for i10 = 1, CurrentFloor and tostring(CurrentFloor):find("Fools") and 10 or 5 do
-      val138[i10] = "_"
+    for i = 1, CurrentFloor and tostring(CurrentFloor):find("Fools") and 10 or 5 do
+      icons[i] = "_"
     end
 
-    local getChildren2 = localPlayer2.PlayerGui:FindFirstChild("PermUI")
-        and localPlayer2.PlayerGui.PermUI:FindFirstChild("Hints")
-        and localPlayer2.PlayerGui.PermUI.Hints:GetChildren()
+    local getChildren = localPlayer.PlayerGui:FindFirstChild("PermUI")
+        and localPlayer.PlayerGui.PermUI:FindFirstChild("Hints")
+        and localPlayer.PlayerGui.PermUI.Hints:GetChildren()
       or {}
 
-    local getChildren3 = libraryHintPaper.UI:GetChildren()
+    local getChildren2 = libraryHintPaper.UI:GetChildren()
 
-    for index23, value35 in ipairs(getChildren2) do
-      for index24, value36 in ipairs(getChildren3) do
-        if value35:IsA("ImageLabel") and value36:IsA("ImageLabel")
-          and value35.ImageRectOffset == value36.ImageRectOffset
-          and val138[tonumber(value36.Name)] then
-          val138[tonumber(value36.Name)] = value35.TextLabel.Text
+    for _, getChildrenEntry in ipairs(getChildren) do
+      for _, other in ipairs(getChildren2) do
+        if getChildrenEntry:IsA("ImageLabel") and other:IsA("ImageLabel")
+          and getChildrenEntry.ImageRectOffset == other.ImageRectOffset
+          and icons[tonumber(other.Name)] then
+          icons[tonumber(other.Name)] = getChildrenEntry.TextLabel.Text
         end
       end
     end
 
-    return table.concat(val138)
+    return table.concat(icons)
   end
 
   return CurrentFloor and tostring(CurrentFloor):find("Fools") and "__________" or "_____"
 end
 
-function Functions.HandleHidingTransparency(p76)
-  local val139 = {}
+function Functions.HandleHidingTransparency(hidingSpot)
+  local parts = {}
 
-  for v209, v210 in p76:GetDescendants() do
-    if v210:IsA("BasePart") then
-      v210:SetAttribute("Transparency_Old", v210.Transparency)
-      table.insert(val139, v210)
+  for _, descendant2 in hidingSpot:GetDescendants() do
+    if descendant2:IsA("BasePart") then
+      descendant2:SetAttribute("Transparency_Old", descendant2.Transparency)
+      table.insert(parts, descendant2)
     end
 
-    if v210.Name == "HiddenPlayer" then
-      local element10 = v210
+    if descendant2.Name == "HiddenPlayer" then
+      local descendant = descendant2
 
-      local connect15 = element10:GetPropertyChangedSignal("Value"):Connect(function()
-        for index25, value37 in ipairs(val139) do
-          if value37:GetAttribute("Transparency_Old") then
-            TweenService:Create(value37, TweenInfo.new(0.25, Enum.EasingStyle.Linear), {
-              Transparency = element10.Value == character
+      local connection = descendant:GetPropertyChangedSignal("Value"):Connect(function()
+        for _, part in ipairs(parts) do
+          if part:GetAttribute("Transparency_Old") then
+            TweenService:Create(part, TweenInfo.new(0.25, Enum.EasingStyle.Linear), {
+              Transparency = descendant.Value == character
                   and toggles.TransparentHidingSpotsToggle.Value
                   and options.TransparentHidingSpotsSlider.Value
-                or value37:GetAttribute("Transparency_Old"), }):Play()
+                or part:GetAttribute("Transparency_Old"), }):Play()
           end
         end
       end)
 
-      table.insert(Connections, connect15)
+      table.insert(Connections, connection)
 
-      p76.Destroying:Once(function()
-        connect15:Disconnect()
-        local v212 = TableFind(Connections, connect15)
+      hidingSpot.Destroying:Once(function()
+        connection:Disconnect()
+        local _ = TableFind(Connections, connection)
       end)
     end
   end
@@ -5331,113 +5740,113 @@ function Functions.GetMinecart()
 end
 
 function Functions.GetNearestTurnNode()
-  local element11 = { Distance = math.huge, Object = nil }
+  local nearest = { Distance = math.huge, Object = nil }
 
-  for index26, value38 in ipairs(val114.SeekNodes) do
-    local distanceFromCharacter = localPlayer2:DistanceFromCharacter(value38.Position)
+  for _, seekNode in ipairs(worldObjects.SeekNodes) do
+    local distanceFromCharacter = localPlayer:DistanceFromCharacter(seekNode.Position)
 
     if distanceFromCharacter < options.AutoSteerMinecartTurnDistance.Value
-      and distanceFromCharacter < element11.Distance then
-      element11.Distance = distanceFromCharacter
-      element11.Object = value38
+      and distanceFromCharacter < nearest.Distance then
+      nearest.Distance = distanceFromCharacter
+      nearest.Object = seekNode
     end
   end
 
-  return element11.Object
+  return nearest.Object
 end
 
 function Functions.GetNearestDuckBoard()
-  local element12 = { Distance = math.huge, Object = nil }
+  local nearest = { Distance = math.huge, Object = nil }
 
-  for index27, value39 in ipairs(val114.SeekDuckBoards) do
-    if value39.PrimaryPart then
-      local distanceFromCharacter2 = localPlayer2:DistanceFromCharacter(value39.PrimaryPart.Position)
+  for _, seekDuckBoard in ipairs(worldObjects.SeekDuckBoards) do
+    if seekDuckBoard.PrimaryPart then
+      local distanceFromCharacter = localPlayer:DistanceFromCharacter(seekDuckBoard.PrimaryPart.Position)
 
-      if distanceFromCharacter2 < options.AutoSteerMinecartDuckDistance.Value
-        and distanceFromCharacter2 < element12.Distance then
-        element12.Distance = distanceFromCharacter2
-        element12.Object = value39
+      if distanceFromCharacter < options.AutoSteerMinecartDuckDistance.Value
+        and distanceFromCharacter < nearest.Distance then
+        nearest.Distance = distanceFromCharacter
+        nearest.Object = seekDuckBoard
       end
     end
   end
 
-  return element12.Object
+  return nearest.Object
 end
 
-function Functions.SendChat(p77)
+function Functions.SendChat(message)
   local defaultChat = replicatedStorage:FindFirstChild("DefaultChatSystemEvents") or Instance.new("Folder")
   local sayMessage = defaultChat:FindFirstChild("SayMessageRequest") or Instance.new("RemoteEvent")
-  sayMessage:FireServer(p77, "All")
+  sayMessage:FireServer(message, "All")
 
   local textChannels = TextChatService:FindFirstChild("TextChannels")
   local rbxGeneral = textChannels and textChannels:FindFirstChild("RBXGeneral") or Instance.new("TextChannel")
-  rbxGeneral:SendAsync(p77)
+  rbxGeneral:SendAsync(message)
 end
 
 function Functions.GetNearestHidingSpot()
-  local element13 = { Distance = math.huge, Object = nil }
+  local nearest = { Distance = math.huge, Object = nil }
 
-  for index28, value40 in ipairs(val114.HidingSpots) do
-    if value40.PrimaryPart and value40:FindFirstChild("HidePrompt") then
-      local distanceFromCharacter3 = localPlayer2:DistanceFromCharacter(value40.PrimaryPart.Position)
+  for _, hidingSpot in ipairs(worldObjects.HidingSpots) do
+    if hidingSpot.PrimaryPart and hidingSpot:FindFirstChild("HidePrompt") then
+      local distanceFromCharacter = localPlayer:DistanceFromCharacter(hidingSpot.PrimaryPart.Position)
 
-      if distanceFromCharacter3 < element13.Distance
-        and distanceFromCharacter3 < value40.HidePrompt.MaxActivationDistance
-        and value40.PrimaryPart.Position.Y > -10 then
-        local findFirstChild6 = value40:FindFirstChild("HiddenPlayer", true)
+      if distanceFromCharacter < nearest.Distance
+        and distanceFromCharacter < hidingSpot.HidePrompt.MaxActivationDistance
+        and hidingSpot.PrimaryPart.Position.Y > -10 then
+        local findFirstChild = hidingSpot:FindFirstChild("HiddenPlayer", true)
 
-        if findFirstChild6 and not findFirstChild6.Value then
-          element13.Distance = distanceFromCharacter3
-          element13.Object = value40
+        if findFirstChild and not findFirstChild.Value then
+          nearest.Distance = distanceFromCharacter
+          nearest.Object = hidingSpot
         end
       end
     end
   end
 
-  return element13.Object
+  return nearest.Object
 end
 
-function Functions.GetNearestEntity(p78, p79)
-  local val140 = {
+function Functions.GetNearestEntity(activeOnly, allowed)
+  local entitySpeeds = {
     RushMoving = 85, AmbushMoving = 150, A60 = 125, A120 = 85, GlitchRush = 90, GlitchAmbush = 175, BackdoorRush = 85, CustomEntity = 85, }
 
-  local element14 = { Distance = math.huge, Object = nil }
+  local nearest = { Distance = math.huge, Object = nil }
 
-  for v218, v219 in workspace:GetChildren() do
-    if v219 and val140[v219.Name] and v219.PrimaryPart then
-      local element15 = EntityNotifyData[v219.Name]
+  for _, child in workspace:GetChildren() do
+    if child and entitySpeeds[child.Name] and child.PrimaryPart then
+      local entityData = EntityNotifyData[child.Name]
 
-      if not (p79 and element15 and p79[element15.Alias]) then
-        local distanceFromCharacter4 = localPlayer2:DistanceFromCharacter(v219.PrimaryPart.Position)
+      if not (allowed and entityData and allowed[entityData.Alias]) then
+        local distanceFromCharacter = localPlayer:DistanceFromCharacter(child.PrimaryPart.Position)
 
-        if distanceFromCharacter4 < val140[v219.Name] and distanceFromCharacter4 < element14.Distance then
-          if not p78 or v219:GetAttribute("Inactive") ~= true then
-            element14.Distance = distanceFromCharacter4
-            element14.Object = v219
+        if distanceFromCharacter < entitySpeeds[child.Name] and distanceFromCharacter < nearest.Distance then
+          if not activeOnly or child:GetAttribute("Inactive") ~= true then
+            nearest.Distance = distanceFromCharacter
+            nearest.Object = child
           end
         end
       end
     end
   end
 
-  return element14.Object
+  return nearest.Object
 end
 
-local function helper35()
+local function installNamecallHook()
   if not Executor.hookmetamethod or not Executor.newcclosure or not Executor.getnamecallmethod then
     return
   end
 
-  MainHook = Executor.hookmetamethod(game, "__namecall", Executor.newcclosure(function(p80, ...)
-    local val141 = { ... }
+  MainHook = Executor.hookmetamethod(game, "__namecall", Executor.newcclosure(function(self, ...)
+    local args = { ... }
     local executor = Executor.getnamecallmethod()
 
     if executor == "BindToRenderStep" then
-      local bindName = tostring(val141[1] or "")
+      local bindName = tostring(args[1] or "")
       local isScreechBinding = string.find(string.lower(bindName), "screech") ~= nil
-      if not isScreechBinding and type(val141[3]) == "function" then
+      if not isScreechBinding and type(args[3]) == "function" then
         local src = ""
-        pcall(function() src = debug.info(val141[3], "s") or "" end)
+        pcall(function() src = debug.info(args[3], "s") or "" end)
         if string.find(string.lower(src), "screech") then
           isScreechBinding = true
         end
@@ -5447,87 +5856,87 @@ local function helper35()
         if toggles.RemoveScreech and toggles.RemoveScreech.Value then
           return
         end
-        local origCallback = val141[3]
+        local origCallback = args[3]
         if type(origCallback) == "function" then
-          val141[3] = function(...)
-            local ok, res = pcall(origCallback, ...)
-            if ok then
-              return res
+          args[3] = function(...)
+            local success, result = pcall(origCallback, ...)
+            if success then
+              return result
             end
           end
         end
       end
     end
 
-    if p80.Name == "Screech" and executor == "FireServer" then
+    if self.Name == "Screech" and executor == "FireServer" then
       if (toggles.RemoveScreech and toggles.RemoveScreech.Value)
         or (toggles.NoScreechDamage and toggles.NoScreechDamage.Value) then
-        return MainHook(p80, true)
+        return MainHook(self, true)
       end
     end
 
-    if p80.Name == "MotorReplication" and executor == "FireServer" then
-      if toggles.BypassEyes.Value and val85.IsEyes
-        or toggles.BypassLookman.Value and val85.IsLookman then
-        local currentFloor2 = CurrentFloor
+    if self.Name == "MotorReplication" and executor == "FireServer" then
+      if toggles.BypassEyes.Value and featureState.IsEyes
+        or toggles.BypassLookman.Value and featureState.IsLookman then
+        local currentFloor = CurrentFloor
 
-        if currentFloor2 == "Fools" or currentFloor2 == "OldHotel" then
-          val141[1] = 0
-          val141[2] = val85.SpoofOffset == 200 and 65 or -65
-          val141[3] = 0
-          val141[4] = false
+        if currentFloor == "Fools" or currentFloor == "OldHotel" then
+          args[1] = 0
+          args[2] = featureState.SpoofOffset == 200 and 65 or -65
+          args[3] = 0
+          args[4] = false
         else
-          val141[1] = -650
+          args[1] = -650
         end
       end
     end
 
-    if p80.Name == "Crouch" and executor == "FireServer" then
+    if self.Name == "Crouch" and executor == "FireServer" then
       if toggles.Godmode and toggles.Godmode.Value then
-        val141[1] = true
+        args[1] = true
       end
 
-      val141[2] = true
+      args[2] = true
     end
 
     if toggles.AutoHeartbeatMinigame and toggles.AutoHeartbeatMinigame.Value
       and executor == "FireServer" then
-      if p80.Name == "ClutchHeartbeat" then
-        return MainHook(p80, true)
+      if self.Name == "ClutchHeartbeat" then
+        return MainHook(self, true)
       end
 
-      if p80.Name == "HideMonster" then
-        return MainHook(p80, true)
+      if self.Name == "HideMonster" then
+        return MainHook(self, true)
       end
     end
 
     if toggles.AntiDrone and toggles.AntiDrone.Value and executor == "FireServer" then
-      if p80.Name == "ShoulderChecked" or p80.Name == "WalkedInto" then
+      if self.Name == "ShoulderChecked" or self.Name == "WalkedInto" then
         return
       end
     end
 
     if toggles.AntiRansom and toggles.AntiRansom.Value and executor == "FireServer" then
-      if p80.Name == "RansomAttack" then
-        val141[1] = "didnt"
+      if self.Name == "RansomAttack" then
+        args[1] = "didnt"
       end
     end
 
     if toggles.AntiScribbles and toggles.AntiScribbles.Value and executor == "FireServer" then
-      if p80.Name == "IfYoureExploitingDeleteThis" then
+      if self.Name == "IfYoureExploitingDeleteThis" then
         return
       end
     end
 
-    local minecartTeleportState = val85.MinecartTeleportState
+    local minecartTeleportState = featureState.MinecartTeleportState
 
     if minecartTeleportState and executor == "FireServer"
-      and p80 == minecartTeleportState.MinecartPos then
+      and self == minecartTeleportState.MinecartPos then
       if minecartTeleportState.LatestRoom < 49 then
-        local element16 = minecartTeleportState.GetDoor()
+        local door = minecartTeleportState.GetDoor()
 
-        if element16 then
-          local getPivot = element16:GetPivot()
+        if door then
+          local getPivot = door:GetPivot()
 
           local minecartRig = workspace.CurrentCamera
             and workspace.CurrentCamera:FindFirstChild("MinecartRig")
@@ -5536,8 +5945,8 @@ local function helper35()
             minecartRig:PivotTo(getPivot)
           end
 
-          pcall(function() element16.ClientOpen:FireServer() end)
-          val141[1] = getPivot
+          pcall(function() door.ClientOpen:FireServer() end)
+          args[1] = getPivot
         end
       else
         if minecartTeleportState.DecodeHook and minecartTeleportState.RestoreDecode then
@@ -5548,17 +5957,17 @@ local function helper35()
           pcall(function() minecartTeleportState.LatestRoomConn:Disconnect() end)
         end
 
-        val85.MinecartTeleportState = nil
+        featureState.MinecartTeleportState = nil
       end
     end
 
-    return MainHook(p80, table.unpack(val141))
+    return MainHook(self, table.unpack(args))
   end))
 
-  OtherHook = Executor.hookmetamethod(game, "__index", Executor.newcclosure(function(p81, p82)
-    local val142 = OtherHook(p81, p82)
+  OtherHook = Executor.hookmetamethod(game, "__index", Executor.newcclosure(function(target, key)
+    local result = OtherHook(target, key)
 
-    if p82 == "MoveDirection" and p81 == humanoid and val85.RoomsAutoWalkActive
+    if key == "MoveDirection" and target == humanoid and featureState.RoomsAutoWalkActive
       and toggles.RoomsAutoWalkSpoofFootsteps.Value and CurrentFloor == "Rooms"
       and not (character and character:GetAttribute("Hiding")) then
       if humanoidRootPart then
@@ -5571,10 +5980,10 @@ local function helper35()
         return humanoidRootPart.CFrame.LookVector
       end
 
-      return val142
+      return result
     end
 
-    return val142
+    return result
   end))
 
   pcall(function()
@@ -5597,8 +6006,8 @@ local function helper35()
         local origCb = callback
         if type(origCb) == "function" then
           callback = function(...)
-            local ok, res = pcall(origCb, ...)
-            if ok then return res end
+            local success, result = pcall(origCb, ...)
+            if success then return result end
           end
         end
       end
@@ -5607,60 +6016,60 @@ local function helper35()
   end)
 end
 
-helper35()
+installNamecallHook()
 
-local function helper36(val143)
-  local currentRooms5 = workspace:FindFirstChild("CurrentRooms")
+local function handleRoomObject(object)
+  local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-  if currentRooms5 and val143.Parent == currentRooms5 then
-    local firedamp = val143:GetAttribute("Firedamp")
-    val143:SetAttribute("Firedamp_Old", firedamp ~= nil and firedamp or false)
+  if currentRooms2 and object.Parent == currentRooms2 then
+    local firedamp = object:GetAttribute("Firedamp")
+    object:SetAttribute("Firedamp_Old", firedamp ~= nil and firedamp or false)
 
     if toggles.DisableFiredampEffect.Value then
-      val143:SetAttribute("Firedamp", false)
+      object:SetAttribute("Firedamp", false)
     end
   end
 
-  local name2 = val143.Name
+  local name = object.Name
 
-  if name2 == "Padlock" then
+  if name == "Padlock" then
     Connections.PadlockConnection = runService.Heartbeat:Connect(function()
       if _Unloading then
         return
       end
 
-      if val143.PrimaryPart then
-        local distanceFromCharacter5 = localPlayer2:DistanceFromCharacter(val143.PrimaryPart.Position)
+      if object.PrimaryPart then
+        local distanceFromCharacter = localPlayer:DistanceFromCharacter(object.PrimaryPart.Position)
 
         if toggles.AutoUnlockPadlockToggle.Value then
-          local functions2 = Functions.GetLibraryCode()
+          local functions = Functions.GetLibraryCode()
 
-          if functions2 and tonumber(functions2) and distanceFromCharacter5 < 50 then
-            remotesFolder2.PL:FireServer(functions2)
+          if functions and tonumber(functions) and distanceFromCharacter < 50 then
+            remotesFolder.PL:FireServer(functions)
           end
         end
 
-        if toggles.AutoLibraryBruteForce.Value and distanceFromCharacter5 < 50 then
-          local functions3 = Functions.GetLibraryCode()
+        if toggles.AutoLibraryBruteForce.Value and distanceFromCharacter < 50 then
+          local functions = Functions.GetLibraryCode()
 
-          if functions3 and string.find(functions3, "_") then
-            local text2 = ""
+          if functions and string.find(functions, "_") then
+            local text = ""
 
-            for i11 = 1, #functions3 do
-              local substring = string.sub(functions3, i11, i11)
-              text2 = text2 .. (substring == "_" and math.random(0, 9) or substring)
+            for i = 1, #functions do
+              local substring = string.sub(functions, i, i)
+              text = text .. (substring == "_" and math.random(0, 9) or substring)
             end
 
-            if remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
-              remotesFolder2.PL:FireServer(text2)
+            if remotesFolder and remotesFolder:FindFirstChild("PL") then
+              remotesFolder.PL:FireServer(text)
             end
 
-            val85.BruteForceCount = (val85.BruteForceCount or 0) + 1
+            featureState.BruteForceCount = (featureState.BruteForceCount or 0) + 1
 
-            if val85.BruteForceCount % 750 == 0 then
+            if featureState.BruteForceCount % 750 == 0 then
               task.spawn(function()
                 library:Notify({
-                  Title = "Brute-force: checked " .. val85.BruteForceCount .. " codes", Description = "Not found yet", Time = 2, })
+                  Title = "Brute-force: checked " .. featureState.BruteForceCount .. " codes", Description = "Not found yet", Time = 2, })
               end)
             end
           end
@@ -5668,62 +6077,62 @@ local function helper36(val143)
       end
     end)
 
-    val143.Destroying:Once(function()
-      if val85.BruteForceCount and val85.BruteForceCount > 0 then
+    object.Destroying:Once(function()
+      if featureState.BruteForceCount and featureState.BruteForceCount > 0 then
         task.spawn(function()
           library:Notify({
-            Title = "Padlock code found after " .. val85.BruteForceCount .. " attempts!", Description = "yay", Time = 5, })
+            Title = "Padlock code found after " .. featureState.BruteForceCount .. " attempts!", Description = "yay", Time = 5, })
         end)
       end
 
-      val85.BruteForceCount = nil
+      featureState.BruteForceCount = nil
 
       if Connections.PadlockConnection then
         Connections.PadlockConnection:Disconnect()
         Connections.PadlockConnection = nil
       end
     end)
-  elseif name2 == "ElevatorBreaker" then
-    if toggles.AutoBreakerBox.Value and not val85.BreakerBoxNotified then
-      val85.BreakerBoxNotified = true
+  elseif name == "ElevatorBreaker" then
+    if toggles.AutoBreakerBox.Value and not featureState.BreakerBoxNotified then
+      featureState.BreakerBoxNotified = true
     end
 
-    local code = val143:WaitForChild("SurfaceGui"):WaitForChild("Frame"):WaitForChild("Code")
+    local code = object:WaitForChild("SurfaceGui"):WaitForChild("Frame"):WaitForChild("Code")
 
     local function waitLoop()
       if toggles.AutoBreakerBox.Value then
-        local value41 = options.BreakerBoxMethod and options.BreakerBoxMethod.Value or "Instant"
+        local breakerBoxMethod = options.BreakerBoxMethod and options.BreakerBoxMethod.Value or "Instant"
 
-        if value41 == "Instant" then
+        if breakerBoxMethod == "Instant" then
           task.spawn(function()
             task.wait(1)
 
             pcall(function()
-              if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-                remotesFolder2.EBF:FireServer()
+              if remotesFolder and remotesFolder:FindFirstChild("EBF") then
+                remotesFolder.EBF:FireServer()
               end
             end)
           end)
-        elseif value41 == "Legit" then
-          local numVal4 = tonumber(code.Text)
+        elseif breakerBoxMethod == "Legit" then
+          local number = tonumber(code.Text)
 
-          if not numVal4 then
+          if not number then
             return
           end
 
-          for v226, v227 in val143:GetDescendants() do
-            if v227.Name == "BreakerSwitch" and v227:GetAttribute("ID") == numVal4 then
+          for _, descendant in object:GetDescendants() do
+            if descendant.Name == "BreakerSwitch" and descendant:GetAttribute("ID") == number then
               local backgroundTransparency = code:WaitForChild("Frame").BackgroundTransparency
-              local prismaticConstraint = v227:FindFirstChild("PrismaticConstraint")
-              local light = v227:FindFirstChild("Light")
-              local sound = v227:FindFirstChild("Sound")
+              local prismaticConstraint = descendant:FindFirstChild("PrismaticConstraint")
+              local light = descendant:FindFirstChild("Light")
+              local sound = descendant:FindFirstChild("Sound")
 
               if backgroundTransparency == 0 then
-                if v227:GetAttribute("Enabled") then
+                if descendant:GetAttribute("Enabled") then
                   return
                 end
 
-                v227:SetAttribute("Enabled", true)
+                descendant:SetAttribute("Enabled", true)
 
                 if prismaticConstraint then
                   prismaticConstraint.TargetPosition = -0.2
@@ -5731,10 +6140,10 @@ local function helper36(val143)
 
                 if light then
                   light.Material = Enum.Material.Neon
-                  local findFirstChild7 = light:FindFirstChild("Spark", true)
+                  local findFirstChild = light:FindFirstChild("Spark", true)
 
-                  if findFirstChild7 then
-                    findFirstChild7:Emit(1)
+                  if findFirstChild then
+                    findFirstChild:Emit(1)
                   end
                 end
 
@@ -5742,11 +6151,11 @@ local function helper36(val143)
                   sound:Play()
                 end
               elseif backgroundTransparency == 1 then
-                if not v227:GetAttribute("Enabled") then
+                if not descendant:GetAttribute("Enabled") then
                   return
                 end
 
-                v227:SetAttribute("Enabled", false)
+                descendant:SetAttribute("Enabled", false)
 
                 if prismaticConstraint then
                   prismaticConstraint.TargetPosition = 0.2
@@ -5766,86 +6175,86 @@ local function helper36(val143)
           end
         end
 
-        if not val85.BreakerBoxStartNotified then
-          val85.BreakerBoxStartNotified = true
+        if not featureState.BreakerBoxStartNotified then
+          featureState.BreakerBoxStartNotified = true
         end
       end
 
-      val85.BreakerBoxInteracted = true
+      featureState.BreakerBoxInteracted = true
     end
 
     Connections.BreakerConnection = code:GetPropertyChangedSignal("Text"):Connect(waitLoop)
-    val85.RunBreakerFunc = waitLoop
-    val143.Destroying:Once(function() val85.RunBreakerFunc = nil end)
-  elseif name2 == "ElevatorCar" then
-    local connect16 = val143.DescendantAdded:Connect(function(descendant5)
-      if toggles.AutoBreakerBox.Value and descendant5.Name == "TouchInterest"
-        and not val85.BreakerBoxFinishedNotified then
-        val85.BreakerBoxFinishedNotified = true
+    featureState.RunBreakerFunc = waitLoop
+    object.Destroying:Once(function() featureState.RunBreakerFunc = nil end)
+  elseif name == "ElevatorCar" then
+    local connection = object.DescendantAdded:Connect(function(descendant)
+      if toggles.AutoBreakerBox.Value and descendant.Name == "TouchInterest"
+        and not featureState.BreakerBoxFinishedNotified then
+        featureState.BreakerBoxFinishedNotified = true
       end
     end)
 
-    val143.Destroying:Once(function() connect16:Disconnect() end)
+    object.Destroying:Once(function() connection:Disconnect() end)
   end
 end
 
 _promptTriggerLock = false
 
-toggles.InfiniteCrucifix:OnChanged(function(p84)
-  if not p84 then
+function Handlers.InfiniteCrucifixChanged(value)
+  if not value then
     return
   end
 
-  if val85.InfCrucifixRunning then
+  if featureState.InfCrucifixRunning then
     return
   end
 
-  val85.InfCrucifixRunning = true
+  featureState.InfCrucifixRunning = true
 
   task.spawn(function()
-    local val144 = {
+    local entityRanges = {
       RushMoving = 49, AmbushMoving = 50, A60 = 49, A120 = 50, BackdoorRush = 49, }
 
-    local function iterate2()
-      for key7 in pairs(val144) do
-        local findFirstChild8 = workspace:FindFirstChild(key7)
-          or workspace:FindFirstChild(key7, true)
+    local function findGuidingObject()
+      for entityName in pairs(entityRanges) do
+        local findFirstChild = workspace:FindFirstChild(entityName)
+          or workspace:FindFirstChild(entityName, true)
 
-        if findFirstChild8 and (findFirstChild8:IsA("BasePart") or findFirstChild8:IsA("Model")) then
-          return findFirstChild8, key7
+        if findFirstChild and (findFirstChild:IsA("BasePart") or findFirstChild:IsA("Model")) then
+          return findFirstChild, entityName
         end
       end
     end
 
-    local function helper37()
-      local object4, val145 = iterate2()
+    local function isNearGuidingObject()
+      local entityObject, entityKey = findGuidingObject()
 
-      local humanoidRootPart3 = localPlayer2.Character
-        and localPlayer2.Character:FindFirstChild("HumanoidRootPart")
+      local humanoidRootPart2 = localPlayer.Character
+        and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 
-      if not object4 or not humanoidRootPart3 then
+      if not entityObject or not humanoidRootPart2 then
         return false
       end
 
-      return (object4:GetPivot().Position - humanoidRootPart3.Position).Magnitude < val144[val145]
+      return (entityObject:GetPivot().Position - humanoidRootPart2.Position).Magnitude < entityRanges[entityKey]
     end
 
-    local function helper38(val146)
-      local drops3 = workspace:FindFirstChild("Drops")
+    local function findNearbyCrucifix(rootPart)
+      local drops = workspace:FindFirstChild("Drops")
 
-      if drops3 then
-        for v231, v232 in drops3:GetChildren() do
-          if v232.Name == "Crucifix" then
-            return v232
+      if drops then
+        for _, child in drops:GetChildren() do
+          if child.Name == "Crucifix" then
+            return child
           end
         end
       end
 
-      for v233, v234 in workspace:GetDescendants() do
-        if v234:IsA("Model") and v234.Name == "Crucifix"
-          and not v234:IsDescendantOf(localPlayer2.Character) then
-          if (v234:GetPivot().Position - val146.Position).Magnitude < 25 then
-            return v234
+      for _, descendant in workspace:GetDescendants() do
+        if descendant:IsA("Model") and descendant.Name == "Crucifix"
+          and not descendant:IsDescendantOf(localPlayer.Character) then
+          if (descendant:GetPivot().Position - rootPart.Position).Magnitude < 25 then
+            return descendant
           end
         end
       end
@@ -5853,32 +6262,32 @@ toggles.InfiniteCrucifix:OnChanged(function(p84)
 
     while toggles.InfiniteCrucifix.Value do
       task.wait(0.1)
-      local character7 = localPlayer2.Character
-      local tool2 = character7 and character7:FindFirstChildOfClass("Tool")
+      local character2 = localPlayer.Character
+      local tool = character2 and character2:FindFirstChildOfClass("Tool")
 
-      if tool2 and tool2.Name == "Crucifix" and helper37() then
-        local humanoidRootPart4 = character7:FindFirstChild("HumanoidRootPart")
+      if tool and tool.Name == "Crucifix" and isNearGuidingObject() then
+        local humanoidRootPart2 = character2:FindFirstChild("HumanoidRootPart")
 
-        if humanoidRootPart4 and iterate2() and helper11() ~= "Rooms" then
-          remotesFolder2.DropItem:FireServer(tool2)
+        if humanoidRootPart2 and findGuidingObject() and detectFloor() ~= "Rooms" then
+          remotesFolder.DropItem:FireServer(tool)
           task.wait(0.1)
-          local val147
+          local crucifix
 
-          for i12 = 1, 40 do
-            val147 = helper38(humanoidRootPart4)
+          for _ = 1, 40 do
+            crucifix = findNearbyCrucifix(humanoidRootPart2)
 
-            if val147 then
+            if crucifix then
               break
             end
 
             task.wait(0.1)
           end
 
-          if val147 then
+          if crucifix then
             task.wait(0.4)
 
-            local findFirstChildOfClass = val147:FindFirstChildOfClass("ProximityPrompt", true)
-              or val147:FindFirstChild("ModulePrompt", true)
+            local findFirstChildOfClass = crucifix:FindFirstChildOfClass("ProximityPrompt", true)
+              or crucifix:FindFirstChild("ModulePrompt", true)
 
             if findFirstChildOfClass then
               pcall(function() Functions.FirePrompt(findFirstChildOfClass) end)
@@ -5890,150 +6299,60 @@ toggles.InfiniteCrucifix:OnChanged(function(p84)
       end
     end
 
-    val85.InfCrucifixRunning = false
+    featureState.InfCrucifixRunning = false
   end)
-end)
+end
 
-toggles.AutoBreakerBox:OnChanged(function(p86)
-  if not p86 then
+
+function Handlers.AutoBreakerBoxChanged(value)
+  if not value then
     return
   end
 
-  if val85.RunBreakerFunc then
-    if val85.BreakerBoxInteracted then
-      val85.RunBreakerFunc()
+  if featureState.RunBreakerFunc then
+    if featureState.BreakerBoxInteracted then
+      featureState.RunBreakerFunc()
     end
   elseif currentRooms:FindFirstChild("ElevatorBreaker", true) then
-    if not val85.BreakerBoxInteracted then
-      if not val85.BreakerBoxNotified then
-        val85.BreakerBoxInteracted = true
+    if not featureState.BreakerBoxInteracted then
+      if not featureState.BreakerBoxNotified then
+        featureState.BreakerBoxInteracted = true
       end
     else
       task.spawn(function()
         task.wait(1)
 
         pcall(function()
-          if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-            remotesFolder2.EBF:FireServer()
+          if remotesFolder and remotesFolder:FindFirstChild("EBF") then
+            remotesFolder.EBF:FireServer()
           end
         end)
       end)
     end
   end
-end)
+end
 
-Groupboxes.Character:AddToggle("EnableWalkspeed", {
-  Text = "Enable Walkspeed", Default = false, Tooltip = "Enables custom walkspeed modification", })
 
-Groupboxes.Character:AddSlider("Walkspeed", {
-  Text = "Walkspeed", Min = 16, Max = 150, Default = 16, Rounding = 0, Compact = true, })
-
-Groupboxes.Character:AddDropdown("SpeedBypassMode", {
-  Text = "Speed Bypass", Values = { "Default", "Boost" }, Default = 1, Multi = false, })
-
-Groupboxes.Character:AddToggle("FlyToggle", { Text = "Fly", Default = false })
-
-toggles.FlyToggle:AddKeyPicker("FlyKeybind", {
-  Text = "Fly", Default = "F", Mode = "Toggle", SyncToggleState = true, })
-
-Groupboxes.Character:AddSlider("FlySpeed", {
-  Text = "Fly Speed", Min = 25, Max = 150, Default = 60, Rounding = 0, Compact = true, })
-
-Groupboxes.Character:AddDivider()
-
-Groupboxes.Character:AddToggle("RemoveAcceleration", {
-  Text = "Remove Acceleration", Default = false, Tooltip = "Removes 'sliding' when moving at high speeds", })
-
-Groupboxes.Character:AddDivider()
-
-Groupboxes.Character:AddToggle("EnableCharacterJump", {
-  Text = "Enable Jumping", Default = false, Tooltip = "Enables the doors jumping feature", })
-
-Groupboxes.Character:AddToggle("InfiniteJumps", {
-  Text = "Infinite Jump", Default = false, Tooltip = "Allows you to jump mid-air", })
-
-Groupboxes.Character:AddDivider()
-
-Groupboxes.Character:AddToggle("EnableCharacterSlide", {
-  Text = "Enable Sliding", Default = false, Tooltip = "Enables the doors sliding feature (only at speeds above 20)", })
-
-Groupboxes.Character:AddToggle("Noclip", {
-  Text = "Noclip", Default = false, Tooltip = "Allows you to go through walls (rubberbands you)", })
-
-toggles.Noclip:AddKeyPicker("NoclipKeybind", {
-  Text = "Noclip", Default = "N", Mode = "Toggle", SyncToggleState = true, })
-
-Groupboxes.Character:AddToggle("Phase", {
-  Text = "Phase", Default = false, Tooltip = "Slowly floats you forward with noclip enabled for no rubberbanding", })
-
-toggles.Phase:AddKeyPicker("PhaseKeybind", {
-  Text = "Phase", Default = "T", Mode = "Toggle", SyncToggleState = true, })
-
-Groupboxes.Other:AddToggle("AnticheatManipulation", {
-  Text = "Anticheat Manipulation", Default = false, Tooltip = "Makes your character fly forwards fast to trick the anticheat to send you through walls", })
-
-toggles.AnticheatManipulation:AddKeyPicker("AnticheatManipulationKeybind", {
-  Text = "Anticheat Manipulation", Default = "B", Mode = "Hold", SyncToggleState = true, })
-
-Groupboxes.Other:AddToggle("AutoInteract", {
-  Text = "Auto Interact", Default = false, Tooltip = "Auto interacts with prompts near you (you can change it to be a hold keybind)", DisabledTooltip = "Your executor doesn't support this feature :(", })
-
-toggles.AutoInteract:AddKeyPicker("AutoInteractKeybind", {
-  Text = "Auto Interact", Default = "R", Mode = "Toggle", SyncToggleState = true, })
-
-Groupboxes.Other:AddDropdown("AutoInteractIgnoreList", {
-  Text = "Interact Blacklist", Values = { "Locks", "Glitch Fragments", "Dropped Items", "Mandrake" }, Default = { "Dropped Items" }, Multi = true, AllowNull = true, })
-
-Groupboxes.Other:AddDivider()
-
-Groupboxes.Other:AddToggle("Godmode", {
-  Text = "Godmode", Default = false, Tooltip = "Makes your character appear underground on the server, protecting you from rush-like entities.", })
-
-toggles.Godmode:AddKeyPicker("GodmodeKeybind", {
-  Text = "Godmode", Default = "G", Mode = "Toggle", SyncToggleState = true, })
-
-toggles.Godmode:OnChanged(function(p87)
+function Handlers.GodmodeChanged(_)
   if not character or not humanoid or not humanoidRootPart then
     return
   end
 
-  if val85 and not val85.OriginalC1 then
-    local lowerTorso2 = character:FindFirstChild("LowerTorso")
-    local root3 = lowerTorso2 and lowerTorso2:FindFirstChild("Root")
+  if featureState and not featureState.OriginalC1 then
+    local lowerTorso = character:FindFirstChild("LowerTorso")
+    local root = lowerTorso and lowerTorso:FindFirstChild("Root")
 
-    if root3 then
-      val85.OriginalC1 = root3.C1
+    if root then
+      featureState.OriginalC1 = root.C1
     end
   end
-end)
+end
 
-Groupboxes.Other:AddDropdown("GodmodeMethod", {
-  Text = "Godmode Method", Values = { "Always enabled", "On entity spawn" }, Default = "On entity spawn", Tooltip = "Always enabled keeps godmode active while the toggle is on. On entity spawn only activates it when a listed entity exists.", })
-
-Groupboxes.Other:AddToggle("NotifyVulnerable", {
-  Text = "Notify When Vulnerable", Default = false, Tooltip = "Notifies you when your character moves 3+ studs upward", })
-
-Groupboxes.Other:AddToggle("AutoClosetToggle", {
-  Text = "Auto Closet", Default = false, Tooltip = "Automatically hides in a closet next to you when a rush-like entity is near", })
-
-toggles.AutoClosetToggle:AddKeyPicker("AutoClosetKeybind", {
-  Text = "Auto Closet", Default = "H", Mode = "Toggle", SyncToggleState = true, })
-
-Groupboxes.Other:AddDropdown("AutoClosetEntityList", {
-  Text = "Ignore List", Values = { "Rush", "Ambush", "Blitz", "A-60", "A-120", "Glitch Rush", "Glitch Ambush" }, Multi = true, AllowNull = true, })
-
-Groupboxes.Other:AddDivider()
-
-Groupboxes.Other:AddToggle("DoorReachToggle", {
-  Text = "Door Reach", Default = false, Tooltip = "Increases your door opening reach by your chosen amount", })
-
-Groupboxes.Other:AddSlider("DoorReachDistance", {
-  Text = "Door Reach Distance", Min = 15, Max = 75, Default = 45, Rounding = 0, Compact = true, Suffix = " studs", })
 
 -- ========================================================
 -- Phantom Noclip (Main Tab)
 -- ========================================================
-Groupboxes.PhantomNoclip = element3.Main:AddRightGroupbox("Phantom Noclip")
+
 
 do
   local phantomTolerance = 3
@@ -6044,7 +6363,7 @@ do
   local charConn = nil
 
   local function setPhantomCollision(state)
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     if not char then return end
     for _, obj in ipairs(char:GetDescendants()) do
       if obj:IsA("BasePart") then
@@ -6069,7 +6388,7 @@ do
 
   local function enablePhantom()
     if phantomEnabled then return end
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
 
@@ -6082,9 +6401,11 @@ do
     end)
 
     local postSim = runService.PostSimulation or runService.Heartbeat
-    antiTpConn = postSim:Connect(function()
+    local rollbackStreak = 0
+    local lastNotice = 0
+    antiTpConn = postSim:Connect(function(deltaTime)
       if not phantomEnabled then return end
-      local c = localPlayer2.Character
+      local c = localPlayer.Character
       local currRoot = c and c:FindFirstChild("HumanoidRootPart")
       if not currRoot then
         lastSafeCFrame = nil
@@ -6095,72 +6416,102 @@ do
         return
       end
 
+      -- Допустимое смещение за кадр = базовый допуск + то, что персонаж мог пройти со своей скоростью.
+      -- Раньше допуск был фиксированным: в тяжёлых комнатах (магазин Джеффа) FPS падал, обычный шаг
+      -- за кадр становился больше допуска, и откат возвращал персонажа на место каждый кадр — бот
+      -- стоял намертво.
+      local frameTime = math.min(deltaTime or 1 / 60, 0.5)
+      local allowed = phantomTolerance + currRoot.AssemblyLinearVelocity.Magnitude * frameTime * 1.5
       local distMoved = (currRoot.Position - lastSafeCFrame.Position).Magnitude
-      if distMoved > phantomTolerance then
+      if distMoved > allowed then
         if (KnobFarm and (KnobFarm.Teleporting or KnobFarm.InSeekChase or KnobFarm.SeekChaseStartRoom))
           or (toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value) then
+          rollbackStreak = 0
           lastSafeCFrame = currRoot.CFrame
         else
-          currRoot.CFrame = lastSafeCFrame
-          currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+          rollbackStreak = rollbackStreak + 1
+          if rollbackStreak >= 8 then
+            -- Откат 8 кадров подряд ничего не меняет: что-то перемещает персонажа каждый кадр.
+            -- Защита не должна держать его вечно — принимаем текущую позицию.
+            rollbackStreak = 0
+            lastSafeCFrame = currRoot.CFrame
+            if tick() - lastNotice > 5 then
+              lastNotice = tick()
+              library:Notify({ Title = "Phantom Noclip", Description = "Rollback loop detected: accepting the new position", Time = 3 })
+            end
+          else
+            currRoot.CFrame = lastSafeCFrame
+            currRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+          end
         end
       else
+        rollbackStreak = 0
         lastSafeCFrame = currRoot.CFrame
       end
     end)
   end
 
-  charConn = localPlayer2.CharacterAdded:Connect(function()
+  charConn = localPlayer.CharacterAdded:Connect(function()
     if not phantomEnabled then return end
     lastSafeCFrame = nil
     task.wait(0.5)
     if phantomEnabled then
-      local c = localPlayer2.Character
+      local c = localPlayer.Character
       local r = c and c:FindFirstChild("HumanoidRootPart")
       if r then lastSafeCFrame = r.CFrame end
       setPhantomCollision(true)
     end
   end)
 
-  Groupboxes.PhantomNoclip:AddToggle("PhantomNoclip", {
-    Text = "Phantom Noclip",
-    Tooltip = "Noclip with position flashback protection against fall/rollback.",
-    Default = false,
-  })
+  
 
-  toggles.PhantomNoclip:OnChanged(function(val)
+    function Handlers.PhantomNoclipChanged(val)
     if val then
       enablePhantom()
     else
       disablePhantom()
     end
-  end)
+  end
 
-  Groupboxes.PhantomNoclip:AddSlider("PhantomTolerance", {
-    Text = "Phantom Tolerance",
-    Min = 1,
-    Max = 20,
-    Default = 3,
-    Rounding = 1,
-    Callback = function(val)
-      phantomTolerance = val
-    end,
-  })
+
+  
+  -- menu of this block: built later, from the MENU section at the end of the file
+  Menus.PhantomNoclip = function()
+    Groupboxes.PhantomNoclip:AddToggle("PhantomNoclip", {
+      Text = "Phantom Noclip",
+      Tooltip = "Noclip with position flashback protection against fall/rollback.",
+      Default = false,
+    })
+
+    toggles.PhantomNoclip:OnChanged(Handlers.PhantomNoclipChanged)
+
+    Groupboxes.PhantomNoclip:AddSlider("PhantomTolerance", {
+      Text = "Phantom Tolerance",
+      Min = 1,
+      Max = 20,
+      Default = 3,
+      Rounding = 1,
+      Callback = function(val)
+        phantomTolerance = val
+      end,
+    })
+  end
+
 end
 
 Fly = { Connection = nil, Body = nil }
-local val148 = nil
+local chairSession = nil
 
-local function helper39()
+local function stopSpeedBypass()
   if BypassConnection then
     BypassConnection:Disconnect()
     BypassConnection = nil
   end
 
-  local collisionClone2 = character and character:FindFirstChild("CollisionClone")
+  local collisionClone = character and character:FindFirstChild("CollisionClone")
 
-  if collisionClone2 then
-    collisionClone2:Destroy()
+  if collisionClone then
+    collisionClone:Destroy()
   end
 
   if not toggles.FlyToggle.Value and humanoid then
@@ -6183,45 +6534,45 @@ local function helper39()
   end
 
   pcall(function()
-    local crouch3 = remotesFolder2 and remotesFolder2:FindFirstChild("Crouch")
+    local crouch = remotesFolder and remotesFolder:FindFirstChild("Crouch")
 
-    if crouch3 then
-      crouch3:FireServer(false, false)
+    if crouch then
+      crouch:FireServer(false, false)
     end
   end)
 end
 
-local function helper40()
+local function stopSpeedLoop()
   if SpeedConnection then
     SpeedConnection:Disconnect()
     SpeedConnection = nil
   end
 end
 
-local function helper41()
-  helper39()
+local function startSpeedBypass()
+  stopSpeedBypass()
 
   local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value and options.Walkspeed.Value ~= 16)
   if not toggles.FlyToggle.Value and not walkspeedActive then
     return
   end
 
-  local crouch4 = remotesFolder2 and remotesFolder2:FindFirstChild("Crouch")
+  local crouch = remotesFolder and remotesFolder:FindFirstChild("Crouch")
 
   if collisionPart and not character:FindFirstChild("CollisionClone") then
-    local collisionClone3 = collisionPart:Clone()
-    collisionClone3.Name = "CollisionClone"
-    collisionClone3.RootPriority = 127
-    collisionClone3.Anchored = false
-    collisionClone3.CanCollide = false
+    local collisionClone = collisionPart:Clone()
+    collisionClone.Name = "CollisionClone"
+    collisionClone.RootPriority = 127
+    collisionClone.Anchored = false
+    collisionClone.CanCollide = false
 
-    local collisionCrouch2 = collisionClone3:FindFirstChild("CollisionCrouch")
+    local collisionCrouch = collisionClone:FindFirstChild("CollisionCrouch")
 
-    if collisionCrouch2 then
-      collisionCrouch2:Destroy()
+    if collisionCrouch then
+      collisionCrouch:Destroy()
     end
 
-    collisionClone3.Parent = character
+    collisionClone.Parent = character
   end
 
   BypassConnection = runService.Heartbeat:Connect(function()
@@ -6230,26 +6581,26 @@ local function helper41()
     end
 
     if not character or not humanoidRootPart or not humanoid then
-      helper39()
+      stopSpeedBypass()
       return
     end
 
-    if crouch4 then
-      crouch4:FireServer(true, true)
+    if crouch then
+      crouch:FireServer(true, true)
     end
 
     if not toggles.FlyToggle.Value then
-      local collisionClone4 = character:FindFirstChild("CollisionClone")
+      local collisionClone = character:FindFirstChild("CollisionClone")
 
-      if collisionClone4 then
-        collisionClone4.Massless = true
+      if collisionClone then
+        collisionClone.Massless = true
       end
     end
   end)
 end
 
-local function helper42()
-  helper40()
+local function runSpeedLoop()
+  stopSpeedLoop()
 
   SpeedConnection = runService.Heartbeat:Connect(function()
     if _Unloading then
@@ -6261,14 +6612,14 @@ local function helper42()
     end
 
     local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value)
-    local value42 = walkspeedActive and options.Walkspeed.Value or 16
+    local walkspeedActive2 = walkspeedActive and options.Walkspeed.Value or 16
 
-    if value42 == 16 then
+    if walkspeedActive2 == 16 then
       return
     end
 
     if not BypassConnection then
-      helper41()
+      startSpeedBypass()
     end
 
     character:SetAttribute("AntiSpeed", true)
@@ -6277,21 +6628,21 @@ local function helper42()
 
     humanoid:SetAttribute("AntiSpeed", true)
     humanoid:SetAttribute("Antispeed", true)
-    humanoid.WalkSpeed = value42
+    humanoid.WalkSpeed = walkspeedActive2
 
     local moveDirection = humanoid.MoveDirection
 
     if moveDirection.Magnitude > 0 then
       humanoidRootPart.AssemblyLinearVelocity = Vector3.new(
-        moveDirection.X * value42, humanoidRootPart.AssemblyLinearVelocity.Y, moveDirection.Z * value42
+        moveDirection.X * walkspeedActive2, humanoidRootPart.AssemblyLinearVelocity.Y, moveDirection.Z * walkspeedActive2
       )
     end
   end)
 end
 
-local function helper43()
-  helper40()
-  helper39()
+local function restartSpeedSystem()
+  stopSpeedLoop()
+  stopSpeedBypass()
 
   local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value and options.Walkspeed.Value ~= 16)
   if not toggles.FlyToggle.Value and not walkspeedActive then
@@ -6308,30 +6659,30 @@ local function helper43()
     end
 
     local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value)
-    local value43 = walkspeedActive and options.Walkspeed.Value or 16
+    local walkspeedActive2 = walkspeedActive and options.Walkspeed.Value or 16
 
-    character:SetAttribute("SpeedBoost", value43 - 16)
+    character:SetAttribute("SpeedBoost", walkspeedActive2 - 16)
     character:SetAttribute("SpeedBoostBehind", 0)
     character:SetAttribute("SpeedBoostExtra", 0)
 
-    if remotesFolder2 and remotesFolder2:FindFirstChild("Crouch") then
-      remotesFolder2.Crouch:FireServer(true, true)
+    if remotesFolder and remotesFolder:FindFirstChild("Crouch") then
+      remotesFolder.Crouch:FireServer(true, true)
     end
 
-    if value43 ~= 16 then
-      humanoid.WalkSpeed = value43
-      local moveDirection2 = humanoid.MoveDirection
+    if walkspeedActive2 ~= 16 then
+      humanoid.WalkSpeed = walkspeedActive2
+      local moveDirection = humanoid.MoveDirection
 
-      if moveDirection2.Magnitude > 0 then
+      if moveDirection.Magnitude > 0 then
         humanoidRootPart.AssemblyLinearVelocity = Vector3.new(
-          moveDirection2.X * value43, humanoidRootPart.AssemblyLinearVelocity.Y, moveDirection2.Z * value43
+          moveDirection.X * walkspeedActive2, humanoidRootPart.AssemblyLinearVelocity.Y, moveDirection.Z * walkspeedActive2
         )
       end
     end
   end)
 end
 
-local function onEvent2()
+local function stopFly()
   if Fly.Connection then
     Fly.Connection:Disconnect()
     Fly.Connection = nil
@@ -6351,11 +6702,11 @@ local function onEvent2()
   end
 end
 
-function helper15()
-  onEvent2()
+function refreshFly()
+  stopFly()
 
   if not toggles.FlyToggle.Value or not humanoidRootPart then
-    onEvent2()
+    stopFly()
     return
   end
 
@@ -6370,19 +6721,19 @@ function helper15()
     end
 
     if not toggles.FlyToggle.Value or not humanoid then
-      onEvent2()
+      stopFly()
       return
     end
 
     local zero = Vector3.zero
-    local moveDirection3 = humanoid.MoveDirection
+    local moveDirection = humanoid.MoveDirection
 
-    if moveDirection3.Magnitude > 0 then
+    if moveDirection.Magnitude > 0 then
       local lookVector = currentCamera.CFrame.LookVector
       local rightVector = currentCamera.CFrame.RightVector
-      local dot2 = moveDirection3:Dot(lookVector)
-      local dot3 = moveDirection3:Dot(rightVector)
-      zero = lookVector * dot2 + rightVector * dot3
+      local dot = moveDirection:Dot(lookVector)
+      local dot2 = moveDirection:Dot(rightVector)
+      zero = lookVector * dot + rightVector * dot2
     end
 
     if userInputService:IsKeyDown(Enum.KeyCode.Space) then
@@ -6401,27 +6752,27 @@ function helper15()
   end)
 end
 
-local function helper44()
-  local humanoidRootPart5 = character and character:FindFirstChild("HumanoidRootPart")
+local function findNearestChair()
+  local humanoidRootPart2 = character and character:FindFirstChild("HumanoidRootPart")
 
-  if not humanoidRootPart5 then
+  if not humanoidRootPart2 then
     return nil
   end
 
-  local val149, huge2 = nil, math.huge
+  local nearestChair, huge = nil, math.huge
 
-  local function helper45(val150)
-    if (val150.Name == "ArchivesOfficeChair" or val150.Name == "StairwellOfficeChair")
-      and val150:IsA("Model") then
-      local collider = val150:FindFirstChild("Collider") or val150.PrimaryPart
-        or val150:FindFirstChildWhichIsA("BasePart")
+  local function considerChair(descendant)
+    if (descendant.Name == "ArchivesOfficeChair" or descendant.Name == "StairwellOfficeChair")
+      and descendant:IsA("Model") then
+      local collider = descendant:FindFirstChild("Collider") or descendant.PrimaryPart
+        or descendant:FindFirstChildWhichIsA("BasePart")
 
       if collider and collider:IsA("BasePart") then
-        local magnitude2 = (humanoidRootPart5.Position - collider.Position).Magnitude
+        local magnitude = (humanoidRootPart2.Position - collider.Position).Magnitude
 
-        if magnitude2 < huge2 then
-          huge2 = magnitude2
-          val149 = val150
+        if magnitude < huge then
+          huge = magnitude
+          nearestChair = descendant
         end
       end
     end
@@ -6430,149 +6781,149 @@ local function helper44()
   local misc = workspace:FindFirstChild("Misc")
 
   if misc then
-    for index29, value44 in ipairs(misc:GetDescendants()) do
-      helper45(value44)
+    for _, descendant in ipairs(misc:GetDescendants()) do
+      considerChair(descendant)
     end
   end
 
-  local currentRooms6 = workspace:FindFirstChild("CurrentRooms")
+  local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-  if currentRooms6 then
-    for index30, value45 in ipairs(currentRooms6:GetChildren()) do
-      local assets = value45:FindFirstChild("Assets")
+  if currentRooms2 then
+    for _, child in ipairs(currentRooms2:GetChildren()) do
+      local assets = child:FindFirstChild("Assets")
 
       if assets then
-        for index31, value46 in ipairs(assets:GetChildren()) do
-          helper45(value46)
+        for _, child2 in ipairs(assets:GetChildren()) do
+          considerChair(child2)
         end
       end
     end
   end
 
-  return val149
+  return nearestChair
 end
 
-local function helper46()
-  local element17 = val148
+local function releaseChair()
+  local session = chairSession
 
-  if not element17 then
+  if not session then
     return
   end
 
-  if element17.movement then
-    element17.movement:Disconnect()
+  if session.movement then
+    session.movement:Disconnect()
   end
 
-  if element17.pollSeat then
-    element17.pollSeat:Disconnect()
+  if session.pollSeat then
+    session.pollSeat:Disconnect()
   end
 
-  if element17.inputBegan then
-    element17.inputBegan:Disconnect()
+  if session.inputBegan then
+    session.inputBegan:Disconnect()
   end
 
-  if element17.inputEnded then
-    element17.inputEnded:Disconnect()
+  if session.inputEnded then
+    session.inputEnded:Disconnect()
   end
 
-  if element17.mouseInput then
-    element17.mouseInput:Disconnect()
+  if session.mouseInput then
+    session.mouseInput:Disconnect()
   end
 
   pcall(function() runService:UnbindFromRenderStep("ChairBypassCamera") end)
   pcall(function() ContextActionService:UnbindAction("ChairBypassBlockExit") end)
 
-  if element17.originalCollision then
-    for key8, value47 in pairs(element17.originalCollision) do
-      if key8 and key8.Parent then
-        key8.CanCollide = value47
+  if session.originalCollision then
+    for key, originalCollisionEntry in pairs(session.originalCollision) do
+      if key and key.Parent then
+        key.CanCollide = originalCollisionEntry
       end
     end
   end
 
-  if element17.collider then
+  if session.collider then
     pcall(function()
-      element17.collider.AssemblyLinearVelocity = element17.oldVelocity
-      element17.collider.AssemblyAngularVelocity = element17.oldAngularVelocity
+      session.collider.AssemblyLinearVelocity = session.oldVelocity
+      session.collider.AssemblyAngularVelocity = session.oldAngularVelocity
     end)
 
-    if element17.chair and element17.chair.Parent then
-      local humanoidRootPart6 = character and character:FindFirstChild("HumanoidRootPart")
+    if session.chair and session.chair.Parent then
+      local humanoidRootPart2 = character and character:FindFirstChild("HumanoidRootPart")
 
-      if humanoidRootPart6 and element17.collider.Parent then
-        local element18 = element17.collider.CFrame * CFrame.new(3, 0, 0)
-        humanoidRootPart6.CFrame = CFrame.lookAt(element18.Position, element17.collider.Position)
+      if humanoidRootPart2 and session.collider.Parent then
+        local sideCFrame = session.collider.CFrame * CFrame.new(3, 0, 0)
+        humanoidRootPart2.CFrame = CFrame.lookAt(sideCFrame.Position, session.collider.Position)
       end
     end
   end
 
-  if element17.oldCameraType then
+  if session.oldCameraType then
     pcall(function()
-      workspace.CurrentCamera.CameraType = element17.oldCameraType
-      workspace.CurrentCamera.CameraSubject = element17.oldCameraSubject
-      userInputService.MouseBehavior = element17.oldMouseBehavior or Enum.MouseBehavior.Default
+      workspace.CurrentCamera.CameraType = session.oldCameraType
+      workspace.CurrentCamera.CameraSubject = session.oldCameraSubject
+      userInputService.MouseBehavior = session.oldMouseBehavior or Enum.MouseBehavior.Default
     end)
   end
 
   d_ = nil
-  val148 = nil
+  chairSession = nil
 end
 
-local function helper47()
-  local element19 = helper44()
+local function takeChairControl()
+  local chair = findNearestChair()
 
-  if not element19 then
+  if not chair then
     return false
   end
 
-  local collider2 = element19:FindFirstChild("Collider") or element19.PrimaryPart
-    or element19:FindFirstChildWhichIsA("BasePart")
+  local collider = chair:FindFirstChild("Collider") or chair.PrimaryPart
+    or chair:FindFirstChildWhichIsA("BasePart")
 
-  if not collider2 or not collider2:IsA("BasePart") then
+  if not collider or not collider:IsA("BasePart") then
     return false
   end
 
-  helper46()
+  releaseChair()
 
-  local element20 = {
-    chair = element19, collider = collider2, held = {}, originalCollision = {}, oldVelocity = collider2.AssemblyLinearVelocity, oldAngularVelocity = collider2.AssemblyAngularVelocity, oldCameraType = workspace.CurrentCamera.CameraType, oldCameraSubject = workspace.CurrentCamera.CameraSubject, oldMouseBehavior = userInputService.MouseBehavior, cameraYaw = 0, cameraPitch = 0, }
+  local session = {
+    chair = chair, collider = collider, held = {}, originalCollision = {}, oldVelocity = collider.AssemblyLinearVelocity, oldAngularVelocity = collider.AssemblyAngularVelocity, oldCameraType = workspace.CurrentCamera.CameraType, oldCameraSubject = workspace.CurrentCamera.CameraSubject, oldMouseBehavior = userInputService.MouseBehavior, cameraYaw = 0, cameraPitch = 0, }
 
-  local lookVector2 = workspace.CurrentCamera.CFrame.LookVector
+  local lookVector = workspace.CurrentCamera.CFrame.LookVector
 
-  element20.cameraYaw = math.atan2(-lookVector2.X, -lookVector2.Z)
-  element20.cameraPitch = math.asin(math.clamp(lookVector2.Y, -1, 1))
+  session.cameraYaw = math.atan2(-lookVector.X, -lookVector.Z)
+  session.cameraPitch = math.asin(math.clamp(lookVector.Y, -1, 1))
 
-  val148 = element20
-  d_ = element19
+  chairSession = session
+  d_ = chair
 
   pcall(function()
     workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
     workspace.CurrentCamera.CameraSubject = humanoid
   end)
 
-  for index32, value48 in ipairs(element19:GetDescendants()) do
-    if value48:IsA("BasePart") then
-      element20.originalCollision[value48] = value48.CanCollide
-      value48.CanCollide = false
+  for _, descendant in ipairs(chair:GetDescendants()) do
+    if descendant:IsA("BasePart") then
+      session.originalCollision[descendant] = descendant.CanCollide
+      descendant.CanCollide = false
     end
   end
 
   pcall(function()
-    ContextActionService:BindActionAtPriority("ChairBypassBlockExit", function(p89, p90, p91)
-      if p91.KeyCode == Enum.KeyCode.LeftControl then
-        if p90 == Enum.UserInputState.Begin then
+    ContextActionService:BindActionAtPriority("ChairBypassBlockExit", function(actionName, inputState, inputObject)
+      if inputObject.KeyCode == Enum.KeyCode.LeftControl then
+        if inputState == Enum.UserInputState.Begin then
           toggles.ArchiveChairFly:SetValue(false)
         end
 
         return Enum.ContextActionResult.Sink
       end
 
-      if p91.KeyCode == Enum.KeyCode.Space or p91.KeyCode == Enum.KeyCode.LeftShift
-        or p91.KeyCode == Enum.KeyCode.RightShift then
-        if p90 == Enum.UserInputState.Begin then
-          element20.held[p91.KeyCode] = true
-        elseif p90 == Enum.UserInputState.End or p90 == Enum.UserInputState.Cancel then
-          element20.held[p91.KeyCode] = nil
+      if inputObject.KeyCode == Enum.KeyCode.Space or inputObject.KeyCode == Enum.KeyCode.LeftShift
+        or inputObject.KeyCode == Enum.KeyCode.RightShift then
+        if inputState == Enum.UserInputState.Begin then
+          session.held[inputObject.KeyCode] = true
+        elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+          session.held[inputObject.KeyCode] = nil
         end
       end
 
@@ -6580,8 +6931,8 @@ local function helper47()
     end, false, Enum.ContextActionPriority.High.Value + 100, Enum.KeyCode.E, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.LeftControl)
   end)
 
-  element20.inputBegan = userInputService.InputBegan:Connect(function(input, p92)
-    if p92 then
+  session.inputBegan = userInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
       return
     end
 
@@ -6591,159 +6942,159 @@ local function helper47()
       return
     end
 
-    element20.held[input.KeyCode] = true
+    session.held[input.KeyCode] = true
   end)
 
-  element20.inputEnded = userInputService.InputEnded:Connect(function(input2)
-    element20.held[input2.KeyCode] = nil
+  session.inputEnded = userInputService.InputEnded:Connect(function(input)
+    session.held[input.KeyCode] = nil
   end)
 
-  element20.mouseInput = userInputService.InputChanged:Connect(function(input3)
-    if input3.UserInputType == Enum.UserInputType.MouseMovement and val148 == element20 then
-      element20.cameraYaw = element20.cameraYaw - input3.Delta.X * 0.0025
-      element20.cameraPitch = math.clamp(element20.cameraPitch - input3.Delta.Y * 0.0025, -1.25, 1.15)
+  session.mouseInput = userInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement and chairSession == session then
+      session.cameraYaw = session.cameraYaw - input.Delta.X * 0.0025
+      session.cameraPitch = math.clamp(session.cameraPitch - input.Delta.Y * 0.0025, -1.25, 1.15)
     end
   end)
 
   pcall(function()
     runService:BindToRenderStep("ChairBypassCamera", Enum.RenderPriority.Camera.Value + 10, function()
-      if val148 ~= element20 or not collider2.Parent then
+      if chairSession ~= session or not collider.Parent then
         return
       end
 
-      local currentCamera3 = workspace.CurrentCamera
-      local cframe = CFrame.fromOrientation(element20.cameraPitch, element20.cameraYaw, 0)
-      local val151 = collider2.Position + Vector3.new(0, 2, 0)
+      local currentCamera2 = workspace.CurrentCamera
+      local cframe = CFrame.fromOrientation(session.cameraPitch, session.cameraYaw, 0)
+      local target = collider.Position + Vector3.new(0, 2, 0)
       local vectorToWorldSpace = cframe:VectorToWorldSpace(Vector3.new(0, 0, -1))
 
-      currentCamera3.CameraType = Enum.CameraType.Scriptable
-      currentCamera3.CFrame = CFrame.lookAt(val151, val151 + vectorToWorldSpace)
+      currentCamera2.CameraType = Enum.CameraType.Scriptable
+      currentCamera2.CFrame = CFrame.lookAt(target, target + vectorToWorldSpace)
 
       userInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
     end)
   end)
 
-  element20.movement = runService.Heartbeat:Connect(function()
-    if val148 ~= element20 or not collider2.Parent then
+  session.movement = runService.Heartbeat:Connect(function()
+    if chairSession ~= session or not collider.Parent then
       return
     end
 
-    for index33, value49 in ipairs(element19:GetDescendants()) do
-      if value49:IsA("BasePart") then
-        value49.CanCollide = false
+    for _, descendant in ipairs(chair:GetDescendants()) do
+      if descendant:IsA("BasePart") then
+        descendant.CanCollide = false
       end
     end
 
-    local cframe2 = workspace.CurrentCamera.CFrame
-    local vector2 = Vector3.new(cframe2.LookVector.X, 0, cframe2.LookVector.Z)
-    local vector3 = Vector3.new(cframe2.RightVector.X, 0, cframe2.RightVector.Z)
+    local cframe = workspace.CurrentCamera.CFrame
+    local vector = Vector3.new(cframe.LookVector.X, 0, cframe.LookVector.Z)
+    local vector2 = Vector3.new(cframe.RightVector.X, 0, cframe.RightVector.Z)
+
+    if vector.Magnitude > 0.01 then
+      vector = vector.Unit
+    else
+      vector = Vector3.new(0, 0, -1)
+    end
 
     if vector2.Magnitude > 0.01 then
       vector2 = vector2.Unit
     else
-      vector2 = Vector3.new(0, 0, -1)
+      vector2 = Vector3.new(1, 0, 0)
     end
 
-    if vector3.Magnitude > 0.01 then
-      vector3 = vector3.Unit
-    else
-      vector3 = Vector3.new(1, 0, 0)
+    local zero = Vector3.zero
+
+    if session.held[Enum.KeyCode.W] then
+      zero = zero + vector
     end
 
-    local zero2 = Vector3.zero
-
-    if element20.held[Enum.KeyCode.W] then
-      zero2 = zero2 + vector2
+    if session.held[Enum.KeyCode.S] then
+      zero = zero - vector
     end
 
-    if element20.held[Enum.KeyCode.S] then
-      zero2 = zero2 - vector2
+    if session.held[Enum.KeyCode.D] then
+      zero = zero + vector2
     end
 
-    if element20.held[Enum.KeyCode.D] then
-      zero2 = zero2 + vector3
+    if session.held[Enum.KeyCode.A] then
+      zero = zero - vector2
     end
 
-    if element20.held[Enum.KeyCode.A] then
-      zero2 = zero2 - vector3
+    if zero.Magnitude == 0 and humanoid.MoveDirection.Magnitude > 0 then
+      local moveDirection = humanoid.MoveDirection
+      zero = vector * moveDirection:Dot(vector) + vector2 * moveDirection:Dot(vector2)
     end
 
-    if zero2.Magnitude == 0 and humanoid.MoveDirection.Magnitude > 0 then
-      local moveDirection4 = humanoid.MoveDirection
-      zero2 = vector2 * moveDirection4:Dot(vector2) + vector3 * moveDirection4:Dot(vector3)
+    if session.held[Enum.KeyCode.Space] then
+      zero = zero + Vector3.yAxis
     end
 
-    if element20.held[Enum.KeyCode.Space] then
-      zero2 = zero2 + Vector3.yAxis
+    if session.held[Enum.KeyCode.LeftShift] then
+      zero = zero - Vector3.yAxis
     end
 
-    if element20.held[Enum.KeyCode.LeftShift] then
-      zero2 = zero2 - Vector3.yAxis
-    end
+    local pitch = math.asin(math.clamp(cframe.LookVector.Y, -1, 1))
 
-    local val152 = math.asin(math.clamp(cframe2.LookVector.Y, -1, 1))
+    if zero.Magnitude > 0 then
+      local unit = zero.Unit
+      local _ = unit * math.sin(pitch) + Vector3.new(0, math.cos(pitch), 0) * unit.Magnitude
+      local direction = Vector3.new(unit.X, 0, unit.Z) + Vector3.new(0, math.sin(pitch), 0)
 
-    if zero2.Magnitude > 0 then
-      local unit = zero2.Unit
-      local v244 = unit * math.sin(val152) + Vector3.new(0, math.cos(val152), 0) * unit.Magnitude
-      local element21 = Vector3.new(unit.X, 0, unit.Z) + Vector3.new(0, math.sin(val152), 0)
-
-      if element21.Magnitude > 0.01 then
-        collider2.AssemblyLinearVelocity = element21.Unit * options.ArchiveChairFlySpeed.Value
+      if direction.Magnitude > 0.01 then
+        collider.AssemblyLinearVelocity = direction.Unit * options.ArchiveChairFlySpeed.Value
       else
-        collider2.AssemblyLinearVelocity = Vector3.zero
+        collider.AssemblyLinearVelocity = Vector3.zero
       end
     else
-      collider2.AssemblyLinearVelocity = Vector3.zero
+      collider.AssemblyLinearVelocity = Vector3.zero
     end
 
-    collider2.AssemblyAngularVelocity = Vector3.zero
+    collider.AssemblyAngularVelocity = Vector3.zero
   end)
 
   return true
 end
 
-local function helper48()
-  helper46()
+local function toggleChairBypass()
+  releaseChair()
 
-  if helper47() then
+  if takeChairControl() then
     library:Notify({
       Title = "Chair anticheat bypass", Description = "Bypass active, prompts are not able to be used while active, press ctrl and then space or turn off the toggle to stop it", Time = 3, })
 
     return
   end
 
-  local val153 = {}
+  local heldParts = {}
 
-  local connect17 = runService.Heartbeat:Connect(function()
-    local value50 = toggles.ArchiveChairFly and toggles.ArchiveChairFly.Value
+  local connection = runService.Heartbeat:Connect(function()
+    local archiveChairFly = toggles.ArchiveChairFly and toggles.ArchiveChairFly.Value
       or toggles.StairwellChairFly and toggles.StairwellChairFly.Value
 
-    if not value50 or val148 ~= val153 then
+    if not archiveChairFly or chairSession ~= heldParts then
       connect17:Disconnect()
       return
     end
 
-    local humanoidRootPart7 = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoidRootPart2 = character and character:FindFirstChild("HumanoidRootPart")
 
-    if not humanoidRootPart7 then
+    if not humanoidRootPart2 then
       return
     end
 
-    local element22 = helper44()
+    local chair = findNearestChair()
 
-    if not element22 then
+    if not chair then
       return
     end
 
-    local collider3 = element22:FindFirstChild("Collider") or element22.PrimaryPart
-      or element22:FindFirstChildWhichIsA("BasePart")
+    local collider = chair:FindFirstChild("Collider") or chair.PrimaryPart
+      or chair:FindFirstChildWhichIsA("BasePart")
 
-    if collider3 and (humanoidRootPart7.Position - collider3.Position).Magnitude < 8 then
+    if collider and (humanoidRootPart2.Position - collider.Position).Magnitude < 8 then
       connect17:Disconnect()
 
-      if value50 and not val148 then
-        helper47()
+      if archiveChairFly and not chairSession then
+        takeChairControl()
 
         library:Notify({
           Title = "Chair anticheat bypass", Description = "Bypass active, prompts are not able to be used while active, press ctrl and then space or turn off the toggle to stop it", Time = 3, })
@@ -6751,13 +7102,13 @@ local function helper48()
     end
   end)
 
-  val153.pollSeat = connect17
-  val148 = val153
+  heldParts.pollSeat = connection
+  chairSession = heldParts
 end
 
-function helper14()
-  helper40()
-  helper39()
+function refreshWalkspeed()
+  stopSpeedLoop()
+  stopSpeedBypass()
 
   local walkspeedActive = (toggles.EnableWalkspeed and toggles.EnableWalkspeed.Value and options.Walkspeed.Value ~= 16)
 
@@ -6766,137 +7117,137 @@ function helper14()
   end
 
   if options.SpeedBypassMode.Value == "Boost" then
-    helper43()
+    restartSpeedSystem()
   else
-    helper42()
+    runSpeedLoop()
 
     if toggles.FlyToggle.Value or walkspeedActive then
-      helper41()
+      startSpeedBypass()
     end
   end
 end
 
-toggles.EnableWalkspeed:OnChanged(helper14)
-options.Walkspeed:OnChanged(helper14)
-options.SpeedBypassMode:OnChanged(helper14)
 
-toggles.FlyToggle:OnChanged(function()
+function Handlers.FlyToggleChanged()
   if toggles.FlyToggle.Value then
-    helper14()
-    helper15()
+    refreshWalkspeed()
+    refreshFly()
   else
-    onEvent2()
-    helper14()
+    stopFly()
+    refreshWalkspeed()
   end
-end)
+end
 
-toggles.RemoveAcceleration:OnChanged(function(p93)
-  for key9, value51 in pairs(PartProperties) do
-    key9.CustomPhysicalProperties = p93 and CustomPhysics or value51
+
+function Handlers.RemoveAccelerationChanged(value)
+  for key, PartProperty in pairs(PartProperties) do
+    key.CustomPhysicalProperties = value and CustomPhysics or PartProperty
   end
-end)
+end
 
-toggles.EnableCharacterJump:OnChanged(function(p94)
+
+function Handlers.EnableCharacterJumpChanged(value)
   if character then
-    character:SetAttribute("CanJump", p94 and true or OldJump)
+    character:SetAttribute("CanJump", value and true or OldJump)
   end
-end)
+end
 
-toggles.EnableCharacterSlide:OnChanged(function(p95)
+
+function Handlers.EnableCharacterSlideChanged(value)
   if character then
-    character:SetAttribute("CanSlide", p95 and true or OldSlide)
+    character:SetAttribute("CanSlide", value and true or OldSlide)
   end
-end)
+end
+
 
 NoclipConnection = nil
 NoclipParts = {}
 
-local function helper49()
+local function collectNoclipParts()
   TableClear(NoclipParts)
 
   if not character then
     return
   end
 
-  for v248, v249 in character:GetDescendants() do
-    if v249:IsA("BasePart") then
-      table.insert(NoclipParts, v249)
+  for _, descendant in character:GetDescendants() do
+    if descendant:IsA("BasePart") then
+      table.insert(NoclipParts, descendant)
     end
   end
 
   if collisionPart then
     table.insert(NoclipParts, collisionPart)
-    local collisionCrouch3 = collisionPart:FindFirstChild("CollisionCrouch")
+    local collisionCrouch = collisionPart:FindFirstChild("CollisionCrouch")
   end
 
-  local collisionClone5 = character:FindFirstChild("CollisionClone")
+  local collisionClone = character:FindFirstChild("CollisionClone")
 
-  if collisionClone5 then
-    table.insert(NoclipParts, collisionClone5)
-    local collisionCrouch4 = collisionClone5:FindFirstChild("CollisionCrouch")
+  if collisionClone then
+    table.insert(NoclipParts, collisionClone)
+    local collisionCrouch = collisionClone:FindFirstChild("CollisionCrouch")
   end
 end
 
-local function iterate3(canCollide)
-  for index34, value52 in ipairs(NoclipParts) do
-    if value52 then
-      value52.CanCollide = canCollide
+local function setNoclipCollision(canCollide)
+  for _, NoclipPart in ipairs(NoclipParts) do
+    if NoclipPart then
+      NoclipPart.CanCollide = canCollide
     end
   end
 end
 
-function helper17()
+function refreshNoclip()
   if NoclipConnection then
     NoclipConnection:Disconnect()
     NoclipConnection = nil
   end
 
   if toggles.Noclip.Value then
-    helper49()
-    NoclipConnection = runService.Stepped:Connect(function() iterate3(false) end)
+    collectNoclipParts()
+    NoclipConnection = runService.Stepped:Connect(function() setNoclipCollision(false) end)
   else
-    iterate3(true)
+    setNoclipCollision(true)
   end
 end
 
-toggles.Noclip:OnChanged(helper17)
 
-local function helper50()
-  val85.IsEyes = workspace:FindFirstChild("Eyes") ~= nil
+local function updateEntityFlags()
+  featureState.IsEyes = workspace:FindFirstChild("Eyes") ~= nil
     or workspace:FindFirstChild("Lookman") ~= nil
 
-  val85.IsLookman = workspace:FindFirstChild("BackdoorLookman") ~= nil
+  featureState.IsLookman = workspace:FindFirstChild("BackdoorLookman") ~= nil
 end
 
-helper50()
+updateEntityFlags()
 
-workspace.ChildAdded:Connect(function(child5)
-  local name3 = child5.Name
+workspace.ChildAdded:Connect(function(child)
+  local name = child.Name
 
-  if name3 == "Eyes" or name3 == "Lookman" then
-    val85.IsEyes = true
-  elseif name3 == "BackdoorLookman" then
-    val85.IsLookman = true
+  if name == "Eyes" or name == "Lookman" then
+    featureState.IsEyes = true
+  elseif name == "BackdoorLookman" then
+    featureState.IsLookman = true
   end
 end)
 
-workspace.ChildRemoved:Connect(function(child6)
-  local name4 = child6.Name
+workspace.ChildRemoved:Connect(function(child)
+  local name = child.Name
 
-  if name4 == "Eyes" or name4 == "Lookman" then
-    val85.IsEyes = workspace:FindFirstChild("Eyes") ~= nil
+  if name == "Eyes" or name == "Lookman" then
+    featureState.IsEyes = workspace:FindFirstChild("Eyes") ~= nil
       or workspace:FindFirstChild("Lookman") ~= nil
-  elseif name4 == "BackdoorLookman" then
-    val85.IsLookman = workspace:FindFirstChild("BackdoorLookman") ~= nil
+  elseif name == "BackdoorLookman" then
+    featureState.IsLookman = workspace:FindFirstChild("BackdoorLookman") ~= nil
   end
 end)
 
-local connect18 = runService.RenderStepped:Connect(function()
+local connection2 = runService.RenderStepped:Connect(function()
   if _Unloading then
     return
   end
 
-  if val85.InLobby then
+  if featureState.InLobby then
     return
   end
 
@@ -6904,11 +7255,11 @@ local connect18 = runService.RenderStepped:Connect(function()
     currentCamera.FieldOfView = options.FieldOfView.Value
   end
 
-  if playerGui and not val85.SurgeFrame then
+  if playerGui and not featureState.SurgeFrame then
     local surgeVignetteDisabled = playerGui:FindFirstChild("SurgeVignette", true)
 
     if surgeVignetteDisabled then
-      val85.SurgeFrame = surgeVignetteDisabled
+      featureState.SurgeFrame = surgeVignetteDisabled
 
       if toggles.RemoveSurge and toggles.RemoveSurge.Value then
         surgeVignetteDisabled.Name = "SurgeVignette_Disabled"
@@ -6916,42 +7267,42 @@ local connect18 = runService.RenderStepped:Connect(function()
     end
   end
 
-  if toggles.BypassEyes.Value and val85.IsEyes or toggles.BypassLookman.Value and val85.IsLookman then
-    local currentFloor3 = CurrentFloor
+  if toggles.BypassEyes.Value and featureState.IsEyes or toggles.BypassLookman.Value and featureState.IsLookman then
+    local currentFloor = CurrentFloor
 
-    if currentFloor3 == "Fools" or currentFloor3 == "OldHotel" then
-      remotesFolder2.MotorReplication:FireServer(
-        0, val85.SpoofOffset == 200 and 65 or -65, 0, false
+    if currentFloor == "Fools" or currentFloor == "OldHotel" then
+      remotesFolder.MotorReplication:FireServer(
+        0, featureState.SpoofOffset == 200 and 65 or -65, 0, false
       )
     else
-      remotesFolder2.MotorReplication:FireServer(-650)
+      remotesFolder.MotorReplication:FireServer(-650)
     end
   end
 end)
 
 TPTranspParts = {}
 
-local function helper51()
+local function collectTeleportParts()
   TableClear(TPTranspParts)
 
   if not character then
     return
   end
 
-  for v250, v251 in character:GetDescendants() do
-    if v251:IsA("BasePart")
-      and (v251.Name == "Head" or v251.Parent and v251.Parent:IsA("Accessory")) then
-      table.insert(TPTranspParts, v251)
+  for _, descendant in character:GetDescendants() do
+    if descendant:IsA("BasePart")
+      and (descendant.Name == "Head" or descendant.Parent and descendant.Parent:IsA("Accessory")) then
+      table.insert(TPTranspParts, descendant)
     end
   end
 end
 
-local function waitLoop2()
+local function waitLoop()
   task.wait()
-  helper51()
+  collectTeleportParts()
 end
 
-function helper18()
+function refreshThirdPerson()
   if CameraConnection then
     CameraConnection:Disconnect()
     CameraConnection = nil
@@ -6962,10 +7313,10 @@ function helper18()
     _TPCharConn = nil
   end
 
-  helper51()
+  collectTeleportParts()
 
   if character then
-    _TPCharConn = character.ChildAdded:Connect(waitLoop2)
+    _TPCharConn = character.ChildAdded:Connect(waitLoop)
   end
 
   local raycastParams = RaycastParams.new()
@@ -6983,34 +7334,34 @@ function helper18()
     raycastParams.FilterDescendantsInstances = { character }
 
     if options.ThirdPersonOffsetX and options.ThirdPersonOffsetY and options.ThirdPersonOffsetZ then
-      local cframe3 = CFrame.new(
+      local cframe = CFrame.new(
         options.ThirdPersonOffsetX.Value, options.ThirdPersonOffsetY.Value, options.ThirdPersonOffsetZ.Value
       )
 
       if toggles.ThirdPerson.Value then
-        local element23 = (currentCamera.CFrame * cframe3).Position - currentCamera.CFrame.Position
+        local offset = (currentCamera.CFrame * cframe).Position - currentCamera.CFrame.Position
 
         local spherecast = workspace:Spherecast(
-          currentCamera.CFrame.Position, 0.2, element23, raycastParams
+          currentCamera.CFrame.Position, 0.2, offset, raycastParams
         )
 
         if toggles.ThirdPersonWallCheck.Value and spherecast and spherecast.Instance.CanCollide then
-          local val154 = currentCamera.CFrame.Position + element23.Unit * spherecast.Distance
-          currentCamera.CFrame = CFrame.new(val154, val154 + currentCamera.CFrame.LookVector)
+          local newPosition = currentCamera.CFrame.Position + offset.Unit * spherecast.Distance
+          currentCamera.CFrame = CFrame.new(newPosition, newPosition + currentCamera.CFrame.LookVector)
         else
-          currentCamera.CFrame = currentCamera.CFrame * cframe3
+          currentCamera.CFrame = currentCamera.CFrame * cframe
         end
       end
     end
 
-    for index35, value53 in ipairs(TPTranspParts) do
-      value53.Transparency = toggles.ThirdPerson.Value and 0 or 1
-      value53.LocalTransparencyModifier = toggles.ThirdPerson.Value and 0 or 1
+    for _, TPTranspPart in ipairs(TPTranspParts) do
+      TPTranspPart.Transparency = toggles.ThirdPerson.Value and 0 or 1
+      TPTranspPart.LocalTransparencyModifier = toggles.ThirdPerson.Value and 0 or 1
     end
   end)
 end
 
-val85.LastCrouchFire = 0
+featureState.LastCrouchFire = 0
 
 Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
   if _Unloading then
@@ -7025,73 +7376,73 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
     return
   end
 
-  local val155 = helper8()
+  local godmodeActive = isGodmodeActive()
 
-  if val155 and not val83.Sunk then
+  if godmodeActive and not threatState.Sunk then
     if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
       humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, -2.346, 0)
       humanoid.HipHeight = 0.05
-      val83.Sunk = true
+      threatState.Sunk = true
 
-      if remotesFolder2 then
-        local crouch5 = remotesFolder2:FindFirstChild("Crouch")
+      if remotesFolder then
+        local crouch = remotesFolder:FindFirstChild("Crouch")
 
-        if crouch5 then
-          crouch5:FireServer(true, true)
+        if crouch then
+          crouch:FireServer(true, true)
         end
       end
     end
   end
 
-  if not val155 and val83.Sunk then
+  if not godmodeActive and threatState.Sunk then
     if CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
       humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 2.346, 0)
       humanoid.HipHeight = 2.396
-      val83.Sunk = false
+      threatState.Sunk = false
     end
   end
 
-  if val155 and val83.Sunk and CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
+  if godmodeActive and threatState.Sunk and CurrentFloor ~= "Fools" and CurrentFloor ~= "OldHotel" then
     if humanoid.HipHeight ~= 0.05 then
       humanoid.HipHeight = 0.05
     end
   end
 
-  if val155 and remotesFolder2 then
-    local crouch6 = remotesFolder2:FindFirstChild("Crouch")
+  if godmodeActive and remotesFolder then
+    local crouch = remotesFolder:FindFirstChild("Crouch")
 
-    if crouch6 then
-      crouch6:FireServer(true, true)
+    if crouch then
+      crouch:FireServer(true, true)
     end
   end
 
   local collision2 = character:FindFirstChild("Collision")
-  local collisionPart3 = character:FindFirstChild("CollisionPart")
-  local collisionClone6 = character:FindFirstChild("CollisionClone")
+  local collisionPart2 = character:FindFirstChild("CollisionPart")
+  local collisionClone = character:FindFirstChild("CollisionClone")
 
   if CurrentFloor == "OldHotel" or CurrentFloor == "Fools" then
-    local functions4 = val155 and Functions.GetNearestEntity() and 200
+    local functions = godmodeActive and Functions.GetNearestEntity() and 200
       or toggles.FigureGodmode.Value and Functions.GetNearestFigure() and 200 or 0
 
-    val85.SpoofOffset = functions4
+    featureState.SpoofOffset = functions
 
     if collision2 then
-      collision2.Position = humanoidRootPart.Position + Vector3.new(0, functions4, 0)
+      collision2.Position = humanoidRootPart.Position + Vector3.new(0, functions, 0)
       collision2.CanCollide = false
     end
 
     if CurrentFloor == "Fools" then
-      local collisionCrouch5 = collision2 and collision2:FindFirstChild("CollisionCrouch")
+      local collisionCrouch = collision2 and collision2:FindFirstChild("CollisionCrouch")
 
-      if collisionCrouch5 then
-        collisionCrouch5.CanCollide = false
+      if collisionCrouch then
+        collisionCrouch.CanCollide = false
       end
 
-      local collisionCrouch6 = collisionClone6
-        and collisionClone6:FindFirstChild("CollisionCrouch")
+      local collisionCrouch2 = collisionClone
+        and collisionClone:FindFirstChild("CollisionCrouch")
 
-      if collisionCrouch6 then
-        collisionCrouch6.CanCollide = false
+      if collisionCrouch2 then
+        collisionCrouch2.CanCollide = false
       end
     end
 
@@ -7099,71 +7450,71 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
   else
     if collision2 then
       collision2.CanCollide = false
-      local collisionCrouch7 = collision2:FindFirstChild("CollisionCrouch")
+      local collisionCrouch = collision2:FindFirstChild("CollisionCrouch")
 
-      if collisionCrouch7 then
-        collisionCrouch7.CanCollide = false
+      if collisionCrouch then
+        collisionCrouch.CanCollide = false
       end
     end
 
-    local lowerTorso3 = character:FindFirstChild("LowerTorso")
-    local root4 = lowerTorso3 and lowerTorso3:FindFirstChild("Root")
+    local lowerTorso = character:FindFirstChild("LowerTorso")
+    local root = lowerTorso and lowerTorso:FindFirstChild("Root")
 
-    if root4 and not val85.OriginalC1 then
-      val85.OriginalC1 = root4.C1
+    if root and not featureState.OriginalC1 then
+      featureState.OriginalC1 = root.C1
     end
 
-    if root4 and val85.OriginalC1 then
-      root4.C1 = val85.OriginalC1 * CFrame.new(0, val155 and -2.346 or 0, 0)
+    if root and featureState.OriginalC1 then
+      root.C1 = featureState.OriginalC1 * CFrame.new(0, godmodeActive and -2.346 or 0, 0)
     end
 
-    local val156 = val155 and 2.328 or 0.18
+    local collisionOffsetY = godmodeActive and 2.328 or 0.18
 
     if collision2 then
-      collision2.Position = humanoidRootPart.Position + Vector3.new(0, val156, 0)
+      collision2.Position = humanoidRootPart.Position + Vector3.new(0, collisionOffsetY, 0)
     end
 
-    if collisionPart3 then
-      collisionPart3.Position = humanoidRootPart.Position + Vector3.new(0, val156, 0)
+    if collisionPart2 then
+      collisionPart2.Position = humanoidRootPart.Position + Vector3.new(0, collisionOffsetY, 0)
     end
 
-    if collision2 and collisionClone6 then
-      local collisionCrouch8 = collision2:FindFirstChild("CollisionCrouch")
-      local collisionCrouch9 = collisionClone6:FindFirstChild("CollisionCrouch")
+    if collision2 and collisionClone then
+      local collisionCrouch = collision2:FindFirstChild("CollisionCrouch")
+      local collisionCrouch2 = collisionClone:FindFirstChild("CollisionCrouch")
 
-      if collisionCrouch8 and collisionCrouch9 then
-        local val157 = val155 and 1.328 or -0.982
-        collisionCrouch8.Position = humanoidRootPart.Position + Vector3.new(0, val157, 0)
-        collisionCrouch9.CollisionGroup = collisionCrouch8.CollisionGroup
+      if collisionCrouch and collisionCrouch2 then
+        local crouchOffsetY = godmodeActive and 1.328 or -0.982
+        collisionCrouch.Position = humanoidRootPart.Position + Vector3.new(0, crouchOffsetY, 0)
+        collisionCrouch2.CollisionGroup = collisionCrouch.CollisionGroup
       end
 
-      local collisionCrouch10 = collisionClone6:FindFirstChild("CollisionCrouch")
+      local collisionCrouch3 = collisionClone:FindFirstChild("CollisionCrouch")
 
-      if collisionCrouch10 then
-        collisionCrouch10.Position = humanoidRootPart.Position
-          + Vector3.new(0, val155 and 0.75 or -0.982, 0)
+      if collisionCrouch3 then
+        collisionCrouch3.Position = humanoidRootPart.Position
+          + Vector3.new(0, godmodeActive and 0.75 or -0.982, 0)
       end
     end
   end
 
-  if collisionClone6 and collision2 then
-    collisionClone6.CollisionGroup = collision2.CollisionGroup
+  if collisionClone and collision2 then
+    collisionClone.CollisionGroup = collision2.CollisionGroup
 
-    collisionClone6.Position = humanoidRootPart.Position
-      + Vector3.new(0, val155 and 1.75 or 0.18, 0)
+    collisionClone.Position = humanoidRootPart.Position
+      + Vector3.new(0, godmodeActive and 1.75 or 0.18, 0)
   end
 
-  local crouch7 = remotesFolder2 and remotesFolder2:FindFirstChild("Crouch")
+  local crouch = remotesFolder and remotesFolder:FindFirstChild("Crouch")
 
-  if crouch7 and collisionPart and tick() - val85.LastCrouchFire > 0.1 then
-    local functions5 = Functions.IsCrouching()
+  if crouch and collisionPart and tick() - featureState.LastCrouchFire > 0.1 then
+    local functions = Functions.IsCrouching()
 
-    if val155 then
-      functions5 = true
+    if godmodeActive then
+      functions = true
     end
 
-    crouch7:FireServer(functions5, true)
-    val85.LastCrouchFire = tick()
+    crouch:FireServer(functions, true)
+    featureState.LastCrouchFire = tick()
   end
 end)
 
@@ -7179,41 +7530,41 @@ function Functions.IsCrouching()
 end
 
 function Functions.GetNearestFigure()
-  local element24 = { Distance = math.huge, Object = nil }
-  local val158 = { FigureRig = true, FigureRagdoll = true, Figure = true }
+  local nearest = { Distance = math.huge, Object = nil }
+  local figureNames = { FigureRig = true, FigureRagdoll = true, Figure = true }
 
-  for v259, v260 in val114.Entities do
-    if v260:IsA("Model") and v260.PrimaryPart and val158[v260.Name] then
-      local distanceFromCharacter6 = localPlayer2:DistanceFromCharacter(v260.PrimaryPart.Position)
+  for _, entity in worldObjects.Entities do
+    if entity:IsA("Model") and entity.PrimaryPart and figureNames[entity.Name] then
+      local distanceFromCharacter = localPlayer:DistanceFromCharacter(entity.PrimaryPart.Position)
 
-      if distanceFromCharacter6 < element24.Distance and distanceFromCharacter6 < 25 then
-        element24.Distance = distanceFromCharacter6
-        element24.Object = v260
+      if distanceFromCharacter < nearest.Distance and distanceFromCharacter < 25 then
+        nearest.Distance = distanceFromCharacter
+        nearest.Object = entity
       end
     end
   end
 
-  return element24.Object
+  return nearest.Object
 end
 
 Phase = {
   Connection = nil, Body = nil, Parts = {}, CharConn = nil, }
 
-local function helper52()
+local function collectPhaseParts()
   TableClear(Phase.Parts)
 
   if not character then
     return
   end
 
-  for v261, v262 in character:GetDescendants() do
-    if v262:IsA("BasePart") then
-      table.insert(Phase.Parts, v262)
+  for _, descendant in character:GetDescendants() do
+    if descendant:IsA("BasePart") then
+      table.insert(Phase.Parts, descendant)
     end
   end
 end
 
-function onEvent()
+function refreshPhase()
   if Phase.Connection then
     Phase.Connection:Disconnect()
     Phase.Connection = nil
@@ -7230,12 +7581,12 @@ function onEvent()
   end
 
   if toggles.Phase.Value then
-    helper52()
+    collectPhaseParts()
 
     if character then
       Phase.CharConn = character.ChildAdded:Connect(function()
         task.wait()
-        helper52()
+        collectPhaseParts()
       end)
     end
 
@@ -7244,29 +7595,29 @@ function onEvent()
         return
       end
 
-      for index36, value54 in ipairs(Phase.Parts) do
-        if value54 then
-          value54.CanCollide = false
+      for _, part in ipairs(Phase.Parts) do
+        if part then
+          part.CanCollide = false
         end
       end
 
       if collisionPart then
         collisionPart.CanCollide = false
-        local collisionCrouch11 = collisionPart:FindFirstChild("CollisionCrouch")
+        local collisionCrouch = collisionPart:FindFirstChild("CollisionCrouch")
 
-        if collisionCrouch11 then
-          collisionCrouch11.CanCollide = false
+        if collisionCrouch then
+          collisionCrouch.CanCollide = false
         end
       end
 
-      local collisionClone7 = character:FindFirstChild("CollisionClone")
+      local collisionClone = character:FindFirstChild("CollisionClone")
 
-      if collisionClone7 then
-        collisionClone7.CanCollide = false
-        local collisionCrouch12 = collisionClone7:FindFirstChild("CollisionCrouch")
+      if collisionClone then
+        collisionClone.CanCollide = false
+        local collisionCrouch = collisionClone:FindFirstChild("CollisionCrouch")
 
-        if collisionCrouch12 then
-          collisionCrouch12.CanCollide = false
+        if collisionCrouch then
+          collisionCrouch.CanCollide = false
         end
       end
 
@@ -7306,20 +7657,19 @@ function onEvent()
       Phase.Body.Parent = humanoidRootPart
     end
   elseif not toggles.Noclip.Value then
-    helper49()
-    iterate3(true)
+    collectNoclipParts()
+    setNoclipCollision(true)
   end
 end
 
-toggles.Phase:OnChanged(onEvent)
 
-toggles.AnticheatManipulation:OnChanged(function(p96)
+function Handlers.AnticheatManipulationChanged(value)
   if AnticheatConnection then
     AnticheatConnection:Disconnect()
     AnticheatConnection = nil
   end
 
-  if p96 then
+  if value then
     AnticheatConnection = runService.Heartbeat:Connect(function()
       if _Unloading then
         return
@@ -7329,16 +7679,17 @@ toggles.AnticheatManipulation:OnChanged(function(p96)
         return
       end
 
-      local currentFloor4 = localPlayer2:GetAttribute("CurrentFloor") or ""
+      local currentFloor = localPlayer:GetAttribute("CurrentFloor") or ""
 
-      if currentFloor4 ~= "Fools" and currentFloor4 ~= "OldHotel" then
+      if currentFloor ~= "Fools" and currentFloor ~= "OldHotel" then
         character:PivotTo(character:GetPivot() * CFrame.new(0, 0, 750))
       end
     end)
   end
-end)
+end
 
-local element25 = {
+
+local autoInteractState = {
   Connection = nil, LastFire = 0, Debounce = false, Blacklist = {
     HidePrompt = true, RiftPrompt = true, StarRiftPrompt = true, InteractPrompt = true, ClimbPrompt = true, DonatePrompt = true, DialoguePrompt = true, RevivePrompt = true, EnterPrompt = true, AnimatePrompt = true, ToolEventPrompt = true, Prompt = true, PropPrompt = true, }, }
 
@@ -7348,18 +7699,18 @@ HidingSpotNames = {
 LockPromptNames = {
   UnlockPrompt = true, SkullPrompt = true, LockPrompt = true, ThingToEnable = true, FusesPrompt = true, }
 
-local function helper53(val159)
-  if element25.Blacklist[val159.Name] then
+local function autoInteractWith(prompt)
+  if autoInteractState.Blacklist[prompt.Name] then
     return
   end
 
   -- В комнате 50 (библиотека Фигуры) авто-интеракт не трогает тумбочки/ящики:
   -- открытие ящиков шумит и привлекает Фигуру
   if KnobFarm and (KnobFarm.CurrentRoomNum == 50) then
-    local pName = val159.Parent and val159.Parent.Name or ""
+    local pName = prompt.Parent and prompt.Parent.Name or ""
     local pNameLower = pName:lower()
-    local objText = (val159.ObjectText or ""):lower()
-    local actText = (val159.ActionText or ""):lower()
+    local objText = (prompt.ObjectText or ""):lower()
+    local actText = (prompt.ActionText or ""):lower()
     if pNameLower:find("drawer", 1, true) or pNameLower:find("nightstand", 1, true)
       or pNameLower:find("dresser", 1, true) or pNameLower:find("chest", 1, true)
       or objText:find("drawer", 1, true) or objText:find("nightstand", 1, true)
@@ -7369,152 +7720,152 @@ local function helper53(val159)
     end
   end
 
-  if val159:FindFirstAncestor("ArchivesWaitingSeats") or val159:FindFirstAncestor("ArchivesTrashcan")
-    or val159:FindFirstAncestor("ArchivesOfficeChair") or val159:FindFirstAncestor("PrincipalChair")
-    or val159:FindFirstAncestor("Vendor_ShakelightVendingMachine")
-    or val159:FindFirstAncestor("ArchivesTerminal") or val159:FindFirstAncestor("Regal_Chair")
-    or val159:FindFirstAncestor("Regal_Couch") or val159:FindFirstAncestor("ArchivesLargePrinter")
-    or val159:FindFirstAncestor("ForgetMeNotVineDoors")
-    or val159:FindFirstAncestor("StairwellTerminal")
-    or val159:FindFirstAncestor("StairwellOfficeChair")
-    or val159:FindFirstAncestor("Fireplace")
-    or val159:FindFirstAncestor("FirePlace")
-    or (val159.Parent and val159.Parent.Name:lower():find("fireplace", 1, true))
-    or (val159.Parent and val159.Parent.Name:lower():find("hearth", 1, true))
-    or (val159.ObjectText and val159.ObjectText:lower():find("fireplace", 1, true)) then
+  if prompt:FindFirstAncestor("ArchivesWaitingSeats") or prompt:FindFirstAncestor("ArchivesTrashcan")
+    or prompt:FindFirstAncestor("ArchivesOfficeChair") or prompt:FindFirstAncestor("PrincipalChair")
+    or prompt:FindFirstAncestor("Vendor_ShakelightVendingMachine")
+    or prompt:FindFirstAncestor("ArchivesTerminal") or prompt:FindFirstAncestor("Regal_Chair")
+    or prompt:FindFirstAncestor("Regal_Couch") or prompt:FindFirstAncestor("ArchivesLargePrinter")
+    or prompt:FindFirstAncestor("ForgetMeNotVineDoors")
+    or prompt:FindFirstAncestor("StairwellTerminal")
+    or prompt:FindFirstAncestor("StairwellOfficeChair")
+    or prompt:FindFirstAncestor("Fireplace")
+    or prompt:FindFirstAncestor("FirePlace")
+    or (prompt.Parent and prompt.Parent.Name:lower():find("fireplace", 1, true))
+    or (prompt.Parent and prompt.Parent.Name:lower():find("hearth", 1, true))
+    or (prompt.ObjectText and prompt.ObjectText:lower():find("fireplace", 1, true)) then
     return
   end
 
-  if not val159 or not val159.Parent then
+  if not prompt or not prompt.Parent then
     return
   end
 
-  if element25.Debounce then
+  if autoInteractState.Debounce then
     return
   end
 
-  if LockPromptNames[val159.Name]
-    or val159.Parent and val159.Parent:GetAttribute("Locked") == true
-    or val159.Parent and val159.Parent.Parent and val159.Parent.Parent.Name == "Locker_Small_Locked"
-      and val159.Name == "ActivateEventPrompt" then
+  if LockPromptNames[prompt.Name]
+    or prompt.Parent and prompt.Parent:GetAttribute("Locked") == true
+    or prompt.Parent and prompt.Parent.Parent and prompt.Parent.Parent.Name == "Locker_Small_Locked"
+      and prompt.Name == "ActivateEventPrompt" then
     if options.AutoInteractIgnoreList.Value.Locks then
       return
     end
 
-    local val160 = {
+    local unlockItemNames = {
       "Key", "GeneratorFuse", "KeyBackdoor", "KeyElectrical", "KeyIron", "Lockpick", "Lockpicks", "SkeletonKey", "Shears", "Multitool", }
 
-    local val161 = { "Key", "GeneratorFuse", "KeyElectrical", "KeyIron" }
-    local val162 = false
+    local keyItemNames = { "Key", "GeneratorFuse", "KeyElectrical", "KeyIron" }
+    local hasUnlockItem = false
 
-    for index37, value55 in ipairs(val160) do
-      if Functions.HasItem(value55, true) then
-        val162 = true
+    for _, itemName in ipairs(unlockItemNames) do
+      if Functions.HasItem(itemName, true) then
+        hasUnlockItem = true
         break
       end
     end
 
-    for index38, value56 in ipairs(val161) do
-      if Functions.HasItem(value56) then
-        val162 = true
+    for _, itemName in ipairs(keyItemNames) do
+      if Functions.HasItem(itemName) then
+        hasUnlockItem = true
         break
       end
     end
 
-    if not val162 then
+    if not hasUnlockItem then
       return
     end
   end
 
-  if HidingSpotNames[val159.Parent.Name] then
+  if HidingSpotNames[prompt.Parent.Name] then
     return
   end
 
-  if val159.Parent.Name == "GlitchCube"
+  if prompt.Parent.Name == "GlitchCube"
     and options.AutoInteractIgnoreList.Value["Glitch Fragments"] then
     return
   end
 
-  local parent3 = val159
+  local parent = prompt
 
   if options.AutoInteractIgnoreList.Value.Mandrake then
-    while parent3 do
-      local name5 = parent3.Name
+    while parent do
+      local name = parent.Name
 
-      if name5 == "MandrakeLive" or name5 == "MandrakeHole" or name5 == "Mandrakes" then
+      if name == "MandrakeLive" or name == "MandrakeHole" or name == "Mandrakes" then
         return
       end
 
-      parent3 = parent3.Parent
+      parent = parent.Parent
     end
   end
 
-  local drops4 = workspace:FindFirstChild("Drops")
+  local drops = workspace:FindFirstChild("Drops")
 
-  if drops4 and val159:IsDescendantOf(drops4)
+  if drops and prompt:IsDescendantOf(drops)
     and options.AutoInteractIgnoreList.Value["Dropped Items"] then
     return
   end
 
-  if val159.Parent.Name == "TrackLever" then
+  if prompt.Parent.Name == "TrackLever" then
     return
   end
 
-  if val159.Name == "ActivateEventPrompt" then
-    if val159.ActionText == "Close" then
+  if prompt.Name == "ActivateEventPrompt" then
+    if prompt.ActionText == "Close" then
       return
     end
 
-    if val159.Parent.Name == "Padlock" or val159.Parent.Name == "MinesAnchor" then
+    if prompt.Parent.Name == "Padlock" or prompt.Parent.Name == "MinesAnchor" then
       return
     end
   end
 
-  if val159.Parent.Name == "LeverForGate" and val159:GetAttribute("Interactions") then
+  if prompt.Parent.Name == "LeverForGate" and prompt:GetAttribute("Interactions") then
     return
   end
 
-  local parent4 = val159.Parent.Parent
+  local parent2 = prompt.Parent.Parent
 
-  if parent4 and (parent4.Name == "DoorFake" or parent4.Name == "FakeDoor") then
+  if parent2 and (parent2.Name == "DoorFake" or parent2.Name == "FakeDoor") then
     return
   end
 
-  if val159.Parent:GetAttribute("JeffShop") then
+  if prompt.Parent:GetAttribute("JeffShop") then
     return
   end
 
-  if val159:GetAttribute("AutoInteractIgnore") then
+  if prompt:GetAttribute("AutoInteractIgnore") then
     return
   end
 
-  if val159.Name == "PushPrompt" then
+  if prompt.Name == "PushPrompt" then
     return
   end
 
-  if (val159.Parent.Name == "LibraryHintPaper" or val159.Parent.Name == "PickupItem")
+  if (prompt.Parent.Name == "LibraryHintPaper" or prompt.Parent.Name == "PickupItem")
     and (Functions.HasItem("LibraryHintPaper") or Functions.HasItem("LibraryHintPaperHard")) then
     return
   end
 
-  Functions.ForceFirePrompt(val159)
-  element25.Debounce = true
+  Functions.ForceFirePrompt(prompt)
+  autoInteractState.Debounce = true
 
-  if helper11() == "OldHotel" then
+  if detectFloor() == "OldHotel" then
     task.wait()
   end
 
-  element25.Debounce = false
+  autoInteractState.Debounce = false
 end
 
-toggles.AutoInteract:OnChanged(function(p98)
-  if element25.Connection then
-    element25.Connection:Disconnect()
-    element25.Connection = nil
+function Handlers.AutoInteractChanged(value)
+  if autoInteractState.Connection then
+    autoInteractState.Connection:Disconnect()
+    autoInteractState.Connection = nil
   end
 
-  if p98 then
-    element25.Connection = runService.Heartbeat:Connect(function()
+  if value then
+    autoInteractState.Connection = runService.Heartbeat:Connect(function()
       if _Unloading then
         return
       end
@@ -7524,44 +7875,45 @@ toggles.AutoInteract:OnChanged(function(p98)
         return
       end
 
-      local val163 = tick()
+      local now = tick()
 
-      if val163 - element25.LastFire < 0.1 then
+      if now - autoInteractState.LastFire < 0.1 then
         return
       end
 
-      element25.LastFire = val163
+      autoInteractState.LastFire = now
 
-      for index39, value57 in ipairs(_TrackedPrompts) do
-        local parentRoom = value57:GetAttribute("ParentRoom")
+      for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
+        local parentRoom = _TrackedPrompt:GetAttribute("ParentRoom")
 
         if (not parentRoom
-            or tonumber(parentRoom) == tonumber(localPlayer2:GetAttribute("CurrentRoom")))
-          and value57.Parent
-          and (value57.Parent:IsA("BasePart") or value57.Parent:IsA("Model")) then
-          local distanceFromCharacter7
+            or tonumber(parentRoom) == tonumber(localPlayer:GetAttribute("CurrentRoom")))
+          and _TrackedPrompt.Parent
+          and (_TrackedPrompt.Parent:IsA("BasePart") or _TrackedPrompt.Parent:IsA("Model")) then
+          local distanceFromCharacter
 
-          if value57.Parent:IsA("BasePart") then
-            distanceFromCharacter7 = localPlayer2:DistanceFromCharacter(value57.Parent.Position)
+          if _TrackedPrompt.Parent:IsA("BasePart") then
+            distanceFromCharacter = localPlayer:DistanceFromCharacter(_TrackedPrompt.Parent.Position)
           else
-            distanceFromCharacter7 = localPlayer2:DistanceFromCharacter(value57.Parent:GetPivot().Position)
+            distanceFromCharacter = localPlayer:DistanceFromCharacter(_TrackedPrompt.Parent:GetPivot().Position)
           end
 
-          if distanceFromCharacter7
-              <= (value57:GetAttribute("MaxActivationDistance_Old")
-                  or value57.MaxActivationDistance)
+          if distanceFromCharacter
+              <= (_TrackedPrompt:GetAttribute("MaxActivationDistance_Old")
+                  or _TrackedPrompt.MaxActivationDistance)
                 + 5
-            and (value57.Enabled or value57.Name == "LongPushPrompt"
-              or value57.Name == "BigPropPrompt") then
-            task.spawn(helper53, value57)
+            and (_TrackedPrompt.Enabled or _TrackedPrompt.Name == "LongPushPrompt"
+              or _TrackedPrompt.Name == "BigPropPrompt") then
+            task.spawn(autoInteractWith, _TrackedPrompt)
           end
         end
       end
     end)
   end
-end)
+end
 
-function helper16()
+
+function refreshInfiniteJump()
   if InfiniteJumpConnection then
     InfiniteJumpConnection:Disconnect()
     InfiniteJumpConnection = nil
@@ -7571,14 +7923,13 @@ function helper16()
     return
   end
 
-  InfiniteJumpConnection = userInputService.InputBegan:Connect(function(input4)
-    if input4.KeyCode == Enum.KeyCode.Space and humanoid then
+  InfiniteJumpConnection = userInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.Space and humanoid then
       humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
     end
   end)
 end
 
-toggles.InfiniteJumps:OnChanged(helper16)
 
 ESPCategories = {
   Entities = {}, Doors = {}, Keys = {}, Objectives = {}, Items = {}, Gold = {}, Chests = {}, HidingSpots = {}, Ladders = {}, }
@@ -7587,23 +7938,23 @@ ESPBlacklist = {}
 ESPCleanup = {}
 ESPConnections = {}
 
-local function helper54(val164)
-  if not loader or not val164 then
+local function applyCategoryTracers(object)
+  if not loader or not object then
     return
   end
 
-  for index40, value58 in ipairs({
+  for _, category in ipairs({
     "Entities", "Doors", "Keys", "Objectives", "Items", "Gold", "Chests", "HidingSpots", "Ladders", }) do
-    local val165 = value58 .. "Tracers"
+    local text = category .. "Tracers"
 
-    if toggles[val165] and toggles[val165].Value and TableFind(ESPCategories[value58], val164) then
-      loader:SetTracersEnabled(val164, true)
+    if toggles[text] and toggles[text].Value and TableFind(ESPCategories[category], object) then
+      loader:SetTracersEnabled(object, true)
       break
     end
   end
 end
 
-function Functions:AddESP(p100)
+function Functions:AddESP(trackRoom)
   local object = self.Object
 
   if not object then
@@ -7614,27 +7965,27 @@ function Functions:AddESP(p100)
     return
   end
 
-  if p100 then
-    local numVal5 = tonumber(localPlayer2:GetAttribute("CurrentRoom"))
-    local numVal6 = tonumber(object:GetAttribute("ParentRoom"))
+  if trackRoom then
+    local number = tonumber(localPlayer:GetAttribute("CurrentRoom"))
+    local number2 = tonumber(object:GetAttribute("ParentRoom"))
 
-    if numVal6 == numVal5 or TableFind(ESPCategories.Doors, object) and numVal6 == numVal5 + 1 then
+    if number2 == number or TableFind(ESPCategories.Doors, object) and number2 == number + 1 then
       loader:AddESP(self)
-      helper54(object)
+      applyCategoryTracers(object)
     end
 
-    local connect19 = localPlayer2:GetAttributeChangedSignal("CurrentRoom"):Connect(function()
+    local connection = localPlayer:GetAttributeChangedSignal("CurrentRoom"):Connect(function()
       if loader.ColorTable and loader.ColorTable[object] then
         self.Color = loader.ColorTable[object]
       end
 
-      local numVal7 = tonumber(localPlayer2:GetAttribute("CurrentRoom"))
-      local numVal8 = tonumber(object:GetAttribute("ParentRoom"))
+      local number3 = tonumber(localPlayer:GetAttribute("CurrentRoom"))
+      local number4 = tonumber(object:GetAttribute("ParentRoom"))
 
-      if numVal8 == numVal7 or TableFind(ESPCategories.Doors, object) and numVal8 == numVal7 + 1 then
+      if number4 == number3 or TableFind(ESPCategories.Doors, object) and number4 == number3 + 1 then
         if loader then
           loader:AddESP(self)
-          helper54(object)
+          applyCategoryTracers(object)
         end
       elseif loader then
         loader:RemoveESP(object)
@@ -7642,33 +7993,33 @@ function Functions:AddESP(p100)
       end
     end)
 
-    table.insert(Connections, connect19)
-    ESPConnections[object] = connect19
+    table.insert(Connections, connection)
+    ESPConnections[object] = connection
 
     object.Destroying:Once(function()
-      connect19:Disconnect()
+      connection:Disconnect()
 
       if loader then
         loader:RemoveESP(object)
         loader:SetTracersEnabled(object, false)
       end
 
-      local v273 = TableFind(Connections, connect19)
+      local _ = TableFind(Connections, connection)
       ESPConnections[object] = nil
     end)
   else
     loader:AddESP(self)
-    helper54(object)
+    applyCategoryTracers(object)
   end
 end
 
 function Functions:RemoveESP()
-  local object5 = ESPConnections[self]
+  local connection = ESPConnections[self]
 
-  if object5 then
-    object5:Disconnect()
+  if connection then
+    connection:Disconnect()
     ESPConnections[self] = nil
-    local v275 = TableFind(Connections, object5)
+    local _ = TableFind(Connections, connection)
   end
 
   if loader then
@@ -7677,53 +8028,53 @@ function Functions:RemoveESP()
   end
 end
 
-local val166 = {
+local espItemNames = {
   Door = true, Ladder = true, GoldPile = true, StardustPickup = true, KeyObtain = true, ElectricalKeyObtain = true, MinesGenerator = true, FuseObtain = true, LiveHintBook = true, LiveBreakerPolePickup = true, LibraryHintPaper = true, PickupItem = true, CringlePresent = true, LeverForGate = true, MinesGateButton = true, GardenGateButton = true, MinesAnchor = true, WaterPump = true, TimerLever = true, VineGuillotine = true, KeyObtainFake = true, GiggleCeiling = true, Snare = true, GrumbleRig = true, Drakobloxxer = true, LiveEntityBramble = true, Groundskeeper = true, Figure = true, FigureRig = true, FigureRagdoll = true, MandrakeLive = true, ChestBox = true, ChestBoxLocked = true, Chest_Vine = true, Toolbox = true, Toolbox_Locked = true, Toolshed_Small = true, Locker_Small_Locked = true, MouseHole = true, Wardrobe = true, Backdoor_Wardrobe = true, Toolshed = true, RetroWardrobe = true, ["Wardrobe-FOOLS26"] = true, Locker_Large = true, Rooms_Locker = true, Rooms_Locker_Fridge = true, Bed = true, Double_Bed = true, CircularVent = true, Dumpster = true, Lighter = true, Flashlight = true, Lockpick = true, Vitamins = true, Bandage = true, StarVial = true, StarBottle = true, StarJug = true, Shakelight = true, Straplight = true, Bulklight = true, Battery = true, Candle = true, Crucifix = true, CrucifixWall = true, Glowsticks = true, SkeletonKey = true, Candy = true, ShieldMini = true, ShieldBig = true, BandagePack = true, BatteryPack = true, RiftCandle = true, LaserPointer = true, HolyGrenade = true, Shears = true, Smoothie = true, Cheese = true, Bread = true, AlarmClock = true, RiftSmoothie = true, GweenSoda = true, GlitchCube = true, Scanner = true, Bomb = true, Knockbomb = true, Nanner = true, BigBomb = true, SnakeBox = true, GoldGun = true, StopSign = true, TipJar = true, Lantern = true, IronKey = true, LotusPetal = true, Compass = true, LotusPetalPickup = true, LanternLitItem = true, KeyIron = true, IronKeyForCrypt = true, LotusHolder = true, Multitool = true, RiftJar = true, AloeVera = true, Donut = true, Lotus = true, BoxingGloves = true, Green_Herb = true, PaperPlane = true, Pizza = true, FihFlakes = true, Leftovers = true, Briefcase = true, ArchivesTerminal = true, StairwellTerminal = true, }
 
-local val167 = {
+local espEntityNames = {
   RushMoving = true, AmbushMoving = true, A60 = true, A120 = true, Eyes = true, Lookman = true, BackdoorRush = true, BackdoorLookman = true, Groundskeeper = true, GloombatSwarm = true, AR0xMBUSH = true, ["RNIUSHCG=="] = true, MonumentEntity = true, JeffTheKiller = true, CustomEntity = true, FrozenAmbush = true, SallyMoving = true, Figure = true, FigureRig = true, FigureRagdoll = true, GiggleCeiling = true, GrumbleRig = true, DronesStampede = true, BashMoving = true, Water = true, TellerRig = true, Scribbles = true, Noise = true, Creak = true, }
 
-val103 = {
+lastPrompt = {
   Lighter = "Lighter", Flashlight = "Flashlight", Lockpick = "Lockpicks", Vitamins = "Vitamins", Bandage = "Bandage", StarVial = "Starlight Vial", StarBottle = "Starlight Bottle", StarJug = "Starlight Barrel", Shakelight = "Gummy Flashlight", Straplight = "Straplight", Bulklight = "Spotlight", Battery = "Battery", Candle = "Candle", Crucifix = "Crucifix", CrucifixWall = "Crucifix", Glowsticks = "Glowstick", SkeletonKey = "Skeleton Key", Candy = "Candy", ShieldMini = "Mini Shield Potion", ShieldBig = "Big Shield Potion", BandagePack = "Bandage Pack", BatteryPack = "Battery Pack", RiftCandle = "Moonlight Candle", LaserPointer = "Laser Pointer", HolyGrenade = "Holy Hand Grenade", Shears = "Shears", Smoothie = "Smoothie", Cheese = "Cheese", Bread = "Bread", AlarmClock = "Alarm Clock", RiftSmoothie = "Moonlight Smoothie", GweenSoda = "Gween Soda", GlitchCube = "Glitch Fragment", Scanner = "Tablet", Bomb = "Bomb", Knockbomb = "Knockbomb", Nanner = "Nanner", BigBomb = "Big Bomb", SnakeBox = "Hiding Box", GoldGun = "Golden Gun", StopSign = "Stop Sign", TipJar = "Tip Jar", Lantern = "Lantern", IronKey = "Iron Key", LotusPetal = "Lotus Petal", Compass = "Compass", LotusPetalPickup = "Lotus Petal", LanternLitItem = "Lantern", KeyIron = "Iron Key", IronKeyForCrypt = "Iron Key", LotusHolder = "Lotus Petal", Multitool = "Multitool", RiftJar = "Rift Jar", AloeVera = "Aloe Vera", Donut = "Donut", Lotus = "Lotus", BoxingGloves = "Boxing Gloves", GoldPile = "Gold Pile", PaperPlane = "Paper Plane", Pizza = "Pizza", FihFlakes = "FihFlakes", Leftovers = "Leftovers", Briefcase = "Briefcase", }
 
-function FunctionGetDoorNumber(val168)
-  local numVal9 = tonumber(val168.Parent.Name)
-    or tonumber(val168.Parent.Parent and val168.Parent.Parent.Name)
+function FunctionGetDoorNumber(door)
+  local number = tonumber(door.Parent.Name)
+    or tonumber(door.Parent.Parent and door.Parent.Parent.Name)
 
-  if numVal9 then
-    numVal9 = numVal9 + 1
+  if number then
+    number = number + 1
   end
 
   if CurrentFloor == "Mines" then
-    numVal9 = (numVal9 or 0) + 100
+    number = (number or 0) + 100
   end
 
   if CurrentFloor == "Backdoor" then
-    numVal9 = (numVal9 or 0) - 50
+    number = (number or 0) - 50
   end
 
-  return tostring(numVal9)
+  return tostring(number)
 end
 
 ESPToggleKeys = {
   Entities = "EntitiesESP", Doors = "DoorsESP", Keys = "KeysESP", Objectives = "ObjectivesESP", Items = "ItemsESP", Gold = "GoldESP", Chests = "ChestsESP", HidingSpots = "HidingSpotsESP", Ladders = "LaddersESP", }
 
-local val169 = {
+local colorFlags = {
   Entities = "EntitiesESPColor", Doors = "DoorsESPColor", Keys = "KeysESPColor", Objectives = "ObjectivesESPColor", Items = "ItemsESPColor", Gold = "GoldESPColor", Chests = "ChestsESPColor", HidingSpots = "HidingSpotsESPColor", Ladders = "LaddersESPColor", }
 
-function GetESPTarget(val170, p103)
-  return val170
+function GetESPTarget(object, _)
+  return object
 end
 
-local val171 = {
+local notifier = {
   PlaySound = nil, ShowAchievement = nil, ActiveItem = 0, SoundAssets = nil, SoundInstance = nil, ActiveAchievement = nil, ActiveEntity = 0, }
 
-local function helper55(val173, val172, val174)
-  local isEnabled = toggles[ESPToggleKeys[val172]] and toggles[ESPToggleKeys[val172]].Value
+local function addCategoryESP(highlightPart, category, locked)
+  local isEnabled = toggles[ESPToggleKeys[category]] and toggles[ESPToggleKeys[category]].Value
   if not isEnabled then
-    if val172 == "Keys" and toggles.ObjectivesESP and toggles.ObjectivesESP.Value then
+    if category == "Keys" and toggles.ObjectivesESP and toggles.ObjectivesESP.Value then
       isEnabled = true
-    elseif val172 == "Gold" and toggles.ItemsESP and toggles.ItemsESP.Value then
+    elseif category == "Gold" and toggles.ItemsESP and toggles.ItemsESP.Value then
       isEnabled = true
     end
   end
@@ -7732,116 +8083,116 @@ local function helper55(val173, val172, val174)
     return
   end
 
-  local colorOpt = options[val169[val172]]
-  local value59 = colorOpt and colorOpt.Value or (val172 == "Gold" and Color3.fromRGB(255, 215, 0) or (val172 == "Keys" and Color3.fromRGB(0, 191, 255) or (val172 == "Items" and Color3.fromRGB(170, 85, 255) or Color3.fromRGB(255, 255, 255))))
-  local value60 = toggles.ESPShowText.Value and val174 or ""
-  local object2 = GetESPTarget(val173, val172)
-  local val175 = val173:GetAttribute("ParentRoom") ~= nil
-  Functions.AddESP({ Object = object2, Text = value60, Color = value59 }, val175)
+  local colorOpt = options[colorFlags[category]]
+  local color = colorOpt and colorOpt.Value or (category == "Gold" and Color3.fromRGB(255, 215, 0) or (category == "Keys" and Color3.fromRGB(0, 191, 255) or (category == "Items" and Color3.fromRGB(170, 85, 255) or Color3.fromRGB(255, 255, 255))))
+  local value = toggles.ESPShowText.Value and locked or ""
+  local remoteModules = GetESPTarget(highlightPart, category)
+  local roomBound = highlightPart:GetAttribute("ParentRoom") ~= nil
+  Functions.AddESP({ Object = remoteModules, Text = value, Color = color }, roomBound)
 end
 
-local function iterate4(val176)
-  for index41, value61 in ipairs(ESPCategories[val176] or {}) do
-    Functions.RemoveESP(GetESPTarget(value61, val176))
+local function removeCategoryESP(category)
+  for _, object in ipairs(ESPCategories[category] or {}) do
+    Functions.RemoveESP(GetESPTarget(object, category))
   end
-  if val176 == "Items" and not (toggles.GoldESP and toggles.GoldESP.Value) then
-    for index41, value61 in ipairs(ESPCategories.Gold or {}) do
-      Functions.RemoveESP(GetESPTarget(value61, "Gold"))
+  if category == "Items" and not (toggles.GoldESP and toggles.GoldESP.Value) then
+    for _, object in ipairs(ESPCategories.Gold or {}) do
+      Functions.RemoveESP(GetESPTarget(object, "Gold"))
     end
-  elseif val176 == "Objectives" and not (toggles.KeysESP and toggles.KeysESP.Value) then
-    for index41, value61 in ipairs(ESPCategories.Keys or {}) do
-      Functions.RemoveESP(GetESPTarget(value61, "Keys"))
+  elseif category == "Objectives" and not (toggles.KeysESP and toggles.KeysESP.Value) then
+    for _, object in ipairs(ESPCategories.Keys or {}) do
+      Functions.RemoveESP(GetESPTarget(object, "Keys"))
     end
   end
 end
 
-local function helper56(val177, val178)
+local function notifyItemSpawn(locked, model)
   if not toggles.NotifyItems.Value then
     return
   end
 
-  local value62 = options.ItemList.Value
+  local value = options.ItemList.Value
 
-  if value62 and next(value62) ~= nil and not value62[val177] then
+  if value and next(value) ~= nil and not value[locked] then
     return
   end
 
-  if val171.ActiveItem >= 6 then
+  if notifier.ActiveItem >= 6 then
     return
   end
 
-  val171.ActiveItem = val171.ActiveItem + 1
-  val171.PlaySound("ItemNotifySound")
+  notifier.ActiveItem = notifier.ActiveItem + 1
+  notifier.PlaySound("ItemNotifySound")
 
-  local val179 = ""
+  local distanceText = ""
 
-  if val178 and val178.PrimaryPart then
-    val179 = " ("
-      .. math.floor(localPlayer2:DistanceFromCharacter(val178.PrimaryPart.Position) + 0.5)
+  if model and model.PrimaryPart then
+    distanceText = " ("
+      .. math.floor(localPlayer:DistanceFromCharacter(model.PrimaryPart.Position) + 0.5)
       .. " m)"
   end
 
-  library:Notify({ Title = "An item has spawned", Description = val177 .. val179, Time = 4 })
+  library:Notify({ Title = "An item has spawned", Description = locked .. distanceText, Time = 4 })
 
   if options.ItemNotifyStyle.Value ~= "Obsidian" then
-    task.spawn(function() val171.ShowAchievement("An item has spawned", val177, val179) end)
+    task.spawn(function() notifier.ShowAchievement("An item has spawned", locked, distanceText) end)
   end
 
   if toggles.ItemChatToggle.Value then
-    Functions.SendChat(val177 .. " " .. options.ItemChatMessage.Value)
+    Functions.SendChat(locked .. " " .. options.ItemChatMessage.Value)
   end
 
-  task.delay(5, function() val171.ActiveItem = math.max(0, val171.ActiveItem - 1) end)
+  task.delay(5, function() notifier.ActiveItem = math.max(0, notifier.ActiveItem - 1) end)
 end
 
-local helper57
+local notifyEntitySpawn
 
-local function helper58(val180)
-  if not val180 or not val180.Parent then
+local function handleESPObject(object)
+  if not object or not object.Parent then
     return
   end
 
-  if ESPBlacklist[val180] then
+  if ESPBlacklist[object] then
     return
   end
 
-  if not val166[val180.Name] and not val167[val180.Name] and not val180.Name:match("^HidingSpot%d+$") then
+  if not espItemNames[object.Name] and not espEntityNames[object.Name] and not object.Name:match("^HidingSpot%d+$") then
     return
   end
 
-  local name6 = val180.Name
+  local name = object.Name
 
-  if name6 == "Door" and not val180:GetAttribute("ESPDelayed") then
-    val180:SetAttribute("ESPDelayed", true)
+  if name == "Door" and not object:GetAttribute("ESPDelayed") then
+    object:SetAttribute("ESPDelayed", true)
 
     task.spawn(function()
       task.wait(0.25)
-      helper58(val180)
+      handleESPObject(object)
     end)
 
     return
   end
 
-  local val181, locked
+  local doorCategory, locked
 
-  if name6 == "Door" and val180.Parent and tonumber(val180.Parent.Name) then
-    val181 = "Doors"
-    local val182 = {}
+  if name == "Door" and object.Parent and tonumber(object.Parent.Name) then
+    doorCategory = "Doors"
+    local parts = {}
 
-    for v287, v288 in val180:GetChildren() do
-      if v288.Name == "Door" and v288:IsA("BasePart") then
-        table.insert(val182, v288)
+    for _, child in object:GetChildren() do
+      if child.Name == "Door" and child:IsA("BasePart") then
+        table.insert(parts, child)
       end
     end
 
-    if #val182 == 0 then
+    if #parts == 0 then
       return
     end
 
-    locked = "Door " .. FunctionGetDoorNumber(val180)
+    locked = "Door " .. FunctionGetDoorNumber(object)
 
     if CurrentFloor == "Archives" then
-      local sign = val180:FindFirstChild("Sign")
+      local sign = object:FindFirstChild("Sign")
       local stinker = sign and sign:FindFirstChild("Stinker")
 
       if stinker and stinker:IsA("TextLabel") and stinker.Text ~= "" then
@@ -7850,155 +8201,155 @@ local function helper58(val180)
     end
 
     if CurrentFloor == "OldHotel" then
-      val180:SetAttribute("ParentRoom", tonumber(val180.Parent.Name))
-      table.insert(ESPCategories.Doors, val180)
-      helper55(val180, "Doors", locked)
+      object:SetAttribute("ParentRoom", tonumber(object.Parent.Name))
+      table.insert(ESPCategories.Doors, object)
+      addCategoryESP(object, "Doors", locked)
 
-      if not ESPCleanup[val180] then
-        ESPCleanup[val180] = val180.Destroying:Once(function()
-          Functions.RemoveESP(val180)
-          ESPCleanup[val180] = nil
+      if not ESPCleanup[object] then
+        ESPCleanup[object] = object.Destroying:Once(function()
+          Functions.RemoveESP(object)
+          ESPCleanup[object] = nil
         end)
       end
     else
       local highlightPart
 
-      if #val182 == 2 then
+      if #parts == 2 then
         local highlightModel = Instance.new("Model")
         highlightModel.Name = "HighlightModel"
 
         Instance.new("Humanoid", highlightModel).Name = "HighlightHumanoid"
-        highlightModel:SetAttribute("ParentRoom", tonumber(val180.Parent.Name))
+        highlightModel:SetAttribute("ParentRoom", tonumber(object.Parent.Name))
 
-        for index42, value64 in ipairs(val182) do
-          local highlightPart2 = Instance.new("Part", highlightModel)
-          highlightPart2.Transparency = 0.999
-          highlightPart2.Size = value64.Size
-          highlightPart2.CanCollide = false
-          highlightPart2.CFrame = value64.CFrame
-          highlightPart2.Name = "HighlightPart"
-          highlightPart2.Material = Enum.Material.Glass
-          highlightPart2:SetAttribute("ParentRoom", tonumber(val180.Parent.Name))
+        for _, part in ipairs(parts) do
+          local part2 = Instance.new("Part", highlightModel)
+          part2.Transparency = 0.999
+          part2.Size = part.Size
+          part2.CanCollide = false
+          part2.CFrame = part.CFrame
+          part2.Name = "HighlightPart"
+          part2.Material = Enum.Material.Glass
+          part2:SetAttribute("ParentRoom", tonumber(object.Parent.Name))
 
-          local instance4 = Instance.new("WeldConstraint", highlightPart2)
-          instance4.Part0 = highlightPart2
-          instance4.Part1 = value64
-          instance4.Enabled = true
+          local instance = Instance.new("WeldConstraint", part2)
+          instance.Part0 = part2
+          instance.Part1 = part
+          instance.Enabled = true
         end
 
         highlightModel.Parent = workspace
         highlightPart = highlightModel
       else
-        local element26 = val182[1]
+        local firstPart = parts[1]
 
         highlightPart = Instance.new("Part")
         highlightPart.Transparency = 0.999
-        highlightPart.Size = element26.Size
+        highlightPart.Size = firstPart.Size
         highlightPart.CanCollide = false
-        highlightPart.CFrame = element26.CFrame
+        highlightPart.CFrame = firstPart.CFrame
         highlightPart.Name = "HighlightPart"
         highlightPart.Material = Enum.Material.Glass
-        highlightPart:SetAttribute("ParentRoom", tonumber(val180.Parent.Name))
+        highlightPart:SetAttribute("ParentRoom", tonumber(object.Parent.Name))
 
-        local instance5 = Instance.new("WeldConstraint", highlightPart)
-        instance5.Part0 = highlightPart
-        instance5.Part1 = element26
-        instance5.Enabled = true
+        local instance = Instance.new("WeldConstraint", highlightPart)
+        instance.Part0 = highlightPart
+        instance.Part1 = firstPart
+        instance.Enabled = true
 
-        Instance.new("Humanoid", val180).Name = "HighlightHumanoid"
+        Instance.new("Humanoid", object).Name = "HighlightHumanoid"
         highlightPart.Parent = workspace
       end
 
       table.insert(ESPCategories.Doors, highlightPart)
-      helper55(highlightPart, "Doors", locked)
+      addCategoryESP(highlightPart, "Doors", locked)
 
       if not ESPCleanup[highlightPart] then
-        ESPCleanup[highlightPart] = val180.Destroying:Once(function()
+        ESPCleanup[highlightPart] = object.Destroying:Once(function()
           Functions.RemoveESP(highlightPart)
           ESPCleanup[highlightPart] = nil
         end)
       end
     end
 
-    local val183 = tick()
+    local now = tick()
 
-    local connect20 = runService.Heartbeat:Connect(function()
+    local connection = runService.Heartbeat:Connect(function()
       if _Unloading then
         return
       end
 
-      if val180:FindFirstChild("Door") and val180:FindFirstChild("ClientOpen") then
+      if object:FindFirstChild("Door") and object:FindFirstChild("ClientOpen") then
         if options
           and options.DoorReachDistance
-          and localPlayer2:DistanceFromCharacter(val180.Door.Position)
+          and localPlayer:DistanceFromCharacter(object.Door.Position)
             < options.DoorReachDistance.Value
-          and tick() - val183 > 0.1
+          and tick() - now > 0.1
           and toggles
           and toggles.DoorReachToggle
           and toggles.DoorReachToggle.Value then
-          val180.ClientOpen:FireServer()
-          val183 = tick()
+          object.ClientOpen:FireServer()
+          now = tick()
         end
       end
     end)
 
-    local door = val180:FindFirstChild("Door")
+    local door = object:FindFirstChild("Door")
 
     if door then
       local open = door:FindFirstChild("Open")
 
       if open then
-        open.Played:Once(function() connect20:Disconnect() end)
+        open.Played:Once(function() connection:Disconnect() end)
       end
     end
 
-    val180.Destroying:Once(function() connect20:Disconnect() end)
+    object.Destroying:Once(function() connection:Disconnect() end)
     return
   end
 
-  if val167[name6] then
-    if name6 == "Water" and CurrentFloor ~= "Archives" then
+  if espEntityNames[name] then
+    if name == "Water" and CurrentFloor ~= "Archives" then
       return
     end
 
-    if name6 == "Water" then
-      if val180:FindFirstAncestor("Toilet") or val180:FindFirstAncestor("ArchivesBathroomSink")
-        or val180:FindFirstAncestor("ArchivesFihTank") then
+    if name == "Water" then
+      if object:FindFirstAncestor("Toilet") or object:FindFirstAncestor("ArchivesBathroomSink")
+        or object:FindFirstAncestor("ArchivesFihTank") then
         return
       end
 
-      if val180:FindFirstAncestor("WaterCup") then
+      if object:FindFirstAncestor("WaterCup") then
         return
       end
 
-      if val180:FindFirstAncestor("DeathBackgroundYellow") then
+      if object:FindFirstAncestor("DeathBackgroundYellow") then
         return
       end
 
-      if val180.Parent and val180.Parent.Name == "Parts"
-        and val180.Parent:FindFirstAncestor("CurrentRooms") then
+      if object.Parent and object.Parent.Name == "Parts"
+        and object.Parent:FindFirstAncestor("CurrentRooms") then
         return
       end
 
-      if val180:IsDescendantOf(localPlayer2:WaitForChild("Backpack")) then
+      if object:IsDescendantOf(localPlayer:WaitForChild("Backpack")) then
         return
       end
 
-      table.insert(ESPCategories.Entities, val180)
-      helper55(val180, "Entities", "Electric Puddle")
-      helper57(val180)
+      table.insert(ESPCategories.Entities, object)
+      addCategoryESP(object, "Entities", "Electric Puddle")
+      notifyEntitySpawn(object)
       return
     end
 
-    if not val180:IsA("Model") then
+    if not object:IsA("Model") then
       return
     end
 
     task.spawn(function()
-      while not val180.PrimaryPart and val180.Parent do
-        for v291, v292 in val180:GetChildren() do
-          if v292:IsA("BasePart") then
-            val180.PrimaryPart = v292
+      while not object.PrimaryPart and object.Parent do
+        for _, child in object:GetChildren() do
+          if child:IsA("BasePart") then
+            object.PrimaryPart = child
             break
           end
         end
@@ -8008,300 +8359,300 @@ local function helper58(val180)
 
       task.wait(0.1)
 
-      if not val180.Parent then
+      if not object.Parent then
         return
       end
 
-      if val180.PrimaryPart
-        and localPlayer2:DistanceFromCharacter(val180.PrimaryPart.Position) >= 10000 then
+      if object.PrimaryPart
+        and localPlayer:DistanceFromCharacter(object.PrimaryPart.Position) >= 10000 then
         return
       end
 
-      if not val180.PrimaryPart then
-        local basePart = val180:FindFirstChildWhichIsA("BasePart")
+      if not object.PrimaryPart then
+        local basePart = object:FindFirstChildWhichIsA("BasePart")
 
         if basePart then
-          val180.PrimaryPart = basePart
+          object.PrimaryPart = basePart
         end
       end
 
-      if not val180:FindFirstChildOfClass("Humanoid") then
+      if not object:FindFirstChildOfClass("Humanoid") then
         local highlightHumanoid = Instance.new("Humanoid")
         highlightHumanoid.Name = "HighlightHumanoid"
-        highlightHumanoid.Parent = val180
+        highlightHumanoid.Parent = object
       end
 
-      local primaryPart = val180.PrimaryPart
+      local primaryPart = object.PrimaryPart
 
       if primaryPart then
         primaryPart.Transparency = 0.999
         primaryPart.Material = Enum.Material.Glass
       end
 
-      table.insert(ESPCategories.Entities, val180)
+      table.insert(ESPCategories.Entities, object)
 
       if loader and loader.ObjectMaxDistance then
-        loader.ObjectMaxDistance[val180] = 10000
+        loader.ObjectMaxDistance[object] = 10000
       end
 
       if toggles.EntitiesESP.Value then
-        local alias = (name6 == "FigureRig" or name6 == "FigureRagdoll") and "Figure"
-          or EntityNotifyData[name6] and EntityNotifyData[name6].Alias or name6
+        local alias = (name == "FigureRig" or name == "FigureRagdoll") and "Figure"
+          or EntityNotifyData[name] and EntityNotifyData[name].Alias or name
 
-        local value65 = options.EntitiesESPAllowed and options.EntitiesESPAllowed.Value
+        local value = options.EntitiesESPAllowed and options.EntitiesESPAllowed.Value
 
-        if not value65 or next(value65) == nil or value65[alias] then
-          local val184 = val180:GetAttribute("ParentRoom") ~= nil
+        if not value or next(value) == nil or value[alias] then
+          local roomBound = object:GetAttribute("ParentRoom") ~= nil
 
           Functions.AddESP({
-            Object = val180, Text = alias, Color = options.EntitiesESPColor.Value, }, val184)
+            Object = object, Text = alias, Color = options.EntitiesESPColor.Value, }, roomBound)
         end
       end
 
-      helper57(val180)
+      notifyEntitySpawn(object)
     end)
 
     return
   end
 
-  if name6 == "Ladder" then
-    val181 = "Ladders"
+  if name == "Ladder" then
+    doorCategory = "Ladders"
     locked = "Ladder"
-    table.insert(ESPCategories.Ladders, val180)
+    table.insert(ESPCategories.Ladders, object)
 
     if CurrentFloor == "Mines" then
-      helper55(val180, val181, locked)
+      addCategoryESP(object, doorCategory, locked)
     end
 
     return
-  elseif name6 == "GoldPile" and val180:GetAttribute("GoldValue") then
-    val181 = "Gold"
-    locked = "Gold Pile [" .. val180:GetAttribute("GoldValue") .. "]"
-  elseif name6 == "StardustPickup" then
-    val181 = "Objectives"
+  elseif name == "GoldPile" and object:GetAttribute("GoldValue") then
+    doorCategory = "Gold"
+    locked = "Gold Pile [" .. object:GetAttribute("GoldValue") .. "]"
+  elseif name == "StardustPickup" then
+    doorCategory = "Objectives"
     locked = "Stardust"
-  elseif (name6 == "SkeletonKey" or name6 == "IronKey" or name6 == "KeyIron" or name6 == "IronKeyForCrypt") and val180:FindFirstChild("ModulePrompt") then
-    val181 = "Keys"
-    locked = val103[name6] or "Key"
+  elseif (name == "SkeletonKey" or name == "IronKey" or name == "KeyIron" or name == "IronKeyForCrypt") and object:FindFirstChild("ModulePrompt") then
+    doorCategory = "Keys"
+    locked = lastPrompt[name] or "Key"
 
-    if not val180:IsDescendantOf(localPlayer2) and val180.Parent.Name ~= "Drops" then
-      helper56(locked, val180)
+    if not object:IsDescendantOf(localPlayer) and object.Parent.Name ~= "Drops" then
+      notifyItemSpawn(locked, object)
     end
-  elseif val103[name6] and val180:FindFirstChild("ModulePrompt") then
-    val181 = "Items"
-    locked = val103[name6]
+  elseif lastPrompt[name] and object:FindFirstChild("ModulePrompt") then
+    doorCategory = "Items"
+    locked = lastPrompt[name]
 
-    if not val180:IsDescendantOf(localPlayer2) and val180.Parent.Name ~= "Drops" then
-      helper56(val103[name6], val180)
+    if not object:IsDescendantOf(localPlayer) and object.Parent.Name ~= "Drops" then
+      notifyItemSpawn(lastPrompt[name], object)
     end
-  elseif name6 == "Green_Herb" then
-    val181 = "Items"
+  elseif name == "Green_Herb" then
+    doorCategory = "Items"
     locked = "Green Herb"
-  elseif name6 == "ChestBox" or name6 == "ChestBoxLocked" then
-    val181 = "Chests"
-    locked = val180:GetAttribute("Locked") and "Locked Chest" or "Chest"
-  elseif name6 == "Toolbox" or name6 == "Toolbox_Locked" then
-    val181 = "Chests"
-    locked = val180:GetAttribute("Locked") and "Locked Toolbox" or "Toolbox"
-  elseif name6 == "Chest_Vine" then
-    val181 = "Chests"
+  elseif name == "ChestBox" or name == "ChestBoxLocked" then
+    doorCategory = "Chests"
+    locked = object:GetAttribute("Locked") and "Locked Chest" or "Chest"
+  elseif name == "Toolbox" or name == "Toolbox_Locked" then
+    doorCategory = "Chests"
+    locked = object:GetAttribute("Locked") and "Locked Toolbox" or "Toolbox"
+  elseif name == "Chest_Vine" then
+    doorCategory = "Chests"
     locked = "Vine Chest"
-  elseif name6 == "Toolshed_Small" then
-    val181 = "Chests"
+  elseif name == "Toolshed_Small" then
+    doorCategory = "Chests"
     locked = "Toolshed"
-  elseif name6 == "Locker_Small_Locked" then
-    val181 = "Chests"
+  elseif name == "Locker_Small_Locked" then
+    doorCategory = "Chests"
     locked = "Locked Locker"
-  elseif name6 == "MouseHole" then
-    val181 = "Chests"
+  elseif name == "MouseHole" then
+    doorCategory = "Chests"
     locked = "Mouse"
   elseif ({
-    Wardrobe = true, Backdoor_Wardrobe = true, Toolshed = true, RetroWardrobe = true, ["Wardrobe-FOOLS26"] = true, Locker_Large = true, Rooms_Locker = true, Rooms_Locker_Fridge = true, Bed = true, Double_Bed = true, CircularVent = true, Dumpster = true, })[name6] then
-    local val185 = {
+    Wardrobe = true, Backdoor_Wardrobe = true, Toolshed = true, RetroWardrobe = true, ["Wardrobe-FOOLS26"] = true, Locker_Large = true, Rooms_Locker = true, Rooms_Locker_Fridge = true, Bed = true, Double_Bed = true, CircularVent = true, Dumpster = true, })[name] then
+    local closetNames = {
       Wardrobe = "Closet", Backdoor_Wardrobe = "Closet", Toolshed = "Closet", RetroWardrobe = "Closet", ["Wardrobe-FOOLS26"] = "Closet", Locker_Large = "Locker", Rooms_Locker = "Locker", Rooms_Locker_Fridge = "Locker", Bed = "Bed", Double_Bed = "Double Bed", CircularVent = "Vent", Dumpster = "Dumpster", }
 
-    val181 = "HidingSpots"
-    locked = val185[name6]
-    Functions.HandleHidingTransparency(val180)
-    table.insert(val114.HidingSpots, val180)
-  elseif name6:match("^HidingSpot%d+$") then
-    val181 = "HidingSpots"
+    doorCategory = "HidingSpots"
+    locked = closetNames[name]
+    Functions.HandleHidingTransparency(object)
+    table.insert(worldObjects.HidingSpots, object)
+  elseif name:match("^HidingSpot%d+$") then
+    doorCategory = "HidingSpots"
     locked = "Hiding Spot"
-    Functions.HandleHidingTransparency(val180)
-    table.insert(val114.HidingSpots, val180)
+    Functions.HandleHidingTransparency(object)
+    table.insert(worldObjects.HidingSpots, object)
   elseif ({
-    KeyObtain = "Key", ElectricalKeyObtain = "Electrical Key", MinesGenerator = "Generator", FuseObtain = "Fuse", LiveHintBook = "Book", LiveBreakerPolePickup = "Fuse Breaker", LibraryHintPaper = "LibraryPaper", PickupItem = "Library Paper", CringlePresent = "Present", LeverForGate = "Gate Lever", MinesGateButton = "Gate Button", GardenGateButton = "Gate Button", MinesAnchor = "Anchor", WaterPump = "Water Pump", TimerLever = "Timer Lever", VineGuillotine = "Vine Guillotine", })[name6] then
-    local val186 = {
+    KeyObtain = "Key", ElectricalKeyObtain = "Electrical Key", MinesGenerator = "Generator", FuseObtain = "Fuse", LiveHintBook = "Book", LiveBreakerPolePickup = "Fuse Breaker", LibraryHintPaper = "LibraryPaper", PickupItem = "Library Paper", CringlePresent = "Present", LeverForGate = "Gate Lever", MinesGateButton = "Gate Button", GardenGateButton = "Gate Button", MinesAnchor = "Anchor", WaterPump = "Water Pump", TimerLever = "Timer Lever", VineGuillotine = "Vine Guillotine", })[name] then
+    local objectLabels = {
       KeyObtain = "Key", ElectricalKeyObtain = "Electrical Key", MinesGenerator = "Generator", FuseObtain = "Fuse", LiveHintBook = "Book", LiveBreakerPolePickup = "Fuse Breaker", LibraryHintPaper = "Library Paper", PickupItem = "Hint Paper", CringlePresent = "Present", LeverForGate = "Gate Lever", MinesGateButton = "Gate Button", GardenGateButton = "Gate Button", MinesAnchor = "Anchor", WaterPump = "Water Pump", TimerLever = "Timer Lever", VineGuillotine = "Vine Guillotine", }
 
-    if name6 == "KeyObtain" or name6 == "ElectricalKeyObtain" then
-      val181 = "Keys"
+    if name == "KeyObtain" or name == "ElectricalKeyObtain" then
+      doorCategory = "Keys"
     else
-      val181 = "Objectives"
+      doorCategory = "Objectives"
     end
-    locked = val186[name6]
+    locked = objectLabels[name]
 
-    if name6 == "KeyObtain" then
+    if name == "KeyObtain" then
       task.spawn(function()
         task.wait(6.25)
 
-        if not val180 or not val180.Parent then
+        if not object or not object.Parent then
           return
         end
 
-        table.insert(ESPCategories[val181], val180)
-        helper55(val180, val181, locked)
+        table.insert(ESPCategories[doorCategory], object)
+        addCategoryESP(object, doorCategory, locked)
       end)
     end
 
-    if name6 == "TimerLever" then
+    if name == "TimerLever" then
       task.spawn(function()
         task.wait(1.25)
 
-        if not val180 or not val180.Parent then
+        if not object or not object.Parent then
           return
         end
 
-        table.insert(ESPCategories[val181], val180)
-        helper55(val180, val181, locked)
+        table.insert(ESPCategories[doorCategory], object)
+        addCategoryESP(object, doorCategory, locked)
       end)
 
       return
     end
 
-    if name6 == "WaterPump" then
+    if name == "WaterPump" then
       task.spawn(function()
-        local wheel = val180:FindFirstChild("Wheel")
+        local wheel = object:FindFirstChild("Wheel")
 
         if wheel then
-          local sound2 = wheel:FindFirstChild("Sound")
+          local sound = wheel:FindFirstChild("Sound")
 
-          if sound2 then
-            sound2.Played:Once(function() val180:SetAttribute("CH_Completed", true) end)
+          if sound then
+            sound.Played:Once(function() object:SetAttribute("CH_Completed", true) end)
           end
         end
       end)
     end
-  elseif name6 == "ArchivesTerminal" and CurrentFloor == "Archives" then
-    val181 = "Objectives"
+  elseif name == "ArchivesTerminal" and CurrentFloor == "Archives" then
+    doorCategory = "Objectives"
     locked = "Archives Terminal"
-  elseif name6 == "StairwellTerminal" and CurrentFloor == "Stairwell" then
-    val181 = "Objectives"
+  elseif name == "StairwellTerminal" and CurrentFloor == "Stairwell" then
+    doorCategory = "Objectives"
     locked = "Stairwell Terminal"
   else
     return
   end
 
-  table.insert(ESPCategories[val181], val180)
-  helper55(val180, val181, locked)
+  table.insert(ESPCategories[doorCategory], object)
+  addCategoryESP(object, doorCategory, locked)
 end
 
-local function helper59(val187, val188)
-  local name7 = val187.Name
+local function getESPLabel(object, category)
+  local name = object.Name
 
-  if val188 == "Doors" then
-    local parentRoom2 = val187:GetAttribute("ParentRoom")
-    return "Door " .. (parentRoom2 and tostring(parentRoom2) or "")
+  if category == "Doors" then
+    local parentRoom = object:GetAttribute("ParentRoom")
+    return "Door " .. (parentRoom and tostring(parentRoom) or "")
   end
 
-  if val188 == "Gold" then
-    local gVal = val187:GetAttribute("GoldValue")
+  if category == "Gold" then
+    local gVal = object:GetAttribute("GoldValue")
     return gVal and ("Gold Pile [" .. tostring(gVal) .. "]") or "Gold"
   end
 
-  if val188 == "Keys" then
+  if category == "Keys" then
     local keyNames = {
       KeyObtain = "Key", ElectricalKeyObtain = "Electrical Key",
       KeyObtainFake = "Fake Key", SkeletonKey = "Skeleton Key",
       IronKey = "Iron Key", KeyIron = "Iron Key", IronKeyForCrypt = "Iron Key"
     }
-    return keyNames[name7] or "Key"
+    return keyNames[name] or "Key"
   end
 
-  if val188 == "Items" then
-    return name7 == "Green_Herb" and "Green Herb" or val103[name7] or name7
+  if category == "Items" then
+    return name == "Green_Herb" and "Green Herb" or lastPrompt[name] or name
   end
 
-  if val188 == "Ladders" then
+  if category == "Ladders" then
     return "Ladder"
   end
 
-  if val188 == "Entities" then
-    return EntityNotifyData[name7] and EntityNotifyData[name7].Alias or name7
+  if category == "Entities" then
+    return EntityNotifyData[name] and EntityNotifyData[name].Alias or name
   end
 
-  local val189 = {
+  local closetNames = {
     Wardrobe = "Closet", Backdoor_Wardrobe = "Closet", Toolshed = "Closet", RetroWardrobe = "Closet", ["Wardrobe-FOOLS26"] = "Closet", Locker_Large = "Locker", Rooms_Locker = "Locker", Rooms_Locker_Fridge = "Locker", Bed = "Bed", Double_Bed = "Double Bed", CircularVent = "Vent", Dumpster = "Dumpster", }
 
-  if val189[name7] then
-    return val189[name7]
+  if closetNames[name] then
+    return closetNames[name]
   end
 
-  local val190 = {
+  local objectLabels = {
     KeyObtain = "Key", ElectricalKeyObtain = "Electrical Key", MinesGenerator = "Generator", FuseObtain = "Generator Fuse", LiveHintBook = "Book", LiveBreakerPolePickup = "Fuse Breaker", LibraryHintPaper = "Library Paper", PickupItem = "Library Paper", CringlePresent = "Present", LeverForGate = "Gate Lever", MinesGateButton = "Gate Button", GardenGateButton = "Gate Button", MinesAnchor = "Anchor", WaterPump = "Water Pump", TimerLever = "Timer Lever", VineGuillotine = "Vine Guillotine", ChestBox = "Chest", ChestBoxLocked = "Locked Chest", Toolbox = "Toolbox", Toolbox_Locked = "Locked Toolbox", Chest_Vine = "Vine Chest", Toolshed_Small = "Toolshed", Locker_Small_Locked = "Locked Locker", MouseHole = "Mouse", GoldPile = "Gold", StardustPickup = "Stardust", }
 
-  return val190[name7] or name7
+  return objectLabels[name] or name
 end
 
-local function iterate5(val191)
-  local value66 = options[val169[val191]].Value
-  local value67 = toggles.ESPShowText.Value
-  local value68 = toggles[val191 .. "Tracers"] and toggles[val191 .. "Tracers"].Value
+local function refreshCategoryESP(category)
+  local color = options[colorFlags[category]].Value
+  local showText = toggles.ESPShowText.Value
+  local useTracers = toggles[category .. "Tracers"] and toggles[category .. "Tracers"].Value
 
-  local value69 = val191 == "Entities" and options.EntitiesESPAllowed
+  local allowed = category == "Entities" and options.EntitiesESPAllowed
     and options.EntitiesESPAllowed.Value
 
-  for index43, value70 in ipairs(ESPCategories[val191] or {}) do
-    local val192 = true
+  for _, object in ipairs(ESPCategories[category] or {}) do
+    local isAllowed = true
 
-    if value69 and next(value69) ~= nil then
-      if not value69[EntityNotifyData[value70.Name] and EntityNotifyData[value70.Name].Alias or value70.Name] then
-        val192 = false
+    if allowed and next(allowed) ~= nil then
+      if not allowed[EntityNotifyData[object.Name] and EntityNotifyData[object.Name].Alias or object.Name] then
+        isAllowed = false
       end
     end
 
-    if val192 then
-      local val193 = GetESPTarget(value70, val191)
+    if isAllowed then
+      local target = GetESPTarget(object, category)
 
-      if val193 then
-        local val194 = value70:GetAttribute("ParentRoom") ~= nil
+      if target then
+        local roomBound = object:GetAttribute("ParentRoom") ~= nil
 
         Functions.AddESP({
-          Object = val193, Text = value67 and helper59(value70, val191) or "", Color = value66, }, val194)
+          Object = target, Text = showText and getESPLabel(object, category) or "", Color = color, }, roomBound)
 
-        if value68 then
-          loader:SetTracersEnabled(val193, true)
+        if useTracers then
+          loader:SetTracersEnabled(target, true)
         end
       end
     end
   end
 
-  if val191 == "Items" and (toggles.GoldESP and toggles.GoldESP.Value or toggles.ItemsESP and toggles.ItemsESP.Value) then
-    for index43, value70 in ipairs(ESPCategories.Gold or {}) do
-      local val193 = GetESPTarget(value70, "Gold")
-      if val193 then
-        local val194 = value70:GetAttribute("ParentRoom") ~= nil
+  if category == "Items" and (toggles.GoldESP and toggles.GoldESP.Value or toggles.ItemsESP and toggles.ItemsESP.Value) then
+    for _, object in ipairs(ESPCategories.Gold or {}) do
+      local target = GetESPTarget(object, "Gold")
+      if target then
+        local roomBound = object:GetAttribute("ParentRoom") ~= nil
         local gColor = options.GoldESPColor and options.GoldESPColor.Value or Color3.fromRGB(255, 215, 0)
-        Functions.AddESP({ Object = val193, Text = value67 and helper59(value70, "Gold") or "", Color = gColor }, val194)
+        Functions.AddESP({ Object = target, Text = showText and getESPLabel(object, "Gold") or "", Color = gColor }, roomBound)
       end
     end
-  elseif val191 == "Objectives" and (toggles.KeysESP and toggles.KeysESP.Value or toggles.ObjectivesESP and toggles.ObjectivesESP.Value) then
-    for index43, value70 in ipairs(ESPCategories.Keys or {}) do
-      local val193 = GetESPTarget(value70, "Keys")
-      if val193 then
-        local val194 = value70:GetAttribute("ParentRoom") ~= nil
+  elseif category == "Objectives" and (toggles.KeysESP and toggles.KeysESP.Value or toggles.ObjectivesESP and toggles.ObjectivesESP.Value) then
+    for _, object in ipairs(ESPCategories.Keys or {}) do
+      local target = GetESPTarget(object, "Keys")
+      if target then
+        local roomBound = object:GetAttribute("ParentRoom") ~= nil
         local kColor = options.KeysESPColor and options.KeysESPColor.Value or Color3.fromRGB(0, 191, 255)
-        Functions.AddESP({ Object = val193, Text = value67 and helper59(value70, "Keys") or "", Color = kColor }, val194)
+        Functions.AddESP({ Object = target, Text = showText and getESPLabel(object, "Keys") or "", Color = kColor }, roomBound)
       end
     end
   end
 end
 
-local function helper60(val195, text3)
-  local val196 = ESPToggleKeys[val195]
-  local val197 = val169[val195]
+local function addESPCategoryControls(category, text)
+  local toggleKey = ESPToggleKeys[category]
+  local colorKey = colorFlags[category]
 
-  local val198 = {
+  local defaultColors = {
     Entities = Color3.fromRGB(255, 0, 0),
     Doors = Color3.fromRGB(0, 255, 0),
     Keys = Color3.fromRGB(0, 191, 255),
@@ -8313,168 +8664,135 @@ local function helper60(val195, text3)
     Ladders = Color3.fromRGB(255, 255, 0),
   }
 
-  Groupboxes.Visuals_ESP:AddToggle(val196, { Text = text3, Default = false })
+  Groupboxes.Visuals_ESP:AddToggle(toggleKey, { Text = text, Default = false })
 
-  toggles[val196]:AddColorPicker(val197, { Text = text3, Default = val198[val195] })
+  toggles[toggleKey]:AddColorPicker(colorKey, { Text = text, Default = defaultColors[category] })
 
-  toggles[val196]:OnChanged(function(p115)
-    if p115 then
-      iterate5(val195)
+  toggles[toggleKey]:OnChanged(function(value)
+    if value then
+      refreshCategoryESP(category)
     else
-      iterate4(val195)
+      removeCategoryESP(category)
     end
   end)
 
-  options[val197]:OnChanged(function(p116)
-    for index44, value71 in ipairs(ESPCategories[val195]) do
-      local val199 = GetESPTarget(value71, val195)
+  options[colorKey]:OnChanged(function(value)
+    for _, object in ipairs(ESPCategories[category]) do
+      local target = GetESPTarget(object, category)
 
-      if loader.ColorTable and loader.ColorTable[val199] then
-        loader:UpdateObjectColor(val199, p116)
+      if loader.ColorTable and loader.ColorTable[target] then
+        loader:UpdateObjectColor(target, value)
       end
     end
   end)
 end
 
-Groupboxes.Visuals_ESPBox = element3.Visuals:AddLeftTabbox("ESP / Settings")
-Groupboxes.Visuals_ESP = Groupboxes.Visuals_ESPBox:AddTab("ESP")
-Groupboxes.Visuals_Settings = Groupboxes.Visuals_ESPBox:AddTab("Settings")
 
-helper60("Entities", "Entities")
+local playerCharacters = {}
 
-Groupboxes.Visuals_ESP:AddDropdown("EntitiesESPAllowed", {
-  Text = "Allowed Entities", Values = {
-    "Rush", "Ambush", "A-60", "A-120", "Eyes", "Lookman", "Figure", "Backdoor Rush", "Backdoor Lookman", "Groundskeeper", "Gloombat Swarm", "Glitch Rush", "Glitch Ambush", "Frozen Ambush", "Monument", "Jeff the Killer", "Sally", "Dupe", "Giggle", "Snare", "Gloombat Eggs", "Grumble", "Bash", "Drones", "Electric Puddle", "Teller", "Scribbles", "Noise", "Creak", }, Multi = true, AllowNull = true, Tooltip = "Only show ESP for selected entities (leave empty to show all)", })
+local function refreshPlayersESP()
+  for _, character2 in ipairs(playerCharacters) do
+    loader:RemoveESP(character2)
+    local cleanup = ESPCleanup[character2]
 
-helper60("Doors", "Doors")
-helper60("Keys", "Keys")
-helper60("Objectives", "Objectives")
-helper60("Items", "Items")
-helper60("Gold", "Coins")
-helper60("Chests", "Chests")
-helper60("HidingSpots", "Hiding Spots")
-
-Groupboxes.Visuals_ESP:AddToggle("PlayersESP", { Text = "Players", Default = false })
-
-toggles.PlayersESP:AddColorPicker("PlayersESPColor", {
-  Text = "Players", Default = Color3.fromRGB(255, 255, 255), })
-
-local val200 = {}
-
-local function iterate6()
-  for index45, value72 in ipairs(val200) do
-    loader:RemoveESP(value72)
-    local object6 = ESPCleanup[value72]
-
-    if object6 then
-      object6:Disconnect()
-      ESPCleanup[value72] = nil
+    if cleanup then
+      cleanup:Disconnect()
+      ESPCleanup[character2] = nil
     end
   end
 
-  for i13 = #val200, 1, -1 do
-    val200[i13] = nil
+  for i = #playerCharacters, 1, -1 do
+    playerCharacters[i] = nil
   end
 
   if not toggles.PlayersESP.Value then
     return
   end
 
-  for v307, v308 in players:GetPlayers() do
-    if v308 ~= localPlayer2 then
-      local character8 = v308.Character
+  for _, player in players:GetPlayers() do
+    if player ~= localPlayer then
+      local character2 = player.Character
 
-      if character8 then
-        if character8:FindFirstChild("HumanoidRootPart")
-          or character8:FindFirstChildOfClass("BasePart") then
-          local humanoid7 = character8:FindFirstChildOfClass("Humanoid")
+      if character2 then
+        if character2:FindFirstChild("HumanoidRootPart")
+          or character2:FindFirstChildOfClass("BasePart") then
+          local humanoid2 = character2:FindFirstChildOfClass("Humanoid")
 
           loader:AddESP({
-            Object = character8, Text = v308.Name
-              .. (humanoid7 and " [" .. math.floor(humanoid7.Health) .. " HP]" or ""), Color = options.PlayersESPColor.Value, })
+            Object = character2, Text = player.Name
+              .. (humanoid2 and " [" .. math.floor(humanoid2.Health) .. " HP]" or ""), Color = options.PlayersESPColor.Value, })
 
-          ESPCleanup[character8] = character8.Destroying:Once(function()
-            loader:RemoveESP(character8)
-            ESPCleanup[character8] = nil
+          ESPCleanup[character2] = character2.Destroying:Once(function()
+            loader:RemoveESP(character2)
+            ESPCleanup[character2] = nil
           end)
 
-          table.insert(val200, character8)
+          table.insert(playerCharacters, character2)
         end
       end
     end
   end
 end
 
-local function helper61(val201)
-  if val201 == localPlayer2 then
+local function watchPlayerCharacter(player)
+  if player == localPlayer then
     return
   end
 
-  local connect21 = val201.CharacterAdded:Connect(function(character9)
+  local connection = player.CharacterAdded:Connect(function(character2)
     task.wait(0.5)
 
-    if toggles.PlayersESP and toggles.PlayersESP.Value and character9 then
-      if character9:FindFirstChild("HumanoidRootPart")
-        or character9:FindFirstChildOfClass("BasePart") then
-        local humanoid8 = character9:FindFirstChildOfClass("Humanoid")
+    if toggles.PlayersESP and toggles.PlayersESP.Value and character2 then
+      if character2:FindFirstChild("HumanoidRootPart")
+        or character2:FindFirstChildOfClass("BasePart") then
+        local humanoid2 = character2:FindFirstChildOfClass("Humanoid")
 
         loader:AddESP({
-          Object = character9, Text = val201.Name
-            .. (humanoid8 and " [" .. math.floor(humanoid8.Health) .. " HP]" or ""), Color = options.PlayersESPColor.Value, })
+          Object = character2, Text = player.Name
+            .. (humanoid2 and " [" .. math.floor(humanoid2.Health) .. " HP]" or ""), Color = options.PlayersESPColor.Value, })
 
-        ESPCleanup[character9] = character9.Destroying:Once(function()
-          loader:RemoveESP(character9)
-          ESPCleanup[character9] = nil
+        ESPCleanup[character2] = character2.Destroying:Once(function()
+          loader:RemoveESP(character2)
+          ESPCleanup[character2] = nil
         end)
 
-        table.insert(val200, character9)
+        table.insert(playerCharacters, character2)
       end
     end
   end)
 end
 
-toggles.PlayersESP:OnChanged(function(p118)
-  if p118 then
-    iterate6()
+function Handlers.PlayersESPChanged(value)
+  if value then
+    refreshPlayersESP()
   else
-    iterate6()
-  end
-end)
-
-options.PlayersESPColor:OnChanged(function(p119)
-  for index46, value73 in ipairs(val200) do
-    loader:UpdateObjectColor(value73, p119)
-  end
-end)
-
-players.PlayerAdded:Connect(helper61)
-
-for v309, v310 in players:GetPlayers() do
-  if v310 ~= localPlayer2 then
-    helper61(v310)
+    refreshPlayersESP()
   end
 end
 
-iterate6()
 
-Groupboxes.Visuals_ESP:AddToggle("ESPFade", {
-  Text = "ESP Fade", Default = false, Tooltip = "Enables smooth fading effect on ESP highlights", })
+function Handlers.PlayersESPColorChanged(value)
+  for _, character2 in ipairs(playerCharacters) do
+    loader:UpdateObjectColor(character2, value)
+  end
+end
 
-Groupboxes.Visuals_ESP:AddSlider("ESPFadeTime", {
-  Text = "Fade Time", Min = 0, Max = 1, Default = 0.25, Rounding = 2, Compact = true, Suffix = "s", })
 
-Groupboxes.Visuals_ESP:AddToggle("ESPArrowsToggle", {
-  Text = "Enable Arrows", Default = false, Tooltip = "Shows arrows that point to off-screen objects", })
+players.PlayerAdded:Connect(watchPlayerCharacter)
 
-Groupboxes.Visuals_ESP:AddSlider("ESPArrowsRadius", {
-  Text = "Arrow Radius", Min = 100, Max = 500, Default = 250, Rounding = 0, Compact = true, Suffix = " px", })
+for _, player in players:GetPlayers() do
+  if player ~= localPlayer then
+    watchPlayerCharacter(player)
+  end
+end
 
-local val202 = { MainTab = nil, MainButton = nil, NoclipConn = nil }
+
+local lobbyState = { MainTab = nil, MainButton = nil, NoclipConn = nil }
 
 LobbyFlyState = {
   Flying = false, FlyKeyDown = nil, FlyKeyUp = nil, BodyGyro = nil, BodyVelocity = nil, Control = nil, LastControl = nil, Speed = 0, SpeedCoeff = 1, }
 
-local function helper62()
+local function stopLobbyFly()
   if not LobbyFlyState.Flying then
     return
   end
@@ -8501,16 +8819,16 @@ local function helper62()
     LobbyFlyState.BodyVelocity = nil
   end
 
-  local humanoid9 = character and character:FindFirstChildOfClass("Humanoid")
+  local humanoid2 = character and character:FindFirstChildOfClass("Humanoid")
 
-  if humanoid9 then
-    humanoid9.PlatformStand = false
+  if humanoid2 then
+    humanoid2.PlatformStand = false
   end
 
   pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Custom end)
 end
 
-local function helper63()
+local function startLobbyFly()
   if LobbyFlyState.Flying then
     return
   end
@@ -8519,20 +8837,20 @@ local function helper63()
     return
   end
 
-  local humanoid10 = character:FindFirstChildOfClass("Humanoid")
+  local humanoid2 = character:FindFirstChildOfClass("Humanoid")
 
-  if not humanoid10 then
+  if not humanoid2 then
     return
   end
 
-  local rootPart = humanoid10.RootPart or character:FindFirstChild("HumanoidRootPart")
+  local rootPart = humanoid2.RootPart or character:FindFirstChild("HumanoidRootPart")
     or character:FindFirstChildOfClass("Part")
 
   if not rootPart then
     return
   end
 
-  helper62()
+  stopLobbyFly()
 
   local lobbyFlyState = LobbyFlyState
   lobbyFlyState.Flying = true
@@ -8560,50 +8878,50 @@ local function helper63()
   lobbyFlyState.BodyGyro = bodyGyro
   lobbyFlyState.BodyVelocity = bodyVelocity
 
-  lobbyFlyState.FlyKeyDown = userInputService.InputBegan:Connect(function(input5, p120)
-    if p120 then
+  lobbyFlyState.FlyKeyDown = userInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
       return
     end
 
     local control = lobbyFlyState.Control
     local speedCoeff = lobbyFlyState.SpeedCoeff
 
-    if input5.KeyCode == Enum.KeyCode.W then
+    if input.KeyCode == Enum.KeyCode.W then
       control.F = speedCoeff
-    elseif input5.KeyCode == Enum.KeyCode.S then
+    elseif input.KeyCode == Enum.KeyCode.S then
       control.B = -speedCoeff
-    elseif input5.KeyCode == Enum.KeyCode.A then
+    elseif input.KeyCode == Enum.KeyCode.A then
       control.L = -speedCoeff
-    elseif input5.KeyCode == Enum.KeyCode.D then
+    elseif input.KeyCode == Enum.KeyCode.D then
       control.R = speedCoeff
-    elseif input5.KeyCode == Enum.KeyCode.E then
+    elseif input.KeyCode == Enum.KeyCode.E then
       control.Q = speedCoeff * 2
-    elseif input5.KeyCode == Enum.KeyCode.Q then
+    elseif input.KeyCode == Enum.KeyCode.Q then
       control.E = -speedCoeff * 2
     end
 
     pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Track end)
   end)
 
-  lobbyFlyState.FlyKeyUp = userInputService.InputEnded:Connect(function(input6, p121)
-    if p121 then
+  lobbyFlyState.FlyKeyUp = userInputService.InputEnded:Connect(function(input, gameProcessed)
+    if gameProcessed then
       return
     end
 
-    local control2 = lobbyFlyState.Control
+    local control = lobbyFlyState.Control
 
-    if input6.KeyCode == Enum.KeyCode.W then
-      control2.F = 0
-    elseif input6.KeyCode == Enum.KeyCode.S then
-      control2.B = 0
-    elseif input6.KeyCode == Enum.KeyCode.A then
-      control2.L = 0
-    elseif input6.KeyCode == Enum.KeyCode.D then
-      control2.R = 0
-    elseif input6.KeyCode == Enum.KeyCode.E then
-      control2.Q = 0
-    elseif input6.KeyCode == Enum.KeyCode.Q then
-      control2.E = 0
+    if input.KeyCode == Enum.KeyCode.W then
+      control.F = 0
+    elseif input.KeyCode == Enum.KeyCode.S then
+      control.B = 0
+    elseif input.KeyCode == Enum.KeyCode.A then
+      control.L = 0
+    elseif input.KeyCode == Enum.KeyCode.D then
+      control.R = 0
+    elseif input.KeyCode == Enum.KeyCode.E then
+      control.Q = 0
+    elseif input.KeyCode == Enum.KeyCode.Q then
+      control.E = 0
     end
   end)
 
@@ -8615,74 +8933,74 @@ local function helper63()
         break
       end
 
-      local currentCamera4 = workspace.CurrentCamera
-      humanoid10.PlatformStand = true
-      local control3 = lobbyFlyState.Control
+      local currentCamera2 = workspace.CurrentCamera
+      humanoid2.PlatformStand = true
+      local control = lobbyFlyState.Control
       local lastControl = lobbyFlyState.LastControl
       local speed = lobbyFlyState.Speed
 
-      if control3.L + control3.R ~= 0 or control3.F + control3.B ~= 0
-        or control3.Q + control3.E ~= 0 then
+      if control.L + control.R ~= 0 or control.F + control.B ~= 0
+        or control.Q + control.E ~= 0 then
         speed = 50
-      elseif not (control3.L + control3.R ~= 0 or control3.F + control3.B ~= 0
-          or control3.Q + control3.E ~= 0)
+      elseif not (control.L + control.R ~= 0 or control.F + control.B ~= 0
+          or control.Q + control.E ~= 0)
         and speed ~= 0 then
         speed = 0
       end
 
-      if control3.L + control3.R ~= 0 or control3.F + control3.B ~= 0
-        or control3.Q + control3.E ~= 0 then
+      if control.L + control.R ~= 0 or control.F + control.B ~= 0
+        or control.Q + control.E ~= 0 then
         pcall(function()
-          bodyVelocity.Velocity = (currentCamera4.CFrame.LookVector * (control3.F + control3.B) + (currentCamera4.CFrame * CFrame.new(
-            control3.L + control3.R, (control3.F + control3.B + control3.Q + control3.E) * 0.2, 0
-          ).Position - currentCamera4.CFrame.Position)) * speed
+          bodyVelocity.Velocity = (currentCamera2.CFrame.LookVector * (control.F + control.B) + (currentCamera2.CFrame * CFrame.new(
+            control.L + control.R, (control.F + control.B + control.Q + control.E) * 0.2, 0
+          ).Position - currentCamera2.CFrame.Position)) * speed
         end)
 
-        lastControl.F, lastControl.B, lastControl.L, lastControl.R = control3.F, control3.B, control3.L, control3.R
-      elseif control3.L + control3.R == 0 and control3.F + control3.B == 0
-        and control3.Q + control3.E == 0 and speed ~= 0 then
+        lastControl.F, lastControl.B, lastControl.L, lastControl.R = control.F, control.B, control.L, control.R
+      elseif control.L + control.R == 0 and control.F + control.B == 0
+        and control.Q + control.E == 0 and speed ~= 0 then
         pcall(function()
-          bodyVelocity.Velocity = (currentCamera4.CFrame.LookVector * (lastControl.F + lastControl.B) + (currentCamera4.CFrame * CFrame.new(
-            lastControl.L + lastControl.R, (lastControl.F + lastControl.B + control3.Q + control3.E) * 0.2, 0
-          ).Position - currentCamera4.CFrame.Position)) * speed
+          bodyVelocity.Velocity = (currentCamera2.CFrame.LookVector * (lastControl.F + lastControl.B) + (currentCamera2.CFrame * CFrame.new(
+            lastControl.L + lastControl.R, (lastControl.F + lastControl.B + control.Q + control.E) * 0.2, 0
+          ).Position - currentCamera2.CFrame.Position)) * speed
         end)
       else
         pcall(function() bodyVelocity.Velocity = Vector3.new(0, 0, 0) end)
       end
 
-      pcall(function() bodyGyro.CFrame = currentCamera4.CFrame end)
+      pcall(function() bodyGyro.CFrame = currentCamera2.CFrame end)
       lobbyFlyState.Speed = speed
     until not lobbyFlyState.Flying
 
-    helper62()
+    stopLobbyFly()
   end)
 end
 
-function val202.MainTab()
-  if type(val202.MainTab) ~= "function" then
+function lobbyState.MainTab()
+  if type(lobbyState.MainTab) ~= "function" then
     return
   end
 
-  local addTab2 = moroWindow:AddTab("LobbyMain", "house")
+  local addTab = moroWindow:AddTab("LobbyMain", "house")
 
-  val202.MainTab = addTab2
-  val202.MainButton = helper3(addTab2)
+  lobbyState.MainTab = addTab
+  lobbyState.MainButton = getTabButton(addTab)
 
-  local label = safeCall6(addTab2)
+  local label = getTabLabel(addTab)
 
   if label then
     label.Text = "Main"
   end
 
-  if val202.MainButton then
-    val202.MainButton.Visible = false
+  if lobbyState.MainButton then
+    lobbyState.MainButton.Visible = false
   end
 
-  local stuff = addTab2:AddLeftGroupbox("Stuff")
+  local stuff = addTab:AddLeftGroupbox("Stuff")
 
   stuff:AddButton({
     Text = "Free Rooms", Callback = function()
-      local createElevator = remotesFolder2 and remotesFolder2:FindFirstChild("CreateElevator")
+      local createElevator = remotesFolder and remotesFolder:FindFirstChild("CreateElevator")
 
       if createElevator then
         createElevator:FireServer({
@@ -8692,10 +9010,10 @@ function val202.MainTab()
 
   stuff:AddButton({
     Text = "Free Outdoors", Callback = function()
-      local createElevator2 = remotesFolder2 and remotesFolder2:FindFirstChild("CreateElevator")
+      local createElevator = remotesFolder and remotesFolder:FindFirstChild("CreateElevator")
 
-      if createElevator2 then
-        createElevator2:FireServer({
+      if createElevator then
+        createElevator:FireServer({
           Mods = { "AdminPanel" }, Settings = {}, Destination = "Garden", FriendsOnly = false, MaxPlayers = "1", })
       end
     end, })
@@ -8713,46 +9031,46 @@ function val202.MainTab()
 
   stuff:AddButton({
     Text = "Redeem All Codes", Callback = function()
-      if val85.RedeemingCodes then
+      if featureState.RedeemingCodes then
         return
       end
 
-      library:Notify({ Title = "Redeeming " .. #val85.CodesList .. " codes.", Time = 5 })
-      val85.RedeemingCodes = true
+      library:Notify({ Title = "Redeeming " .. #featureState.CodesList .. " codes.", Time = 5 })
+      featureState.RedeemingCodes = true
 
-      for index47, value74 in ipairs(val85.CodesList) do
-        local shopCode = remotesFolder2 and remotesFolder2:FindFirstChild("ShopCode")
+      for _, codes in ipairs(featureState.CodesList) do
+        local shopCode = remotesFolder and remotesFolder:FindFirstChild("ShopCode")
 
         if shopCode then
-          shopCode:FireServer(value74)
+          shopCode:FireServer(codes)
         end
 
         task.wait(5.1)
       end
 
-      val85.RedeemingCodes = false
+      featureState.RedeemingCodes = false
     end, })
 
-  local otherStuff = addTab2:AddRightGroupbox("Other stuff")
+  local otherStuff = addTab:AddRightGroupbox("Other stuff")
   otherStuff:AddToggle("LobbyNoclip", { Text = "Noclip", Default = false })
 
-  toggles.LobbyNoclip:OnChanged(function(p122)
-    if val202.NoclipConn then
-      val202.NoclipConn:Disconnect()
+  toggles.LobbyNoclip:OnChanged(function(value)
+    if lobbyState.NoclipConn then
+      lobbyState.NoclipConn:Disconnect()
     end
 
-    if p122 and character then
-      for v313, v314 in character:GetDescendants() do
-        if v314:IsA("BasePart") then
-          v314.CanCollide = false
+    if value and character then
+      for _, descendant in character:GetDescendants() do
+        if descendant:IsA("BasePart") then
+          descendant.CanCollide = false
         end
       end
 
-      val202.NoclipConn = character.ChildAdded:Connect(function(child7)
+      lobbyState.NoclipConn = character.ChildAdded:Connect(function(child)
         task.wait()
 
-        if child7:IsA("BasePart") then
-          child7.CanCollide = false
+        if child:IsA("BasePart") then
+          child.CanCollide = false
         end
       end)
     end
@@ -8760,11 +9078,11 @@ function val202.MainTab()
 
   otherStuff:AddToggle("LobbyFly", { Text = "Fly", Default = false })
 
-  toggles.LobbyFly:OnChanged(function(p123)
-    if p123 then
-      helper63()
+  toggles.LobbyFly:OnChanged(function(value)
+    if value then
+      startLobbyFly()
     else
-      helper62()
+      stopLobbyFly()
     end
   end)
 
@@ -8777,138 +9095,138 @@ function val202.MainTab()
   end)
 end
 
-local val203 = { "Main", "Visuals", "Exploits", "Miscellaneous", "Mines", "Archives", "Settings" }
+local lobbyTabs = { "Main", "Visuals", "Exploits", "Miscellaneous", "Mines", "Archives", "Settings" }
 
-local function helper64()
-  local val204 = helper11()
+local function updateFloor()
+  local floorName = detectFloor()
 
-  if val204 == CurrentFloor then
+  if floorName == CurrentFloor then
     return
   end
 
-  CurrentFloor = val204
-  local val205 = val204 == "" or val204 == "Lobby"
-  local val206 = val204 == "Hotel" or val204 == "OldHotel"
-  local val207 = val204 == "Mines"
-  local val208 = val204 == "Garden"
-  local val209 = val204 == "Fools"
-  local val210 = val204 == "OldHotel"
-  local val211 = val204 == "Rooms"
-  local val212 = val204 == "Archives"
-  local val213 = val204 == "Stairwell"
+  CurrentFloor = floorName
+  local isLobby = floorName == "" or floorName == "Lobby"
+  local isHotel = floorName == "Hotel" or floorName == "OldHotel"
+  local isMines = floorName == "Mines"
+  local isGarden = floorName == "Garden"
+  local isFools = floorName == "Fools"
+  local isOldHotel = floorName == "OldHotel"
+  local isRooms = floorName == "Rooms"
+  local isArchives = floorName == "Archives"
+  local isStairwell = floorName == "Stairwell"
 
-  if val205 then
-    val85.InLobby = true
-    val202.MainTab()
+  if isLobby then
+    featureState.InLobby = true
+    lobbyState.MainTab()
 
-    if element3.Home then
-      element3.Home:SetVisible(true)
+    if tabs.Home then
+      tabs.Home:SetVisible(true)
     end
 
-    for index48, value75 in ipairs(val203) do
-      local object7 = element3[value75]
+    for _, tabName in ipairs(lobbyTabs) do
+      local tab = tabs[tabName]
 
-      if object7 then
-        object7:SetVisible(false)
+      if tab then
+        tab:SetVisible(false)
       end
     end
 
-    if val202.MainButton then
-      val202.MainButton.Visible = true
+    if lobbyState.MainButton then
+      lobbyState.MainButton.Visible = true
     end
 
-    if not helper4(element3.Home) and not helper4(val202.MainTab) then
-      element3.Home:Show()
+    if not isTabActive(tabs.Home) and not isTabActive(lobbyState.MainTab) then
+      tabs.Home:Show()
     end
 
-    for index49, value76 in ipairs({
+    for _, flag in ipairs({
       "Godmode", "ThirdPerson", "Noclip", "FlyToggle", "Phase", "AnticheatManipulation", "AutoInteract", "ArchiveChairFly", "StairwellChairFly", "AntiElectricPuddle", "AntiRansom", "AntiScribbles", "NoAlmaDamage", "AntiDrone", "DisableDroneStampede", "RoomsAutoWalk", "RoomsAutoWalkIgnoreA60", "RoomsAutoWalkShowPathToggle", "RoomsAutoWalkSpoofFootsteps", "RoomsPickupStardust", "RoomsPickupGold", "NoSurgeDamage", "RemoveSurge", "RemoveMandrake", "BypassKillbricks", "BypassSeekingWall", "BypassBanana", "BypassJeff", "BypassGiggle", "BypassDupe", "BypassEyes", "BypassLookman", "BypassGloombatEggs", "BypassSeekObstructions", "BypassVacuum", "BypassSnare", "RemoveSeekTrigger", "RemoveFigure", "RemoveFigureMines", "RemoveA90", "RemoveDread", "AutoRevive", "FigureGodmode", "AutoSteerMinecart", "AutoSolveAnchors", "MinecartTeleport", "AutoMinecart", "AutoHeartbeatMinigame", "AutoBreakerBox", "AutoLibraryBruteForce", "InfiniteItemsToggle", "InfiniteCrucifix", "ShowSeekPathToggle", }) do
-      local element27 = toggles[value76]
+      local toggle = toggles[flag]
 
-      if element27 and element27.Value then
-        element27:SetValue(false)
+      if toggle and toggle.Value then
+        toggle:SetValue(false)
       end
     end
 
-    if not val85.LobbyGuardConnection then
-      val85.LobbyGuardConnection = runService.Heartbeat:Connect(function()
+    if not featureState.LobbyGuardConnection then
+      featureState.LobbyGuardConnection = runService.Heartbeat:Connect(function()
         if _Unloading then
           return
         end
 
-        if not val85.InLobby then
+        if not featureState.InLobby then
           return
         end
 
-        for index50, value77 in ipairs({
+        for _, flag in ipairs({
           "Godmode", "ThirdPerson", "Noclip", "FlyToggle", "Phase", "AnticheatManipulation", "AutoInteract", }) do
-          local element28 = toggles[value77]
+          local toggle = toggles[flag]
 
-          if element28 and element28.Value then
-            element28:SetValue(false)
+          if toggle and toggle.Value then
+            toggle:SetValue(false)
           end
         end
 
         if toggles.AutoJoinElevator and toggles.AutoJoinElevator.Value then
-          local character10
+          local character2
 
           if typeof(options.AutoJoinElevatorTarget.Value) == "Instance" then
-            character10 = options.AutoJoinElevatorTarget.Value.Character
+            character2 = options.AutoJoinElevatorTarget.Value.Character
           elseif typeof(options.AutoJoinElevatorTarget.Value) == "string" then
-            character10 = players:FindFirstChild(options.AutoJoinElevatorTarget.Value).Character
+            character2 = players:FindFirstChild(options.AutoJoinElevatorTarget.Value).Character
           end
 
-          local val214 = false
+          local elevatorFound = false
 
           local lobbyElevators = workspace:FindFirstChild("Lobby")
             and workspace.Lobby:FindFirstChild("LobbyElevators")
 
           if lobbyElevators then
-            for v330, v331 in lobbyElevators:GetChildren() do
-              if character10 and v331 and character10:GetAttribute("InGameElevator")
-                and v331:GetAttribute("ID")
-                and v331:GetAttribute("ID") == character10:GetAttribute("InGameElevator") then
-                val214 = true
+            for _, child in lobbyElevators:GetChildren() do
+              if character2 and child and character2:GetAttribute("InGameElevator")
+                and child:GetAttribute("ID")
+                and child:GetAttribute("ID") == character2:GetAttribute("InGameElevator") then
+                elevatorFound = true
 
-                if remotesFolder2 and remotesFolder2:FindFirstChild("ElevatorJoin") then
-                  remotesFolder2.ElevatorJoin:FireServer(v331)
+                if remotesFolder and remotesFolder:FindFirstChild("ElevatorJoin") then
+                  remotesFolder.ElevatorJoin:FireServer(child)
                 end
               end
             end
           end
 
-          if not val214 and remotesFolder2 and remotesFolder2:FindFirstChild("ElevatorExit") then
-            remotesFolder2.ElevatorExit:FireServer()
+          if not elevatorFound and remotesFolder and remotesFolder:FindFirstChild("ElevatorExit") then
+            remotesFolder.ElevatorExit:FireServer()
           end
         end
       end)
     end
 
-    if element3.FoolsHotel then
-      element3.FoolsHotel:SetVisible(false)
+    if tabs.FoolsHotel then
+      tabs.FoolsHotel:SetVisible(false)
     end
 
-    if element3.Rooms then
-      element3.Rooms:SetVisible(false)
+    if tabs.Rooms then
+      tabs.Rooms:SetVisible(false)
     end
 
-    if element3.Stairwell then
-      element3.Stairwell:SetVisible(false)
+    if tabs.Stairwell then
+      tabs.Stairwell:SetVisible(false)
     end
 
     return
   end
 
-  val85.InLobby = false
+  featureState.InLobby = false
 
-  if val85.LobbyGuardConnection then
-    val85.LobbyGuardConnection:Disconnect()
-    val85.LobbyGuardConnection = nil
+  if featureState.LobbyGuardConnection then
+    featureState.LobbyGuardConnection:Disconnect()
+    featureState.LobbyGuardConnection = nil
   end
 
-  if val202.MainTab then
-    if val202.MainButton then
-      val202.MainButton.Visible = false
+  if lobbyState.MainTab then
+    if lobbyState.MainButton then
+      lobbyState.MainButton.Visible = false
     end
 
     if toggles.LobbyNoclip then
@@ -8919,8 +9237,8 @@ local function helper64()
       toggles.LobbyFly:SetValue(false)
     end
 
-    if helper4(val202.MainTab) then
-      element3.Home:Show()
+    if isTabActive(lobbyState.MainTab) then
+      tabs.Home:Show()
     end
   end
 
@@ -8928,340 +9246,245 @@ local function helper64()
     TableClear(ESPCleanup)
     TableClear(ESPBlacklist)
 
-    for key10, value78 in pairs(ESPCategories) do
-      TableClear(value78)
+    for _, ESPCategory in pairs(ESPCategories) do
+      TableClear(ESPCategory)
     end
 
-    for index51, value79 in ipairs(val114.Entities) do
-      if value79.Name == "FakeDoor" or value79.Name == "DoorFake" then
-        local hidden = value79:FindFirstChild("Hidden")
+    for _, entity in ipairs(worldObjects.Entities) do
+      if entity.Name == "FakeDoor" or entity.Name == "DoorFake" then
+        local hidden = entity:FindFirstChild("Hidden")
 
         if hidden then
           hidden.CanTouch = true
         end
 
-        local lock2 = value79:FindFirstChild("Lock")
+        local lock = entity:FindFirstChild("Lock")
 
-        if lock2 and lock2:FindFirstChild("UnlockPrompt") then
-          lock2.UnlockPrompt.Enabled = true
+        if lock and lock:FindFirstChild("UnlockPrompt") then
+          lock.UnlockPrompt.Enabled = true
         end
       end
 
-      if value79.Name == "SideroomSpace" then
-        local collision3 = value79:FindFirstChild("Collision")
+      if entity.Name == "SideroomSpace" then
+        local collision2 = entity:FindFirstChild("Collision")
 
-        if collision3 then
-          collision3.CanCollide = false
-          collision3.CanTouch = true
+        if collision2 then
+          collision2.CanCollide = false
+          collision2.CanTouch = true
         end
       end
     end
 
-    for index52, value80 in ipairs(val114.Entities) do
+    for _, _ in ipairs(worldObjects.Entities) do
     end
 
-    TableClear(val114.Entities)
-    TableClear(val114.HidingSpots)
-    TableClear(val114.Obstructions)
-    TableClear(val114.SeekObstructions)
-    TableClear(val114.SeekBridges)
-    TableClear(val114.SeekNodes)
-    TableClear(val114.SeekDuckBoards)
-    TableClear(val114.SeekHighlights)
-    TableClear(val114.EyestalkHighlights)
-    TableClear(val114.PathLights)
-    TableClear(val114.EventTriggers)
+    TableClear(worldObjects.Entities)
+    TableClear(worldObjects.HidingSpots)
+    TableClear(worldObjects.Obstructions)
+    TableClear(worldObjects.SeekObstructions)
+    TableClear(worldObjects.SeekBridges)
+    TableClear(worldObjects.SeekNodes)
+    TableClear(worldObjects.SeekDuckBoards)
+    TableClear(worldObjects.SeekHighlights)
+    TableClear(worldObjects.EyestalkHighlights)
+    TableClear(worldObjects.PathLights)
+    TableClear(worldObjects.EventTriggers)
   end
 
-  local val215 = not (val206 or val207)
+  local isNotHotelOrMines = not (isHotel or isMines)
 
   if options.SpamBuyCount then
-    pcall(function() options.SpamBuyCount:SetDisabled(val215) end)
+    pcall(function() options.SpamBuyCount:SetDisabled(isNotHotelOrMines) end)
   end
 
   if options.SpamBuyItems then
-    pcall(function() options.SpamBuyItems:SetDisabled(val215) end)
+    pcall(function() options.SpamBuyItems:SetDisabled(isNotHotelOrMines) end)
   end
 
   if toggles.AutoBuyLockpicks then
-    pcall(function() toggles.AutoBuyLockpicks:SetDisabled(val215) end)
+    pcall(function() toggles.AutoBuyLockpicks:SetDisabled(isNotHotelOrMines) end)
   end
 
-  if val206 and options.SpamBuyItems then
-    local val216 = { "Lockpick", "Lighter", "Flashlight", "Vitamins" }
+  if isHotel and options.SpamBuyItems then
+    local essentialItems = { "Lockpick", "Lighter", "Flashlight", "Vitamins" }
 
-    if val210 then
-      table.insert(val216, "Crucifix")
-      table.insert(val216, "Skeleton Key")
+    if isOldHotel then
+      table.insert(essentialItems, "Crucifix")
+      table.insert(essentialItems, "Skeleton Key")
     end
 
-    pcall(options.SpamBuyItems.SetValues, options.SpamBuyItems, val216)
-  elseif val207 and options.SpamBuyItems then
+    pcall(options.SpamBuyItems.SetValues, options.SpamBuyItems, essentialItems)
+  elseif isMines and options.SpamBuyItems then
     pcall(options.SpamBuyItems.SetValues, options.SpamBuyItems, {
       "Straplight", "Bulklight", "BandagePack", "Lockpick", })
   end
 
   if toggles.ShowCrucifix then
-    pcall(function() toggles.ShowCrucifix:SetDisabled(not val210) end)
+    pcall(function() toggles.ShowCrucifix:SetDisabled(not isOldHotel) end)
   end
 
   if toggles.ShowSkeletonKey then
-    pcall(function() toggles.ShowSkeletonKey:SetDisabled(not val210) end)
+    pcall(function() toggles.ShowSkeletonKey:SetDisabled(not isOldHotel) end)
   end
 
-  local val217 = not (val206 or type(val204) == "string" and val204:find("Fools"))
+  local showPadlockOption = not (isHotel or type(floorName) == "string" and floorName:find("Fools"))
 
   if toggles.AutoUnlockPadlockToggle then
-    pcall(function() toggles.AutoUnlockPadlockToggle:SetDisabled(val217) end)
+    pcall(function() toggles.AutoUnlockPadlockToggle:SetDisabled(showPadlockOption) end)
   end
 
   if toggles.AutoBreakerBox then
-    pcall(function() toggles.AutoBreakerBox:SetDisabled(val217) end)
+    pcall(function() toggles.AutoBreakerBox:SetDisabled(showPadlockOption) end)
   end
 
   if toggles.AutoLibraryBruteForce then
-    pcall(function() toggles.AutoLibraryBruteForce:SetDisabled(val217) end)
+    pcall(function() toggles.AutoLibraryBruteForce:SetDisabled(showPadlockOption) end)
   end
 
   if toggles.OrbitItems then
-    pcall(function() toggles.OrbitItems:SetDisabled(val209) end)
+    pcall(function() toggles.OrbitItems:SetDisabled(isFools) end)
   end
 
-  if element3.Mines then
-    element3.Mines:SetVisible(val207)
+  if tabs.Mines then
+    tabs.Mines:SetVisible(isMines)
   end
 
-  for index53, value81 in ipairs(val203) do
-    if value81 ~= "Mines" and value81 ~= "Archives" then
-      local object8 = element3[value81]
+  for _, tabName in ipairs(lobbyTabs) do
+    if tabName ~= "Mines" and tabName ~= "Archives" then
+      local tab = tabs[tabName]
 
-      if object8 then
-        object8:SetVisible(true)
+      if tab then
+        tab:SetVisible(true)
       end
     end
   end
 
-  if element3.Mines and not val207 and helper4(element3.Mines) then
-    element3.Home:Show()
+  if tabs.Mines and not isMines and isTabActive(tabs.Mines) then
+    tabs.Home:Show()
   end
 
-  if element3.FoolsHotel then
-    if val209 or val210 then
-      element3.FoolsHotel:SetVisible(true)
+  if tabs.FoolsHotel then
+    if isFools or isOldHotel then
+      tabs.FoolsHotel:SetVisible(true)
 
-      if element3.FoolsHotel.TabLabelRef then
-        element3.FoolsHotel.TabLabelRef.Text = val209 and "Fools" or "Hotel-/Fools"
+      if tabs.FoolsHotel.TabLabelRef then
+        tabs.FoolsHotel.TabLabelRef.Text = isFools and "Fools" or "Hotel-/Fools"
       end
 
-      for index54, value82 in ipairs(Groupboxes.SubfloorsFools.Elements) do
-        if index54 <= 5 then
-          value82.Holder.Visible = val209
+      for index, element in ipairs(Groupboxes.SubfloorsFools.Elements) do
+        if index <= 5 then
+          element.Holder.Visible = isFools
         end
       end
     else
-      if helper4(element3.FoolsHotel) then
-        element3.Home:Show()
+      if isTabActive(tabs.FoolsHotel) then
+        tabs.Home:Show()
       end
 
-      element3.FoolsHotel:SetVisible(false)
+      tabs.FoolsHotel:SetVisible(false)
     end
   end
 
-  if element3.Garden then
-    if val208 then
-      element3.Garden:SetVisible(true)
+  if tabs.Garden then
+    if isGarden then
+      tabs.Garden:SetVisible(true)
     else
-      if helper4(element3.Garden) then
-        element3.Home:Show()
+      if isTabActive(tabs.Garden) then
+        tabs.Home:Show()
       end
 
-      element3.Garden:SetVisible(false)
+      tabs.Garden:SetVisible(false)
     end
   end
 
-  if element3.Rooms then
-    if val211 then
-      element3.Rooms:SetVisible(true)
+  if tabs.Rooms then
+    if isRooms then
+      tabs.Rooms:SetVisible(true)
     else
-      if helper4(element3.Rooms) then
-        element3.Home:Show()
+      if isTabActive(tabs.Rooms) then
+        tabs.Home:Show()
       end
 
-      element3.Rooms:SetVisible(false)
+      tabs.Rooms:SetVisible(false)
     end
   end
 
-  if element3.Archives then
-    if val212 then
-      element3.Archives:SetVisible(true)
+  if tabs.Archives then
+    if isArchives then
+      tabs.Archives:SetVisible(true)
     else
-      if helper4(element3.Archives) then
-        element3.Home:Show()
+      if isTabActive(tabs.Archives) then
+        tabs.Home:Show()
       end
 
-      element3.Archives:SetVisible(false)
+      tabs.Archives:SetVisible(false)
     end
   end
 
-  if element3.Stairwell then
-    if val213 then
-      element3.Stairwell:SetVisible(true)
+  if tabs.Stairwell then
+    if isStairwell then
+      tabs.Stairwell:SetVisible(true)
     else
-      if helper4(element3.Stairwell) then
-        element3.Home:Show()
+      if isTabActive(tabs.Stairwell) then
+        tabs.Home:Show()
       end
 
-      element3.Stairwell:SetVisible(false)
+      tabs.Stairwell:SetVisible(false)
     end
   end
 
   if toggles.LaddersESP and toggles.LaddersESP.Value then
-    for index55, value83 in ipairs(ESPCategories.Ladders) do
-      if val207 then
-        helper55(value83, "Ladders", "Ladder")
+    for _, ladder in ipairs(ESPCategories.Ladders) do
+      if isMines then
+        addCategoryESP(ladder, "Ladders", "Ladder")
       else
-        Functions.RemoveESP(value83)
+        Functions.RemoveESP(ladder)
       end
     end
   end
 end
 
-local function helper65()
-  local val218, val219 = nil, -1
-  local currentRooms7 = workspace:FindFirstChild("CurrentRooms")
+local function findClockRoom()
+  local bestRoom, bestRoomNumber = nil, -1
+  local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-  if not currentRooms7 then
+  if not currentRooms2 then
     return nil
   end
 
-  for index56, value84 in ipairs(currentRooms7:GetChildren()) do
-    local numVal10 = tonumber(value84.Name)
+  for _, child in ipairs(currentRooms2:GetChildren()) do
+    local number = tonumber(child.Name)
 
-    if numVal10 and numVal10 >= val219 then
-      local assets2 = value84:FindFirstChild("Assets")
-      local archivesClock = assets2 and assets2:FindFirstChild("ArchivesClock")
+    if number and number >= bestRoomNumber then
+      local assets = child:FindFirstChild("Assets")
+      local archivesClock = assets and assets:FindFirstChild("ArchivesClock")
 
       if archivesClock then
-        val218, val219 = archivesClock, numVal10
+        bestRoom, bestRoomNumber = archivesClock, number
       end
     end
   end
 
-  return val218
+  return bestRoom
 end
 
-local function helper66(val220)
-  local floorVal = math.floor(val220 / 60)
-  local val221 = val220 % 60
-  local val222 = floorVal >= 12 and "PM" or "AM"
-  local val223 = floorVal % 12
+local function formatClockTime(totalMinutes)
+  local floorVal = math.floor(totalMinutes / 60)
+  local minutes = totalMinutes % 60
+  local period = floorVal >= 12 and "PM" or "AM"
+  local hour = floorVal % 12
 
-  if val223 == 0 then
-    val223 = 12
+  if hour == 0 then
+    hour = 12
   end
 
-  return string.format("%d:%02d %s", val223, val221, val222)
+  return string.format("%d:%02d %s", hour, minutes, period)
 end
 
-Groupboxes.ArchivesMain = element3.Archives:AddLeftGroupbox("Archives")
-
-Groupboxes.ArchivesMain:AddToggle("BypassDrones", {
-  Text = "Bypass Drones",
-  Default = false,
-  Tooltip = "Prevents 'Drones' from attacking you by disabling walk triggers.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("AntiDrone", {
-  Text = "Anti Drone",
-  Default = false,
-  Tooltip = "Prevents you from bumping/falling over when walking into (singular) drones",
-})
-
-Groupboxes.ArchivesMain:AddToggle("BypassDronesStampede", {
-  Text = "Stop Time/Anti Stampede",
-  Default = false,
-  Tooltip = "Prevents 'The Drones Stampede' from attacking you by looking at the clock.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("DisableDroneStampede", {
-  Text = "Disable Drone Stampede (FE)",
-  Default = false,
-  Tooltip = "Disables the drone stampede from spawning FE",
-})
-
-Groupboxes.ArchivesMain:AddToggle("TimeShower", {
-  Text = "Time Shower",
-  Default = false,
-  Tooltip = "Shows the Archives clock time on your screen.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("DroneTimer", {
-  Text = "Drone Stampede Timer",
-  Default = false,
-  Tooltip = "Notifies you 60s and 30s before the 05:00 and 09:00 drone stampede",
-})
-
-Groupboxes.ArchivesMain:AddDivider()
-
-Groupboxes.ArchivesMain:AddToggle("BypassWater", {
-  Text = "Bypass Electric Water",
-  Default = false,
-  Tooltip = "Creates a safe collision platform above electric water to walk freely.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("AntiElectricPuddle", {
-  Text = "Anti Electric Puddle",
-  Default = false,
-  Tooltip = "Moves your character above to not step on electric puddles",
-})
-
-Groupboxes.ArchivesMain:AddToggle("BypassAlma", {
-  Text = "Bypass Alma",
-  Default = false,
-  Tooltip = "Prevents 'Alma' from spawning by destroying it.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("NoAlmaDamage", {
-  Text = "Anti Alma",
-  Default = false,
-  Tooltip = "Prevents alma from ever interacting with you/you can look at her freely",
-})
-
-Groupboxes.ArchivesMain:AddDivider()
-
-Groupboxes.ArchivesMain:AddToggle("AntiClosetTrash", {
-  Text = "Anti Closet Trash",
-  Default = false,
-  Tooltip = "Prevents closet trash (binders, shoes, shelves) from spawning.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("ForgetMeNotSolver", {
-  Text = "Forget Me Not Skipper",
-  Default = false,
-  Tooltip = "Automatically solves and skips Forget Me Not doors.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("HonchoCorrectBoxESP", {
-  Text = "Honcho Correct Box ESP",
-  Default = false,
-  Tooltip = "ESPs the Archives Correct Boxes for Honcho minigame.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("AntiRansom", {
-  Text = "Anti Ransom",
-  Default = false,
-  Tooltip = "Prevents 'Ransom' from attacking you.",
-})
-
-Groupboxes.ArchivesMain:AddToggle("AntiScribbles", {
-  Text = "Bypass Scribbles",
-  Default = false,
-  Tooltip = "Prevents 'Scribbles' from attacking you.",
-})
 
 local DroneConnection = nil
 local DroneWalkedIntoParents = {}
-toggles.BypassDrones:OnChanged(function(Value)
+function Handlers.BypassDronesChanged(Value)
   local function ProcessDrones(drones)
     local WalkedInto = drones:FindFirstChild("WalkedInto") or drones:WaitForChild("WalkedInto", 3)
     if WalkedInto and not DroneWalkedIntoParents[WalkedInto] then
@@ -9299,10 +9522,11 @@ toggles.BypassDrones:OnChanged(function(Value)
       DroneConnection = nil
     end
   end
-end)
+end
+
 
 local BypassDronesStampedeConnection = nil
-toggles.BypassDronesStampede:OnChanged(function(Value)
+function Handlers.BypassDronesStampedeChanged(Value)
   if BypassDronesStampedeConnection then
     task.cancel(BypassDronesStampedeConnection)
     BypassDronesStampedeConnection = nil
@@ -9312,7 +9536,7 @@ toggles.BypassDronesStampede:OnChanged(function(Value)
 
   BypassDronesStampedeConnection = task.spawn(function()
     while toggles.BypassDronesStampede and toggles.BypassDronesStampede.Value do
-      local clock = helper65()
+      local clock = findClockRoom()
       local lookedAtRemote = clock and clock:FindFirstChild("LookedAtRemote", true)
 
       if lookedAtRemote and lookedAtRemote:IsA("RemoteEvent") then
@@ -9323,16 +9547,17 @@ toggles.BypassDronesStampede:OnChanged(function(Value)
       end
     end
   end)
-end)
+end
 
-toggles.DisableDroneStampede:OnChanged(function(p125)
-  if p125 and not val85.DisableDroneStampedeRunning then
-    val85.DisableDroneStampedeRunning = true
+
+function Handlers.DisableDroneStampedeChanged(value)
+  if value and not featureState.DisableDroneStampedeRunning then
+    featureState.DisableDroneStampedeRunning = true
 
     task.spawn(function()
       while toggles.DisableDroneStampede.Value do
-        local object9 = helper65()
-        local lookedAtRemote = object9 and object9:FindFirstChild("LookedAtRemote")
+        local clockRoom = findClockRoom()
+        local lookedAtRemote = clockRoom and clockRoom:FindFirstChild("LookedAtRemote")
 
         if lookedAtRemote then
           pcall(function() lookedAtRemote:FireServer() end)
@@ -9341,10 +9566,11 @@ toggles.DisableDroneStampede:OnChanged(function(p125)
         task.wait(0.5)
       end
 
-      val85.DisableDroneStampedeRunning = false
+      featureState.DisableDroneStampedeRunning = false
     end)
   end
-end)
+end
+
 
 local TimeShowerGui = nil
 local TimeShowerLabel = nil
@@ -9355,7 +9581,7 @@ local function GetTimeShowerLabel()
   if TimeShowerLabel and TimeShowerLabel.Parent then
     return TimeShowerLabel
   end
-  local parentGui = (gethui and gethui()) or coreGui or localPlayer2:FindFirstChildOfClass("PlayerGui")
+  local parentGui = (gethui and gethui()) or coreGui or localPlayer:FindFirstChildOfClass("PlayerGui")
   TimeShowerGui = Instance.new("ScreenGui")
   TimeShowerGui.Name = "TimeShowerGui"
   TimeShowerGui.ResetOnSpawn = false
@@ -9392,7 +9618,7 @@ local function StopTimeShower()
   end
 end
 
-toggles.TimeShower:OnChanged(function(Value)
+function Handlers.TimeShowerChanged(Value)
   StopTimeShower()
   if not Value then return end
 
@@ -9402,7 +9628,7 @@ toggles.TimeShower:OnChanged(function(Value)
 
   TimeShowerConnection = runService.Heartbeat:Connect(function()
     if Token ~= TimeShowerToken then return end
-    local clock = helper65()
+    local clock = findClockRoom()
     local timeModel = clock and clock:FindFirstChild("Time")
     local txtLabel = timeModel and timeModel:FindFirstChild("TextLabel")
     if txtLabel and txtLabel.Text and txtLabel.Text ~= "" then
@@ -9412,47 +9638,48 @@ toggles.TimeShower:OnChanged(function(Value)
     end
   end)
   table.insert(Connections, TimeShowerConnection)
-end)
+end
 
-toggles.DroneTimer:OnChanged(function(p126)
-  if p126 and not val85.DroneTimerRunning then
-    val85.DroneTimerRunning = true
+
+function Handlers.DroneTimerChanged(value)
+  if value and not featureState.DroneTimerRunning then
+    featureState.DroneTimerRunning = true
 
     task.spawn(function()
-      local val224 = {}
+      local seen = {}
 
       while toggles.DroneTimer.Value do
-        local object10 = helper65()
-        local time = object10 and object10:FindFirstChild("Time")
-        local textLabel3 = time and time:FindFirstChild("TextLabel")
-        local text4 = textLabel3 and textLabel3.Text
+        local clockRoom = findClockRoom()
+        local time = clockRoom and clockRoom:FindFirstChild("Time")
+        local textLabel = time and time:FindFirstChild("TextLabel")
+        local text = textLabel and textLabel.Text
 
-        if text4 then
-          local val225, val226 = text4:match("(%d+):(%d+)")
+        if text then
+          local clockHours, clockMinutes = text:match("(%d+):(%d+)")
 
-          if val225 and val226 then
-            local numVal11 = tonumber(val225) * 60 + tonumber(val226)
+          if clockHours and clockMinutes then
+            local number = tonumber(clockHours) * 60 + tonumber(clockMinutes)
 
-            for index57, value85 in ipairs({ 300, 540 }) do
-              local val227 = (value85 - numVal11) % 1440
+            for _, targetMinutes in ipairs({ 300, 540 }) do
+              local minutesLeft = (targetMinutes - number) % 1440
 
-              if val227 > 90 then
-                val224["h_" .. value85] = nil
-                val224["m_" .. value85] = nil
+              if minutesLeft > 90 then
+                seen["h_" .. targetMinutes] = nil
+                seen["m_" .. targetMinutes] = nil
               else
-                if val227 <= 60 and val227 > 0 and not val224["h_" .. value85] then
-                  val224["h_" .. value85] = true
+                if minutesLeft <= 60 and minutesLeft > 0 and not seen["h_" .. targetMinutes] then
+                  seen["h_" .. targetMinutes] = true
 
                   library:Notify({
-                    Title = "Drones", Description = string.format("Drone stampede in 1 hour (%s)", helper66(value85)), Time = 5, })
+                    Title = "Drones", Description = string.format("Drone stampede in 1 hour (%s)", formatClockTime(targetMinutes)), Time = 5, })
                 end
 
-                if val227 <= 30 and val227 > 0 and not val224["m_" .. value85] then
-                  val224["m_" .. value85] = true
+                if minutesLeft <= 30 and minutesLeft > 0 and not seen["m_" .. targetMinutes] then
+                  seen["m_" .. targetMinutes] = true
 
                   library:Notify({
                     Title = "Drones", Description = string.format(
-                      "Drone stampede in 30 minutes (%s)", helper66(value85)
+                      "Drone stampede in 30 minutes (%s)", formatClockTime(targetMinutes)
                     ), Time = 5, })
                 end
               end
@@ -9463,14 +9690,15 @@ toggles.DroneTimer:OnChanged(function(p126)
         task.wait(1)
       end
 
-      val85.DroneTimerRunning = false
+      featureState.DroneTimerRunning = false
     end)
   end
-end)
+end
+
 
 local WaterBypassConnection = nil
 local WaterParts = {}
-toggles.BypassWater:OnChanged(function(Value)
+function Handlers.BypassWaterChanged(Value)
   if WaterBypassConnection then
     WaterBypassConnection:Disconnect()
     WaterBypassConnection = nil
@@ -9521,7 +9749,7 @@ toggles.BypassWater:OnChanged(function(Value)
     local currentRooms = workspace:FindFirstChild("CurrentRooms")
     if currentRooms then
       local latestRoomVal = replicatedStorage:FindFirstChild("GameData") and replicatedStorage.GameData:FindFirstChild("LatestRoom")
-      local WaterBypassLatestRoomNumber = latestRoomVal and tonumber(latestRoomVal.Value) or tonumber(localPlayer2:GetAttribute("CurrentRoom")) or 0
+      local WaterBypassLatestRoomNumber = latestRoomVal and tonumber(latestRoomVal.Value) or tonumber(localPlayer:GetAttribute("CurrentRoom")) or 0
 
       for WaterBypassRoomNumber = math.max(0, WaterBypassLatestRoomNumber - 4), WaterBypassLatestRoomNumber do
         local WaterBypassRoom = currentRooms:FindFirstChild(tostring(WaterBypassRoomNumber))
@@ -9543,14 +9771,15 @@ toggles.BypassWater:OnChanged(function(Value)
     end
     table.clear(WaterParts)
   end
-end)
+end
 
-toggles.AntiElectricPuddle:OnChanged(function(p130)
-  if p130 then
-    val85.DefaultHipHeight = val85.DefaultHipHeight or humanoid and humanoid.HipHeight or 2.396
+
+function Handlers.AntiElectricPuddleChanged(value)
+  if value then
+    featureState.DefaultHipHeight = featureState.DefaultHipHeight or humanoid and humanoid.HipHeight or 2.396
 
     Connections.AntiElectricPuddle = runService.Heartbeat:Connect(function()
-      if val83 and val83.Sunk then
+      if threatState and threatState.Sunk then
         return
       end
 
@@ -9558,9 +9787,9 @@ toggles.AntiElectricPuddle:OnChanged(function(p130)
         if humanoid.HipHeight ~= 3 then
           humanoid.HipHeight = 3
         end
-      elseif humanoid and val85.DefaultHipHeight then
-        if humanoid.HipHeight ~= val85.DefaultHipHeight then
-          humanoid.HipHeight = val85.DefaultHipHeight
+      elseif humanoid and featureState.DefaultHipHeight then
+        if humanoid.HipHeight ~= featureState.DefaultHipHeight then
+          humanoid.HipHeight = featureState.DefaultHipHeight
         end
       end
     end)
@@ -9570,14 +9799,15 @@ toggles.AntiElectricPuddle:OnChanged(function(p130)
       Connections.AntiElectricPuddle = nil
     end
 
-    if humanoid and val85.DefaultHipHeight then
-      humanoid.HipHeight = val85.DefaultHipHeight
+    if humanoid and featureState.DefaultHipHeight then
+      humanoid.HipHeight = featureState.DefaultHipHeight
     end
   end
-end)
+end
+
 
 local AlmaConnection = nil
-toggles.BypassAlma:OnChanged(function(Value)
+function Handlers.BypassAlmaChanged(Value)
   if AlmaConnection then
     AlmaConnection:Disconnect()
     AlmaConnection = nil
@@ -9597,64 +9827,66 @@ toggles.BypassAlma:OnChanged(function(Value)
     end)
     table.insert(Connections, AlmaConnection)
   end
-end)
+end
 
-toggles.NoAlmaDamage:OnChanged(function(p127)
-  if p127 and not val85.NoAlmaDamageRunning then
-    val85.NoAlmaDamageRunning = true
 
-    local function helper67(val228)
-      local waitForChild2 = val228:WaitForChild("Config", 5)
+function Handlers.NoAlmaDamageChanged(value)
+  if value and not featureState.NoAlmaDamageRunning then
+    featureState.NoAlmaDamageRunning = true
 
-      if not waitForChild2 then
+    local function applyAlmaConfig(parent)
+      local waitForChild = parent:WaitForChild("Config", 5)
+
+      if not waitForChild then
         return
       end
 
-      for key11, value86 in pairs({
+      for key, configValue in pairs({
         idle_angerGain = 0, idle_angerIndirectGain = 0, idle_angerDecay = 100, aggro_initialWindup = 9999, aggro_subsequentWindups = 9999, attack_slashCount = 0, attack_dashSpeed = 0, attack_hitDistance = 0, attack_minigameLength = 9999, }) do
-        local val229, val230 = key11:match("^([^_]+)_(.+)$")
-        local findFirstChild9 = waitForChild2:FindFirstChild(val229)
-        local findFirstChild10 = findFirstChild9 and findFirstChild9:FindFirstChild(val230)
+        local groupName, fieldName = key:match("^([^_]+)_(.+)$")
+        local findFirstChild = waitForChild:FindFirstChild(groupName)
+        local findFirstChild2 = findFirstChild and findFirstChild:FindFirstChild(fieldName)
 
-        if findFirstChild10 and findFirstChild10:IsA("ValueBase") then
-          findFirstChild10.Changed:Connect(function()
-            if findFirstChild10.Value ~= value86 then
-              findFirstChild10.Value = value86
+        if findFirstChild2 and findFirstChild2:IsA("ValueBase") then
+          findFirstChild2.Changed:Connect(function()
+            if findFirstChild2.Value ~= configValue then
+              findFirstChild2.Value = configValue
             end
           end)
 
-          findFirstChild10.Value = value86
+          findFirstChild2.Value = configValue
         end
       end
     end
 
-    local function helper68(val231)
-      if val231:IsA("RemoteEvent") and val231.Name == "AlmaChangeState" then
-        local parent5 = val231.Parent
+    local function watchAlmaRemote(descendant)
+      if descendant:IsA("RemoteEvent") and descendant.Name == "AlmaChangeState" then
+        local parent = descendant.Parent
 
-        if parent5 then
-          helper67(parent5)
+        if parent then
+          applyAlmaConfig(parent)
         end
       end
     end
 
-    Connections.NoAlmaDamage = workspace.DescendantAdded:Connect(helper68)
+    Connections.NoAlmaDamage = workspace.DescendantAdded:Connect(watchAlmaRemote)
 
-    for index58, value87 in ipairs(workspace:GetDescendants()) do
-      helper68(value87)
+    for _, descendant in ipairs(workspace:GetDescendants()) do
+      watchAlmaRemote(descendant)
     end
-  elseif not p127 then
-    val85.NoAlmaDamageRunning = false
+  elseif not value then
+    featureState.NoAlmaDamageRunning = false
 
     if Connections.NoAlmaDamage then
       Connections.NoAlmaDamage:Disconnect()
       Connections.NoAlmaDamage = nil
     end
   end
-end)
+end
+
 
 local AntiClosetTrash_Connection = nil
-toggles.AntiClosetTrash:OnChanged(function(Value)
+function Handlers.AntiClosetTrashChanged(Value)
   if AntiClosetTrash_Connection then
     AntiClosetTrash_Connection:Disconnect()
     AntiClosetTrash_Connection = nil
@@ -9676,14 +9908,15 @@ toggles.AntiClosetTrash:OnChanged(function(Value)
 
   AntiClosetTrash_Connection = workspace.ChildAdded:Connect(checkTrash)
   table.insert(Connections, AntiClosetTrash_Connection)
-end)
+end
+
 
 local ForgetMeNotConnection = nil
 local ForgetMeNotRunning = false
 local ForgetMeNotProcessing = {}
 local ForgetMeNotNotified = {}
 
-toggles.ForgetMeNotSolver:OnChanged(function(Value)
+function Handlers.ForgetMeNotSolverChanged(Value)
   if ForgetMeNotConnection then
     ForgetMeNotConnection:Disconnect()
     ForgetMeNotConnection = nil
@@ -9698,7 +9931,7 @@ toggles.ForgetMeNotSolver:OnChanged(function(Value)
   ForgetMeNotRunning = true
 
   local function GetCharacter()
-    return localPlayer2.Character or localPlayer2.CharacterAdded:Wait()
+    return localPlayer.Character or localPlayer.CharacterAdded:Wait()
   end
 
   local function GetNextRoom(Number)
@@ -9766,7 +9999,7 @@ toggles.ForgetMeNotSolver:OnChanged(function(Value)
       return
     end
 
-    if not Room:FindFirstChild(localPlayer2.Name, true) then
+    if not Room:FindFirstChild(localPlayer.Name, true) then
       if not ForgetMeNotNotified[Room] then
         ForgetMeNotNotified[Room] = true
         library:Notify({ Title = "Archives", Description = "Please Enter The First ForgetMeNot Door", Time = 5 })
@@ -9774,7 +10007,7 @@ toggles.ForgetMeNotSolver:OnChanged(function(Value)
 
       repeat
         task.wait()
-      until Room:FindFirstChild(localPlayer2.Name, true)
+      until Room:FindFirstChild(localPlayer.Name, true)
         or not ForgetMeNotRunning
         or not Room.Parent
 
@@ -9838,7 +10071,7 @@ toggles.ForgetMeNotSolver:OnChanged(function(Value)
 
   local function CheckRooms()
     local latestRoomVal = replicatedStorage:FindFirstChild("GameData") and replicatedStorage.GameData:FindFirstChild("LatestRoom")
-    local LatestRoomNumber = latestRoomVal and tonumber(latestRoomVal.Value) or tonumber(localPlayer2:GetAttribute("CurrentRoom")) or 0
+    local LatestRoomNumber = latestRoomVal and tonumber(latestRoomVal.Value) or tonumber(localPlayer:GetAttribute("CurrentRoom")) or 0
     local FirstRoomNumber = math.max(0, LatestRoomNumber - 4)
     for RoomNumber = FirstRoomNumber, LatestRoomNumber do
       if not ForgetMeNotRunning then
@@ -9875,13 +10108,14 @@ toggles.ForgetMeNotSolver:OnChanged(function(Value)
       task.wait(2)
     end
   end)
-end)
+end
+
 
 local HonchoCorrectBoxConnection = nil
 local HonchoESPObjects = {}
 local HonchoProcessedRooms = {}
 
-toggles.HonchoCorrectBoxESP:OnChanged(function(Value)
+function Handlers.HonchoCorrectBoxESPChanged(Value)
   if HonchoCorrectBoxConnection then
     HonchoCorrectBoxConnection:Disconnect()
     HonchoCorrectBoxConnection = nil
@@ -9973,10 +10207,11 @@ toggles.HonchoCorrectBoxESP:OnChanged(function(Value)
     end)
     table.insert(Connections, HonchoCorrectBoxConnection)
   end
-end)
+end
+
 
 local AntiRansom_Connection = nil
-toggles.AntiRansom:OnChanged(function(Value)
+function Handlers.AntiRansomChanged(Value)
   if AntiRansom_Connection then
     AntiRansom_Connection:Disconnect()
     AntiRansom_Connection = nil
@@ -9996,10 +10231,11 @@ toggles.AntiRansom:OnChanged(function(Value)
     end
   end)
   table.insert(Connections, AntiRansom_Connection)
-end)
+end
+
 
 local AntiScribbles_Connection = nil
-toggles.AntiScribbles:OnChanged(function(Value)
+function Handlers.AntiScribblesChanged(Value)
   if AntiScribbles_Connection then
     AntiScribbles_Connection:Disconnect()
     AntiScribbles_Connection = nil
@@ -10025,37 +10261,31 @@ toggles.AntiScribbles:OnChanged(function(Value)
     end
   end)
   table.insert(Connections, AntiScribbles_Connection)
-end)
+end
 
-Groupboxes.ArchivesBypass = element3.Archives:AddRightGroupbox("Anticheat Bypass")
 
-Groupboxes.ArchivesBypass:AddToggle("ArchiveChairFly", {
-  Text = "Chair Anticheat Bypass", Default = false, Tooltip = "Allows you to bypass the anticheat by flying on a chair, allowing you to noclip and fly freely, drag an office chair, then sit in it and press the 'Start Bypass' button", })
-
-Groupboxes.ArchivesBypass:AddSlider("ArchiveChairFlySpeed", {
-  Text = "Chair Speed", Min = 15, Max = 150, Default = 55, Rounding = 0, })
-
-Groupboxes.ArchivesBypass:AddButton({
-  Text = "Start Bypass", Tooltip = "Press this AFTER you have dragged the chair and sat in it, shift to go down and ctrl and then space to exit (or just turn off the toggle)", Callback = function()
-    if not toggles.ArchiveChairFly.Value then
-      toggles.ArchiveChairFly:SetValue(true)
-    else
-      helper48()
-    end
-  end, })
-
-toggles.ArchiveChairFly:OnChanged(function()
-  if toggles.ArchiveChairFly.Value then
-    helper48()
+function Handlers.StartBypass()
+  if not toggles.ArchiveChairFly.Value then
+    toggles.ArchiveChairFly:SetValue(true)
   else
-    helper46()
+    toggleChairBypass()
   end
-end)
+end
+
+
+function Handlers.ArchiveChairFlyChanged()
+  if toggles.ArchiveChairFly.Value then
+    toggleChairBypass()
+  else
+    releaseChair()
+  end
+end
+
 
 -- ========================================================
 -- Archives Addons (Right Groupbox)
 -- ========================================================
-Groupboxes.ArchivesAddons = element3.Archives:AddRightGroupbox("Archives Addons")
+
 
 -- 1. Archives Locker Autoloot
 do
@@ -10109,7 +10339,7 @@ do
   end
 
   local function updateLockers()
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
     local now = os.clock()
@@ -10118,13 +10348,9 @@ do
     end
   end
 
-  Groupboxes.ArchivesAddons:AddToggle("ArchivesLocker", {
-    Text = "Archives Locker Autoloot",
-    Tooltip = "Automatically loots nearby Archives lockers.",
-    Default = false,
-  })
+  
 
-  toggles.ArchivesLocker:OnChanged(function(val)
+    function Handlers.ArchivesLockerChanged(val)
     if val then
       if lockerRunning then return end
       lockerRunning = true
@@ -10141,19 +10367,33 @@ do
         lockerList[obj] = 0
       end
     end
-  end)
+  end
 
-  Groupboxes.ArchivesAddons:AddSlider("ArchivesLockerCooldown", {
-    Text = "Loot Attempt Cooldown",
-    Tooltip = "Delay between loot attempts.",
-    Min = 0.01,
-    Max = 5,
-    Default = 0.8,
-    Rounding = 2,
-    Callback = function(value)
-      lockerDelay = value
-    end,
-  })
+
+  
+  -- menu of this block: built later, from the MENU section at the end of the file
+  Menus.ArchivesLocker = function()
+    Groupboxes.ArchivesAddons:AddToggle("ArchivesLocker", {
+      Text = "Archives Locker Autoloot",
+      Tooltip = "Automatically loots nearby Archives lockers.",
+      Default = false,
+    })
+
+    toggles.ArchivesLocker:OnChanged(Handlers.ArchivesLockerChanged)
+
+    Groupboxes.ArchivesAddons:AddSlider("ArchivesLockerCooldown", {
+      Text = "Loot Attempt Cooldown",
+      Tooltip = "Delay between loot attempts.",
+      Min = 0.01,
+      Max = 5,
+      Default = 0.8,
+      Rounding = 2,
+      Callback = function(value)
+        lockerDelay = value
+      end,
+    })
+  end
+
 end
 
 -- 2. Archives Water Cooler
@@ -10180,7 +10420,7 @@ do
   end
 
   local function nearbyPrompt(p)
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local pos = promptPos(p)
     return p and p.Parent and p.Enabled and hrp and pos and (hrp.Position - pos).Magnitude <= p.MaxActivationDistance
@@ -10210,10 +10450,10 @@ do
   end
 
   local function getWaterCup()
-    local char = localPlayer2.Character
+    local char = localPlayer.Character
     local cup = char and char:FindFirstChild("WaterCup")
     if cup and cup:IsA("Tool") then return cup end
-    local bag = localPlayer2:FindFirstChildOfClass("Backpack")
+    local bag = localPlayer:FindFirstChildOfClass("Backpack")
     local stored = bag and bag:FindFirstChild("WaterCup")
     if stored and stored:IsA("Tool") then
       local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -10269,76 +10509,74 @@ do
     return cupGone(cup)
   end
 
-  Groupboxes.ArchivesAddons:AddButton({
-    Text = "Drink From Water Cooler",
-    Tooltip = "Automatically takes cup, fills cold & hot water, and drinks it.",
-    Callback = function()
-      if coolerBusy then return end
-      coolerBusy = true
-      task.spawn(function()
-        while true do
-          local list = findCoolers()
-          if #list == 0 then break end
-          local ok = false
-          for _, cooler in ipairs(list) do
-            if drinkCooler(cooler) then
-              ok = true
-              break
-            end
+    function Handlers.DrinkFromWaterCooler()
+    if coolerBusy then return end
+    coolerBusy = true
+    task.spawn(function()
+      while true do
+        local list = findCoolers()
+        if #list == 0 then break end
+        local ok = false
+        for _, cooler in ipairs(list) do
+          if drinkCooler(cooler) then
+            ok = true
+            break
           end
-          if not ok then break end
-          task.wait(coolerCooldown)
         end
-        coolerBusy = false
-      end)
-    end,
-  })
+        if not ok then break end
+        task.wait(coolerCooldown)
+      end
+      coolerBusy = false
+    end)
+  end
 
-  Groupboxes.ArchivesAddons:AddSlider("ArchivesWaterCoolerCooldown", {
-    Text = "Water Cooler Cooldown",
-    Tooltip = "Delay between drinks.",
-    Min = 0.01,
-    Max = 5,
-    Default = 0.5,
-    Rounding = 2,
-    Callback = function(v)
-      coolerCooldown = v
-    end,
-  })
+
+  
+  -- menu of this block: built later, from the MENU section at the end of the file
+  Menus.ArchivesWaterCooler = function()
+    Groupboxes.ArchivesAddons:AddButton({
+      Text = "Drink From Water Cooler",
+      Tooltip = "Automatically takes cup, fills cold & hot water, and drinks it.",
+      Callback = Handlers.DrinkFromWaterCooler,
+    })
+
+    Groupboxes.ArchivesAddons:AddSlider("ArchivesWaterCoolerCooldown", {
+      Text = "Water Cooler Cooldown",
+      Tooltip = "Delay between drinks.",
+      Min = 0.01,
+      Max = 5,
+      Default = 0.5,
+      Rounding = 2,
+      Callback = function(v)
+        coolerCooldown = v
+      end,
+    })
+  end
+
 end
 
 
-
-Groupboxes.StairwellMain = element3.Stairwell:AddLeftGroupbox("Stairwell")
-
-Groupboxes.StairwellMain:AddToggle("StairwellChairFly", {
-  Text = "Chair Anticheat Bypass", Default = false, Tooltip = "Allows you to bypass the anticheat by flying on a chair, allowing you to noclip and fly freely, drag an office chair, then sit in it and press the 'Start Bypass' button", })
-
-Groupboxes.StairwellMain:AddSlider("StairwellChairFlySpeed", {
-  Text = "Chair Speed", Min = 15, Max = 150, Default = 55, Rounding = 0, })
-
-Groupboxes.StairwellMain:AddButton({
-  Text = "Start Bypass", Tooltip = "Press this AFTER you have dragged the chair and sat in it, shift to go down and ctrl and then space to exit (or just turn off the toggle)", Callback = function()
-    if not toggles.StairwellChairFly.Value then
-      toggles.StairwellChairFly:SetValue(true)
-    else
-      helper48()
-    end
-  end, })
-
-toggles.StairwellChairFly:OnChanged(function()
-  if toggles.StairwellChairFly.Value then
-    helper48()
+function Handlers.StartBypass2()
+  if not toggles.StairwellChairFly.Value then
+    toggles.StairwellChairFly:SetValue(true)
   else
-    helper46()
+    toggleChairBypass()
   end
-end)
+end
 
-Groupboxes.StairwellExperimental = element3.Stairwell:AddRightGroupbox("Experimental")
+
+function Handlers.StairwellChairFlyChanged()
+  if toggles.StairwellChairFly.Value then
+    toggleChairBypass()
+  else
+    releaseChair()
+  end
+end
+
 
 local function BringDroppedItems()
   local workspaceDropsFolder = workspace:FindFirstChild("Drops")
-  local character = localPlayer2.Character
+  local character = localPlayer.Character
   local playerHumanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
   if playerHumanoidRootPart and workspaceDropsFolder then
     for _, itemToBring in ipairs(workspaceDropsFolder:GetChildren()) do
@@ -10351,31 +10589,9 @@ local function BringDroppedItems()
   end
 end
 
-Groupboxes.StairwellExperimental:AddButton({
-  Text = "Bring Dropped Items",
-  Func = function() BringDroppedItems() end,
-  DoubleClick = false,
-  Tooltip = "Brings all dropped items to your character.",
-})
-
-Groupboxes.StairwellExperimental:AddToggle("EnableDroppedItemsInterval", {
-  Text = "Enable Interval",
-  Default = false,
-  Tooltip = "Automatically brings dropped items at the selected interval.",
-})
-
-Groupboxes.StairwellExperimental:AddSlider("DroppedItemsInterval", {
-  Text = "Interval",
-  Default = 1,
-  Min = 0,
-  Max = 60,
-  Rounding = 1,
-  Compact = false,
-  Tooltip = "How often dropped items are brought (seconds).",
-})
 
 local droppedItemsIntervalRunning = false
-toggles.EnableDroppedItemsInterval:OnChanged(function(enabled)
+function Handlers.EnableDroppedItemsIntervalChanged(enabled)
   if enabled then
     if droppedItemsIntervalRunning then return end
     droppedItemsIntervalRunning = true
@@ -10392,24 +10608,11 @@ toggles.EnableDroppedItemsInterval:OnChanged(function(enabled)
       droppedItemsIntervalRunning = false
     end)
   end
-end)
+end
 
-Groupboxes.StairwellExperimental:AddDivider()
-
-Groupboxes.StairwellExperimental:AddToggle("AntiNoise", {
-  Text = "Anti Noise",
-  Default = false,
-  Tooltip = "Prevents the game from making noise when moving.",
-})
-
-Groupboxes.StairwellExperimental:AddToggle("BypassNoise", {
-  Text = "Noise Tv Breaker",
-  Default = false,
-  Tooltip = "Breaks the tv of noise while holding it.",
-})
 
 local antiNoiseConn = nil
-toggles.AntiNoise:OnChanged(function(value)
+function Handlers.AntiNoiseChanged(value)
   if antiNoiseConn then
     antiNoiseConn:Disconnect()
     antiNoiseConn = nil
@@ -10419,9 +10622,9 @@ toggles.AntiNoise:OnChanged(function(value)
 
   antiNoiseConn = runService.PreSimulation:Connect(function(dt)
     if not (toggles.AntiNoise and toggles.AntiNoise.Value) then return end
-    if not localPlayer2:GetAttribute("Alive") then return end
+    if not localPlayer:GetAttribute("Alive") then return end
 
-    local character = localPlayer2.Character
+    local character = localPlayer.Character
     if not character then return end
 
     local rootPart = character:FindFirstChild("HumanoidRootPart")
@@ -10446,7 +10649,7 @@ toggles.AntiNoise:OnChanged(function(value)
 
     local controls = nil
     pcall(function()
-      controls = require(localPlayer2.PlayerScripts.PlayerModule):GetControls()
+      controls = require(localPlayer.PlayerScripts.PlayerModule):GetControls()
     end)
     local inputVector = controls and controls:GetMoveVector() or Vector3.zero
     local inputMagnitude = inputVector.Magnitude
@@ -10477,10 +10680,11 @@ toggles.AntiNoise:OnChanged(function(value)
     rootPart.CFrame = CFrame.new(rootPart.Position, rootPart.Position + worldDirection)
   end)
   table.insert(Connections, antiNoiseConn)
-end)
+end
+
 
 local bypassNoiseMiscChildAddedConnection = nil
-toggles.BypassNoise:OnChanged(function(value)
+function Handlers.BypassNoiseChanged(value)
   if bypassNoiseMiscChildAddedConnection then
     bypassNoiseMiscChildAddedConnection:Disconnect()
     bypassNoiseMiscChildAddedConnection = nil
@@ -10488,7 +10692,7 @@ toggles.BypassNoise:OnChanged(function(value)
 
   if not value then return end
 
-  local bypassNoiseLocalPlayerUserId = localPlayer2 and localPlayer2.UserId
+  local bypassNoiseLocalPlayerUserId = localPlayer and localPlayer.UserId
   local function checkBypassNoiseTvStand(targetTvStand)
     if not targetTvStand:IsA("Model") then return end
     if targetTvStand.Name ~= "TV_Stand" then return end
@@ -10523,169 +10727,128 @@ toggles.BypassNoise:OnChanged(function(value)
       task.wait(1)
     end
   end)
-end)
+end
 
-Groupboxes.SubfloorsRooms = element3.Rooms:AddLeftGroupbox("Rooms")
 
-Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalk", {
-  Text = "Auto Rooms", Default = false, Tooltip = "Automatically moves and hides from entities in The Rooms (stops at A-1000)", })
-
-Groupboxes.SubfloorsRooms:AddSlider("RoomsAutoWalkPathfindTimeout", {
-  Text = "Pathfind Timeout", Min = 0.5, Max = 3, Default = 1, Rounding = 1, })
-
-Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalkIgnoreA60", {
-  Text = "Ignore A-60", Default = false, Tooltip = "Continues to walk if A-60 spawns, enables godmode", })
-
-Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalkShowPathToggle", {
-  Text = "Show Path", Default = false, Tooltip = "Shows the current path of rooms auto-walk", })
-
-toggles.RoomsAutoWalkShowPathToggle:AddColorPicker("RoomsAutoWalkShowPathColor", {
-  Text = "Path", Default = Color3.fromRGB(0, 255, 0), Transparency = 0, })
-
-Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalkSpoofFootsteps", {
-  Text = "Spoof Footsteps", Default = false, Tooltip = "Makes it appear as if your character is walking normally", DisabledTooltip = "Your executor doesn't support this feature :(", })
-
-Groupboxes.SubfloorsRooms:AddDivider()
-
-Groupboxes.SubfloorsRooms:AddToggle("RoomsPickupStardust", {
-  Text = "Pickup Stardust", Default = false, Tooltip = "Automatically pathfinds to stardust in the current room", })
-
-Groupboxes.SubfloorsRooms:AddToggle("RoomsPickupGold", {
-  Text = "Pickup Gold", Default = false, Tooltip = "Automatically pathfinds to gold piles in the current room", })
-
-Groupboxes.SubfloorsOutdoors = element3.Garden:AddLeftGroupbox("Outdoors")
-
-Groupboxes.SubfloorsOutdoors:AddToggle("NoSurgeDamage", {
-  Text = "No Surge Damage", Default = false, Tooltip = "Prevents Surge from hurting you", })
-
-toggles.NoSurgeDamage:OnChanged(function(p131)
-  if not remotesFolder2 then
+function Handlers.NoSurgeDamageChanged(value)
+  if not remotesFolder then
     return
   end
 
-  if p131 then
+  if value then
     if FakeEvents.Surge_Real and FakeEvents.Surge_Real.Parent then
-      FakeEvents.Surge.Parent = remotesFolder2
+      FakeEvents.Surge.Parent = remotesFolder
       FakeEvents.Surge_Real.Parent = nil
     end
   elseif FakeEvents.Surge_Real then
-    FakeEvents.Surge_Real.Parent = remotesFolder2
+    FakeEvents.Surge_Real.Parent = remotesFolder
     FakeEvents.Surge.Parent = nil
   end
-end)
+end
 
-Groupboxes.SubfloorsOutdoors:AddToggle("RemoveSurge", {
-  Text = "Remove Surge", Default = false, Tooltip = "Prevents Surge from spawning", })
 
-toggles.RemoveSurge:OnChanged(function(p132)
-  if val85.SurgeFrame then
-    val85.SurgeFrame.Name = p132 and "SurgeVignette_Disabled" or "SurgeVignette"
+function Handlers.RemoveSurgeChanged(value)
+  if featureState.SurgeFrame then
+    featureState.SurgeFrame.Name = value and "SurgeVignette_Disabled" or "SurgeVignette"
   end
-end)
+end
 
-Groupboxes.SubfloorsOutdoors:AddToggle("RemoveMandrake", {
-  Text = "Disable Mandrake (FE)", Default = false, Tooltip = "Prevents mandrakes from attacking you, but this is inconsistent", })
 
-toggles.RemoveMandrake:OnChanged(function(p133)
-  for v352, v353 in val114.Entities do
-    if v353.Name == "Root" and v353:IsA("BasePart") then
-      local antiMandrakeForce2 = v353:FindFirstChild("AntiMandrakeForce")
+function Handlers.RemoveMandrakeChanged(value)
+  for _, entity in worldObjects.Entities do
+    if entity.Name == "Root" and entity:IsA("BasePart") then
+      local antiMandrakeForce = entity:FindFirstChild("AntiMandrakeForce")
 
-      if p133 then
-        if not antiMandrakeForce2 then
-          antiMandrakeForce2 = Instance.new("BodyForce")
-          antiMandrakeForce2.Name = "AntiMandrakeForce"
-          antiMandrakeForce2.Parent = v353
+      if value then
+        if not antiMandrakeForce then
+          antiMandrakeForce = Instance.new("BodyForce")
+          antiMandrakeForce.Name = "AntiMandrakeForce"
+          antiMandrakeForce.Parent = entity
         end
 
-        antiMandrakeForce2.Force = Vector3.new(100000, -99999999, 100000)
-      elseif antiMandrakeForce2 then
-        antiMandrakeForce2:Destroy()
+        antiMandrakeForce.Force = Vector3.new(100000, -99999999, 100000)
+      elseif antiMandrakeForce then
+        antiMandrakeForce:Destroy()
       end
     end
   end
-end)
+end
 
-Groupboxes.SubfloorsOutdoors:AddToggle("ShowEyestalkPathToggle", {
-  Text = "Show Eyestalk Path", Default = false, Tooltip = "Shows you the correct path in the eyestalk chase", })
 
-toggles.ShowEyestalkPathToggle:AddColorPicker("ShowEyestalkPathColor", {
-  Text = "Eyestalk Path", Default = Color3.fromRGB(0, 255, 0), Transparency = 0, })
+local setPathTransparency
 
-local iterate7
 
-toggles.ShowEyestalkPathToggle:OnChanged(function(p134)
-  iterate7(val114.EyestalkHighlights, "ShowEyestalkPathColor", p134)
-end)
+local setPathColor
 
-local iterate8
-options.ShowEyestalkPathColor:OnChanged(function(p135) iterate8(val114.EyestalkHighlights, p135) end)
-element3.Garden:SetVisible(false)
 
-val85.RoomsNodesFolder = Instance.new("Folder")
-val85.RoomsNodesFolder.Name = "RoomsPathNodes"
-val85.RoomsNodesFolder.Parent = workspace
-val85.SeekNodesFolder = Instance.new("Folder")
-val85.SeekNodesFolder.Name = "SeekPathNodes"
-val85.SeekNodesFolder.Parent = workspace
+featureState.RoomsNodesFolder = Instance.new("Folder")
+featureState.RoomsNodesFolder.Name = "RoomsPathNodes"
+featureState.RoomsNodesFolder.Parent = workspace
+featureState.SeekNodesFolder = Instance.new("Folder")
+featureState.SeekNodesFolder.Name = "SeekPathNodes"
+featureState.SeekNodesFolder.Parent = workspace
 
-toggles.BypassKillbricks:OnChanged(function(p136)
-  for v354, v355 in workspace:GetDescendants() do
-    if v355.Name == "Lava" and v355:IsA("BasePart") then
-      v355.CanTouch = not p136
+function Handlers.BypassKillbricksChanged(value)
+  for _, descendant in workspace:GetDescendants() do
+    if descendant.Name == "Lava" and descendant:IsA("BasePart") then
+      descendant.CanTouch = not value
     end
   end
-end)
+end
 
-toggles.BypassSeekingWall:OnChanged(function(p137)
-  for v356, v357 in workspace:GetDescendants() do
-    if v357.Name == "ScaryWall" then
-      for v358, v359 in v357:GetDescendants() do
-        if v359:IsA("BasePart") then
-          v359.CanTouch = not p137
-          v359.CanCollide = not p137
+
+function Handlers.BypassSeekingWallChanged(value)
+  for _, descendant in workspace:GetDescendants() do
+    if descendant.Name == "ScaryWall" then
+      for _, descendant2 in descendant:GetDescendants() do
+        if descendant2:IsA("BasePart") then
+          descendant2.CanTouch = not value
+          descendant2.CanCollide = not value
         end
       end
     end
   end
-end)
+end
 
-toggles.BypassBanana:OnChanged(function(p138)
-  for v360, v361 in workspace:GetDescendants() do
-    if v361.Name == "BananaPeel" and v361:IsA("BasePart") then
-      v361.CanTouch = not p138
+
+function Handlers.BypassBananaChanged(value)
+  for _, descendant in workspace:GetDescendants() do
+    if descendant.Name == "BananaPeel" and descendant:IsA("BasePart") then
+      descendant.CanTouch = not value
     end
   end
-end)
+end
 
-toggles.BypassJeff:OnChanged(function(p139)
-  for v362, v363 in workspace:GetDescendants() do
-    if v363.Name == "JeffTheKiller" then
-      for v364, v365 in v363:GetDescendants() do
-        if v365:IsA("BasePart") then
-          v365.CanCollide = not p139
-          v365.CanTouch = not p139
+
+function Handlers.BypassJeffChanged(value)
+  for _, descendant in workspace:GetDescendants() do
+    if descendant.Name == "JeffTheKiller" then
+      for _, descendant2 in descendant:GetDescendants() do
+        if descendant2:IsA("BasePart") then
+          descendant2.CanCollide = not value
+          descendant2.CanTouch = not value
         end
       end
 
-      local humanoid11 = v363:FindFirstChildOfClass("Humanoid")
+      local humanoid2 = descendant:FindFirstChildOfClass("Humanoid")
 
-      if humanoid11 then
-        humanoid11.Health = 0
+      if humanoid2 then
+        humanoid2.Health = 0
       end
     end
   end
-end)
+end
 
-toggles.RemoveSeekTrigger:OnChanged(function(p140)
-  if p140 and Executor.firetouchinterest then
-    for index59, value88 in ipairs(val114.Entities) do
-      if value88.Name == "TriggerEventCollision" then
-        for v366, v367 in value88:GetChildren() do
-          if v367:IsA("BasePart") and humanoidRootPart then
-            Executor.firetouchinterest(humanoidRootPart, v367, 0)
+
+function Handlers.RemoveSeekTriggerChanged(value)
+  if value and Executor.firetouchinterest then
+    for _, entity in ipairs(worldObjects.Entities) do
+      if entity.Name == "TriggerEventCollision" then
+        for _, child in entity:GetChildren() do
+          if child:IsA("BasePart") and humanoidRootPart then
+            Executor.firetouchinterest(humanoidRootPart, child, 0)
             task.wait()
-            Executor.firetouchinterest(humanoidRootPart, v367, 1)
+            Executor.firetouchinterest(humanoidRootPart, child, 1)
           end
         end
       end
@@ -10693,13 +10856,13 @@ toggles.RemoveSeekTrigger:OnChanged(function(p140)
 
     task.spawn(function()
       while toggles.RemoveSeekTrigger.Value do
-        for index60, value89 in ipairs(val114.Entities) do
-          if value89.Name == "TriggerEventCollision" and humanoidRootPart then
-            for v368, v369 in value89:GetChildren() do
-              if v369:IsA("BasePart") then
-                Executor.firetouchinterest(humanoidRootPart, v369, 0)
+        for _, entity in ipairs(worldObjects.Entities) do
+          if entity.Name == "TriggerEventCollision" and humanoidRootPart then
+            for _, child in entity:GetChildren() do
+              if child:IsA("BasePart") then
+                Executor.firetouchinterest(humanoidRootPart, child, 0)
                 task.wait()
-                Executor.firetouchinterest(humanoidRootPart, v369, 1)
+                Executor.firetouchinterest(humanoidRootPart, child, 1)
               end
             end
           end
@@ -10710,115 +10873,117 @@ toggles.RemoveSeekTrigger:OnChanged(function(p140)
     end)
   end
 
-  for v370, v371 in workspace:GetDescendants() do
-    if v371.Name == "Seeking" or v371.Name == "SeekTrigger" or v371.Name == "ChaseStartTrigger" then
-      for v372, v373 in v371:GetDescendants() do
-        if v373:IsA("BasePart") then
-          v373.CanTouch = not p140
+  for _, descendant in workspace:GetDescendants() do
+    if descendant.Name == "Seeking" or descendant.Name == "SeekTrigger" or descendant.Name == "ChaseStartTrigger" then
+      for _, descendant2 in descendant:GetDescendants() do
+        if descendant2:IsA("BasePart") then
+          descendant2.CanTouch = not value
         end
       end
     end
   end
-end)
+end
 
-toggles.AutoRoomSkip:OnChanged(function(p141)
-  if p141 then
+
+function Handlers.AutoRoomSkipChanged(value)
+  if value then
     task.spawn(function()
       pcall(function()
-        local val232 = 0
-        local val233 = 0
-        local val234 = false
+        local timer = 0
+        local counter = 0
+        local finished = false
 
         repeat
-          local val235 = nil
-          local val236 = 0
+          local bestRoom = nil
+          local bestNumber = 0
 
-          for v379, v380 in workspace.CurrentRooms:GetChildren() do
-            local numVal12 = tonumber(v380.Name)
+          for _, child in workspace.CurrentRooms:GetChildren() do
+            local number = tonumber(child.Name)
 
-            if numVal12 and numVal12 > val236 then
-              local door2 = v380:FindFirstChild("Door")
+            if number and number > bestNumber then
+              local door = child:FindFirstChild("Door")
 
-              if door2 then
-                val235 = door2
-                val236 = numVal12
+              if door then
+                bestRoom = door
+                bestNumber = number
               end
             end
           end
 
-          if val235 then
-            if val236 > val232 then
-              val232 = val236
-              val233 = 0
+          if bestRoom then
+            if bestNumber > timer then
+              timer = bestNumber
+              counter = 0
 
-              if val234 then
+              if finished then
                 toggles.Noclip:SetValue(false)
-                val234 = false
+                finished = false
               end
             end
 
-            local basePart2 = val235:IsA("BasePart") and val235
-              or val235:FindFirstChildWhichIsA("BasePart")
+            local basePart = bestRoom:IsA("BasePart") and bestRoom
+              or bestRoom:FindFirstChildWhichIsA("BasePart")
 
-            if basePart2 then
-              game.Players.LocalPlayer.Character:PivotTo(CFrame.new(basePart2.Position))
+            if basePart then
+              game.Players.LocalPlayer.Character:PivotTo(CFrame.new(basePart.Position))
             end
           else
-            val233 = val233 + 0.25
+            counter = counter + 0.25
 
-            if val233 >= 5 then
+            if counter >= 5 then
               if not toggles.Noclip.Value then
                 toggles.Noclip:SetValue(true)
               end
 
-              val234 = true
-              local character11 = game.Players.LocalPlayer.Character
+              finished = true
+              local character2 = game.Players.LocalPlayer.Character
 
-              if character11 and character11:FindFirstChild("HumanoidRootPart") then
-                character11.HumanoidRootPart.CFrame = character11.HumanoidRootPart.CFrame
+              if character2 and character2:FindFirstChild("HumanoidRootPart") then
+                character2.HumanoidRootPart.CFrame = character2.HumanoidRootPart.CFrame
                   * CFrame.new(0, 0, 10)
               end
 
-              val233 = 0
+              counter = 0
             end
           end
 
           task.wait(0.25)
         until not toggles.AutoRoomSkip.Value
 
-        if val234 then
+        if finished then
           toggles.Noclip:SetValue(false)
         end
       end)
     end)
   end
-end)
+end
 
-toggles.RemoveFigure:OnChanged(function(p142)
-  if p142 and Executor.isnetworkowner and workspace:FindFirstChild("Figure") then
-    local val237 = helper11()
 
-    for index61, value90 in ipairs(val114.Entities) do
-      if value90.Name == "Figure" or value90.Name == "FigureRig"
-        or value90.Name == "FigureRagdoll" then
-        if val237 == "Mines" then
-          for v383, v384 in value90:GetDescendants() do
-            local element29 = v384
+function Handlers.RemoveFigureChanged(value)
+  if value and Executor.isnetworkowner and workspace:FindFirstChild("Figure") then
+    local floorName = detectFloor()
 
-            if v384:IsA("BasePart")
-              and pcall(function() return Executor.isnetworkowner(element29) end) then
-              element29.Position = Vector3.new(-49999, -49999, -49999)
+    for _, entity in ipairs(worldObjects.Entities) do
+      if entity.Name == "Figure" or entity.Name == "FigureRig"
+        or entity.Name == "FigureRagdoll" then
+        if floorName == "Mines" then
+          for _, descendant in entity:GetDescendants() do
+            local part = descendant
+
+            if descendant:IsA("BasePart")
+              and pcall(function() return Executor.isnetworkowner(part) end) then
+              part.Position = Vector3.new(-49999, -49999, -49999)
             end
           end
-        elseif val237 == "OldHotel" or val237 == "Fools" then
-          for v386, v387 in value90:GetDescendants() do
-            local element30 = v387
+        elseif floorName == "OldHotel" or floorName == "Fools" then
+          for _, descendant in entity:GetDescendants() do
+            local part = descendant
 
-            if v387:IsA("BasePart") then
-              v387.CanCollide = false
+            if descendant:IsA("BasePart") then
+              descendant.CanCollide = false
 
-              if pcall(function() return Executor.isnetworkowner(element30) end) then
-                element30.Position = Vector3.new(
+              if pcall(function() return Executor.isnetworkowner(part) end) then
+                part.Position = Vector3.new(
                   math.random(-29999, 29999), math.random(-29999, 29999), math.random(-29999, 29999)
                 )
               end
@@ -10829,29 +10994,30 @@ toggles.RemoveFigure:OnChanged(function(p142)
     end
   end
 
-  if p142 then
+  if value then
     local figure = workspace:FindFirstChild("Figure")
 
     if figure then
-      for v389, v390 in figure:GetDescendants() do
-        if v390:IsA("BasePart") then
-          v390.CanCollide = false
+      for _, descendant in figure:GetDescendants() do
+        if descendant:IsA("BasePart") then
+          descendant.CanCollide = false
         end
       end
     end
   end
-end)
+end
 
-Connections.AutoReviveHandler = localPlayer2:GetAttributeChangedSignal("Alive"):Connect(function()
-  if localPlayer2:GetAttribute("Alive") == false and toggles.AutoRevive.Value then
-    local val238 = helper11()
 
-    if val238 == "Fools" or val238 == "OldHotel" then
-      while localPlayer2:GetAttribute("Alive") ~= true do
-        local remotesFolder3 = replicatedStorage:FindFirstChild("RemotesFolder")
+Connections.AutoReviveHandler = localPlayer:GetAttributeChangedSignal("Alive"):Connect(function()
+  if localPlayer:GetAttribute("Alive") == false and toggles.AutoRevive.Value then
+    local floorName = detectFloor()
 
-        if remotesFolder3 and remotesFolder3:FindFirstChild("Revive") then
-          remotesFolder3.Revive:FireServer()
+    if floorName == "Fools" or floorName == "OldHotel" then
+      while localPlayer:GetAttribute("Alive") ~= true do
+        local remotesFolder2 = replicatedStorage:FindFirstChild("RemotesFolder")
+
+        if remotesFolder2 and remotesFolder2:FindFirstChild("Revive") then
+          remotesFolder2.Revive:FireServer()
         end
 
         task.wait(0.5)
@@ -10860,77 +11026,49 @@ Connections.AutoReviveHandler = localPlayer2:GetAttributeChangedSignal("Alive"):
   end
 end)
 
-toggles.FigureGodmode:OnChanged(function(p143) end)
 
 ObstructionNames = {
   ThingToOpen = "RemoveBasementGate", MovingDoor = "RemovePaintingsDoor", Wax_Door = "RemoveSkeletonDoor", }
 
-for key12, value91 in pairs(ObstructionNames) do
-  local val239 = key12
 
-  toggles[value91]:OnChanged(function(p144)
-    for v393, v394 in workspace:GetDescendants() do
-      if v394.Name == val239 and v394:IsA("Model") then
-        if p144 then
-          v394:PivotTo(CFrame.new(-10000, -10000, -10000))
-        else
-          local originalPosition = v394:GetAttribute("OriginalPosition")
-
-          if originalPosition then
-            if typeof(originalPosition) == "string" then
-              local val240, success17 = pcall(function()
-                return httpService:JSONDecode(originalPosition)
-              end)
-
-              if val240 and typeof(success17) == "table" then
-                v394:PivotTo(CFrame.new(unpack(success17)))
-              end
-            elseif typeof(originalPosition) == "table" and #originalPosition >= 12 then
-              v394:PivotTo(CFrame.new(unpack(originalPosition)))
-            end
-          end
-        end
-      end
-    end
-  end)
-end
-
-Connections.DescendantAddedObstructions = workspace.DescendantAdded:Connect(function(descendant6)
-  if descendant6:IsA("Model")
-    and (descendant6.Name == "ThingToOpen" or descendant6.Name == "MovingDoor"
-      or descendant6.Name == "Wax_Door") then
-    local val241 = {
+Connections.DescendantAddedObstructions = workspace.DescendantAdded:Connect(function(descendant)
+  if descendant:IsA("Model")
+    and (descendant.Name == "ThingToOpen" or descendant.Name == "MovingDoor"
+      or descendant.Name == "Wax_Door") then
+    local removalToggles = {
       ThingToOpen = "RemoveBasementGate", MovingDoor = "RemovePaintingsDoor", Wax_Door = "RemoveSkeletonDoor", }
 
-    local val242, success18 = pcall(function()
-      return httpService:JSONEncode({ descendant6:GetPivot():GetComponents() })
+    local success, result = pcall(function()
+      return httpService:JSONEncode({ descendant:GetPivot():GetComponents() })
     end)
 
-    if val242 and success18 then
-      descendant6:SetAttribute("OriginalPosition", success18)
+    if success and result then
+      descendant:SetAttribute("OriginalPosition", result)
     end
 
-    if toggles[val241[descendant6.Name]] and toggles[val241[descendant6.Name]].Value then
-      descendant6:PivotTo(CFrame.new(-10000, -10000, -10000))
+    if toggles[removalToggles[descendant.Name]] and toggles[removalToggles[descendant.Name]].Value then
+      descendant:PivotTo(CFrame.new(-10000, -10000, -10000))
     end
   end
 end)
 
-toggles.RoomsAutoWalkShowPathToggle:OnChanged(function(p145)
-  for v400, v401 in val85.RoomsNodesFolder:GetChildren() do
-    if v401.Name == "PathNode" then
-      v401.Transparency = p145 and 0.5 or 1
+function Handlers.RoomsAutoWalkShowPathToggleChanged(value)
+  for _, child in featureState.RoomsNodesFolder:GetChildren() do
+    if child.Name == "PathNode" then
+      child.Transparency = value and 0.5 or 1
     end
   end
-end)
+end
 
-options.RoomsAutoWalkShowPathColor:OnChanged(function(color)
-  for v402, v403 in val85.RoomsNodesFolder:GetChildren() do
-    if v403.Name == "PathNode" then
-      v403.Color = color
+
+function Handlers.RoomsAutoWalkShowPathColorChanged(color)
+  for _, child in featureState.RoomsNodesFolder:GetChildren() do
+    if child.Name == "PathNode" then
+      child.Color = color
     end
   end
-end)
+end
+
 
 RoomsEntityList = {
   "RushMoving", "AmbushMoving", "BackdoorRush", "A60", "A120", "CustomEntity", "GlitchRush", "GlitchAmbush", }
@@ -10938,117 +11076,118 @@ RoomsEntityList = {
 Functions.RoomsAutoWalk = {}
 
 function Functions.RoomsAutoWalk.GetNearestHidingSpot()
-  local element31 = { Distance = math.huge, Object = nil }
+  local nearest = { Distance = math.huge, Object = nil }
 
-  for index62, value92 in ipairs(val114.HidingSpots) do
-    if value92.PrimaryPart and value92:FindFirstChild("HidePrompt") then
-      local distanceFromCharacter8 = localPlayer2:DistanceFromCharacter(value92.PrimaryPart.Position)
+  for _, hidingSpot in ipairs(worldObjects.HidingSpots) do
+    if hidingSpot.PrimaryPart and hidingSpot:FindFirstChild("HidePrompt") then
+      local distanceFromCharacter = localPlayer:DistanceFromCharacter(hidingSpot.PrimaryPart.Position)
 
-      if distanceFromCharacter8 < element31.Distance and value92.PrimaryPart.Position.Y > -10 then
-        local findFirstChild11 = value92:FindFirstChild("HiddenPlayer", true)
+      if distanceFromCharacter < nearest.Distance and hidingSpot.PrimaryPart.Position.Y > -10 then
+        local findFirstChild = hidingSpot:FindFirstChild("HiddenPlayer", true)
 
-        if findFirstChild11 and not findFirstChild11.Value then
-          element31.Distance = distanceFromCharacter8
-          element31.Object = value92
+        if findFirstChild and not findFirstChild.Value then
+          nearest.Distance = distanceFromCharacter
+          nearest.Object = hidingSpot
         end
       end
     end
   end
 
-  return element31.Object
+  return nearest.Object
 end
 
-local val243 = 0
-local value93 = nil
+local waypointIndex = 0
+local pathTarget = nil
 
 function Functions.RoomsAutoWalk.GetPathfindTarget()
-  if not element2 or not currentRooms then
+  if not latestRoomValue or not currentRooms then
     return
   end
 
-  local strVal4 = currentRooms[tostring(element2.Value)]
+  local text = currentRooms[tostring(latestRoomValue.Value)]
 
-  if not strVal4 then
+  if not text then
     return
   end
 
-  for v407, v408 in workspace:GetChildren() do
-    if TableFind(RoomsEntityList, v408.Name) and v408.PrimaryPart then
-      local y = v408.PrimaryPart.Position.Y
+  for _, child in workspace:GetChildren() do
+    if TableFind(RoomsEntityList, child.Name) and child.PrimaryPart then
+      local y = child.PrimaryPart.Position.Y
 
       if y > -10 and y < 150 then
-        if v408.Name == "A60" and not toggles.RoomsAutoWalkIgnoreA60.Value or v408.Name ~= "A60" then
+        if child.Name == "A60" and not toggles.RoomsAutoWalkIgnoreA60.Value or child.Name ~= "A60" then
           return Functions.RoomsAutoWalk.GetNearestHidingSpot()
-            or strVal4:FindFirstChild("RoomExit")
+            or text:FindFirstChild("RoomExit")
         end
       end
     end
   end
 
   if toggles.RoomsAutoWalkIgnoreA60.Value and Functions.GetNearestEntity() then
-    return strVal4:FindFirstChild("RoomExit")
+    return text:FindFirstChild("RoomExit")
   end
 
   if (toggles.RoomsPickupStardust.Value or toggles.RoomsPickupGold.Value)
-    and value93 ~= element2.Value then
-    local element32 = { Distance = math.huge, Object = nil }
+    and pathTarget ~= latestRoomValue.Value then
+    local nearest = { Distance = math.huge, Object = nil }
 
-    for v410, v411 in strVal4:GetDescendants() do
-      if v411.Name == "GoldPile" and v411:GetAttribute("GoldValue")
+    for _, descendant in text:GetDescendants() do
+      if descendant.Name == "GoldPile" and descendant:GetAttribute("GoldValue")
         and toggles.RoomsPickupGold.Value then
-        local distanceFromCharacter9 = localPlayer2:DistanceFromCharacter(v411:GetPivot().Position)
+        local distanceFromCharacter = localPlayer:DistanceFromCharacter(descendant:GetPivot().Position)
 
-        if distanceFromCharacter9 < element32.Distance then
-          element32.Distance = distanceFromCharacter9
-          element32.Object = v411
+        if distanceFromCharacter < nearest.Distance then
+          nearest.Distance = distanceFromCharacter
+          nearest.Object = descendant
         end
-      elseif v411.Name == "StardustPickup" and toggles.RoomsPickupStardust.Value then
-        local distanceFromCharacter10 = localPlayer2:DistanceFromCharacter(v411:GetPivot().Position)
+      elseif descendant.Name == "StardustPickup" and toggles.RoomsPickupStardust.Value then
+        local distanceFromCharacter = localPlayer:DistanceFromCharacter(descendant:GetPivot().Position)
 
-        if distanceFromCharacter10 < element32.Distance then
-          element32.Distance = distanceFromCharacter10
-          element32.Object = v411
+        if distanceFromCharacter < nearest.Distance then
+          nearest.Distance = distanceFromCharacter
+          nearest.Object = descendant
         end
       end
     end
 
-    if element32.Object then
-      return element32.Object
+    if nearest.Object then
+      return nearest.Object
     end
   end
 
-  return strVal4:FindFirstChild("RoomExit")
+  return text:FindFirstChild("RoomExit")
 end
 
-toggles.RoomsAutoWalk:OnChanged(function(p146)
-  for v412, v413 in val85.RoomsNodesFolder:GetChildren() do
-    if v413.Name == "PathNode" then
-      v413:Destroy()
+function Handlers.RoomsAutoWalkChanged(value)
+  for _, child in featureState.RoomsNodesFolder:GetChildren() do
+    if child.Name == "PathNode" then
+      child:Destroy()
     end
   end
 
-  if p146 and not toggles.NoA90Damage.Value then
+  if value and not toggles.NoA90Damage.Value then
     toggles.NoA90Damage:SetValue(true)
   end
-end)
+end
+
 
 Connections.RoomsAutoWalkHandler = runService.Heartbeat:Connect(function()
   if _Unloading then
     return
   end
 
-  if not toggles.RoomsAutoWalk.Value or CurrentFloor ~= "Rooms" or val85.RoomsAutoWalkActive
+  if not toggles.RoomsAutoWalk.Value or CurrentFloor ~= "Rooms" or featureState.RoomsAutoWalkActive
     or not collisionPart then
     return
   end
 
-  local val244, success19 = pcall(function() return element2 and element2.Value end)
+  local success, result = pcall(function() return latestRoomValue and latestRoomValue.Value end)
 
-  if not val244 or not success19 or success19 >= 1000 then
+  if not success or not result or result >= 1000 then
     return
   end
 
-  val85.RoomsAutoWalkActive = true
+  featureState.RoomsAutoWalkActive = true
 
   local path = pathfindingService:CreatePath({
     AgentCanJump = true, AgentCanClimb = false, WaypointSpacing = 4, AgentRadius = 1.5, AgentHeight = 1.5, Costs = { StuckPart = 8 }, })
@@ -11057,95 +11196,95 @@ Connections.RoomsAutoWalkHandler = runService.Heartbeat:Connect(function()
     toggles.Godmode:SetValue(true)
   end
 
-  local element33 = Functions.RoomsAutoWalk.GetPathfindTarget()
+  local target = Functions.RoomsAutoWalk.GetPathfindTarget()
 
-  if not element33 then
-    val85.RoomsAutoWalkActive = false
+  if not target then
+    featureState.RoomsAutoWalkActive = false
     return
   end
 
-  local position3
+  local position
 
-  if element33.Name == "RoomExit" then
-    position3 = element33.Position
-  elseif element33:FindFirstChild("HidePrompt") then
-    for v417, v418 in element33:GetDescendants() do
-      if v418:IsA("BasePart") then
-        v418.CanCollide = false
+  if target.Name == "RoomExit" then
+    position = target.Position
+  elseif target:FindFirstChild("HidePrompt") then
+    for _, descendant in target:GetDescendants() do
+      if descendant:IsA("BasePart") then
+        descendant.CanCollide = false
       end
     end
 
-    position3 = element33.PrimaryPart.Position
-  elseif element33.Name == "GoldPile" or element33.Name == "StardustPickup" then
-    position3 = element33:GetPivot().Position
+    position = target.PrimaryPart.Position
+  elseif target.Name == "GoldPile" or target.Name == "StardustPickup" then
+    position = target:GetPivot().Position
 
-    if val243 == 0 then
-      val243 = tick()
+    if waypointIndex == 0 then
+      waypointIndex = tick()
     end
   end
 
-  if element33.Name ~= "GoldPile" and element33.Name ~= "StardustPickup" then
-    val243 = 0
+  if target.Name ~= "GoldPile" and target.Name ~= "StardustPickup" then
+    waypointIndex = 0
   end
 
-  if collisionPart.Anchored and not element33:FindFirstChild("HidePrompt") then
+  if collisionPart.Anchored and not target:FindFirstChild("HidePrompt") then
     character:SetAttribute("Hiding", true)
-    remotesFolder2.CamLock:FireServer()
+    remotesFolder.CamLock:FireServer()
     character:SetAttribute("Hiding", false)
   end
 
-  if not element2 or not currentRooms then
-    val85.RoomsAutoWalkActive = false
+  if not latestRoomValue or not currentRooms then
+    featureState.RoomsAutoWalkActive = false
     return
   end
 
-  local strVal5 = currentRooms[tostring(element2.Value)]
+  local text = currentRooms[tostring(latestRoomValue.Value)]
 
-  if not strVal5 then
-    val85.RoomsAutoWalkActive = false
+  if not text then
+    featureState.RoomsAutoWalkActive = false
     return
   end
 
-  if strVal5:FindFirstChild("Door") then
-    strVal5.Door.Door.CanCollide = false
+  if text:FindFirstChild("Door") then
+    text.Door.Door.CanCollide = false
   end
 
-  if not position3 or localPlayer2:DistanceFromCharacter(position3) >= 750 then
-    val85.RoomsAutoWalkActive = false
+  if not position or localPlayer:DistanceFromCharacter(position) >= 750 then
+    featureState.RoomsAutoWalkActive = false
     return
   end
 
-  local v420, success20 = pcall(path.ComputeAsync, path, collisionPart.Position, position3)
+  local success2, result3 = pcall(path.ComputeAsync, path, collisionPart.Position, position)
 
-  if success20 then
-    val85.RoomsAutoWalkActive = false
+  if result3 then
+    featureState.RoomsAutoWalkActive = false
     return
   end
 
   local getWaypoints = path:GetWaypoints()
 
   if #getWaypoints == 0 then
-    local roomExit = strVal5:FindFirstChild("RoomExit")
+    local roomExit = text:FindFirstChild("RoomExit")
 
     if roomExit then
       humanoid:MoveTo(roomExit.Position)
     end
 
-    val85.RoomsAutoWalkActive = false
+    featureState.RoomsAutoWalkActive = false
     return
   end
 
-  for v422, v423 in val85.RoomsNodesFolder:GetChildren() do
-    if v423.Name == "PathNode" then
-      v423:Destroy()
+  for _, child in featureState.RoomsNodesFolder:GetChildren() do
+    if child.Name == "PathNode" then
+      child:Destroy()
     end
   end
 
-  for index63, value94 in ipairs(getWaypoints) do
-    local pathNode = Instance.new("Part", val85.RoomsNodesFolder)
+  for _, getWaypoint in ipairs(getWaypoints) do
+    local pathNode = Instance.new("Part", featureState.RoomsNodesFolder)
     pathNode.Transparency = toggles.RoomsAutoWalkShowPathToggle.Value and 0.5 or 1
     pathNode.Size = Vector3.one
-    pathNode.Position = value94.Position
+    pathNode.Position = getWaypoint.Position
     pathNode.Shape = Enum.PartType.Ball
     pathNode.CanCollide = false
     pathNode.Anchored = true
@@ -11154,68 +11293,68 @@ Connections.RoomsAutoWalkHandler = runService.Heartbeat:Connect(function()
     pathNode.Material = Enum.Material.Neon
   end
 
-  local val245 = false
+  local reached = false
 
-  for index64, value95 in ipairs(getWaypoints) do
-    if val245 or not toggles.RoomsAutoWalk.Value then
+  for _, getWaypoint in ipairs(getWaypoints) do
+    if reached or not toggles.RoomsAutoWalk.Value then
       break
     end
 
-    local val246 = false
-    local val247 = tick()
-    local val248 = value95
+    local arrived = false
+    local startTime = tick()
+    local waypoint = getWaypoint
 
-    local connect22 = runService.RenderStepped:Connect(function()
+    local connection = runService.RenderStepped:Connect(function()
       if _Unloading then
         return
       end
 
-      if val245 or not toggles.RoomsAutoWalk.Value then
-        val246 = true
+      if reached or not toggles.RoomsAutoWalk.Value then
+        arrived = true
         return
       end
 
-      local object11 = Functions.RoomsAutoWalk.GetPathfindTarget()
+      local nextTarget = Functions.RoomsAutoWalk.GetPathfindTarget()
 
-      if object11 and object11:FindFirstChild("HidePrompt") and not element33:FindFirstChild("HidePrompt") then
-        val246 = true
+      if nextTarget and nextTarget:FindFirstChild("HidePrompt") and not target:FindFirstChild("HidePrompt") then
+        arrived = true
         return
       end
 
-      if element33.Name == "GoldPile" and (not element33.Parent or not element33:GetAttribute("GoldValue"))
-        or element33.Name == "StardustPickup" and not element33.Parent then
-        val246 = true
+      if target.Name == "GoldPile" and (not target.Parent or not target:GetAttribute("GoldValue"))
+        or target.Name == "StardustPickup" and not target.Parent then
+        arrived = true
         return
       end
 
-      if element33:FindFirstChild("HidePrompt") then
-        local hidePrompt = element33:FindFirstChild("HidePrompt")
+      if target:FindFirstChild("HidePrompt") then
+        local hidePrompt = target:FindFirstChild("HidePrompt")
 
-        if localPlayer2:DistanceFromCharacter(position3) < hidePrompt.MaxActivationDistance
+        if localPlayer:DistanceFromCharacter(position) < hidePrompt.MaxActivationDistance
           and character:GetAttribute("Hiding") ~= true then
           Functions.ForceFirePrompt(hidePrompt)
         end
-      elseif element33.Name == "GoldPile" or element33.Name == "StardustPickup" then
-        local lootPrompt = element33:FindFirstChild("LootPrompt")
+      elseif target.Name == "GoldPile" or target.Name == "StardustPickup" then
+        local lootPrompt = target:FindFirstChild("LootPrompt")
 
         if lootPrompt
-          and localPlayer2:DistanceFromCharacter(position3) < lootPrompt.MaxActivationDistance then
+          and localPlayer:DistanceFromCharacter(position) < lootPrompt.MaxActivationDistance then
           Functions.ForceFirePrompt(lootPrompt)
         end
       end
 
-      if localPlayer2:DistanceFromCharacter((Vector3.new(
-        val248.Position.X, humanoidRootPart.Position.Y, val248.Position.Z
+      if localPlayer:DistanceFromCharacter((Vector3.new(
+        waypoint.Position.X, humanoidRootPart.Position.Y, waypoint.Position.Z
       ))) < 5 then
-        val246 = true
+        arrived = true
       end
 
-      humanoid:MoveTo(val248.Position)
+      humanoid:MoveTo(waypoint.Position)
     end)
 
-    while not val246 do
-      if tick() - val247 > options.RoomsAutoWalkPathfindTimeout.Value then
-        local stuckPart = Instance.new("Part", val85.RoomsNodesFolder)
+    while not arrived do
+      if tick() - startTime > options.RoomsAutoWalkPathfindTimeout.Value then
+        local stuckPart = Instance.new("Part", featureState.RoomsNodesFolder)
         stuckPart.Transparency = 1
         stuckPart.Size = Vector3.one
         stuckPart.CFrame = collision.CFrame
@@ -11224,110 +11363,110 @@ Connections.RoomsAutoWalkHandler = runService.Heartbeat:Connect(function()
         stuckPart.Anchored = true
         stuckPart.Name = "StuckPart"
 
-        local instance6 = Instance.new("PathfindingModifier", stuckPart)
-        instance6.Label = "StuckPart"
+        local instance = Instance.new("PathfindingModifier", stuckPart)
+        instance.Label = "StuckPart"
 
-        val245 = true
+        reached = true
         break
       end
 
-      if val243 > 0 and tick() - val243 > 5 then
-        value93 = element2.Value
-        val243 = 0
-        val245 = true
+      if waypointIndex > 0 and tick() - waypointIndex > 5 then
+        pathTarget = latestRoomValue.Value
+        waypointIndex = 0
+        reached = true
         break
       end
 
       task.wait()
     end
 
-    connect22:Disconnect()
+    connection:Disconnect()
     humanoid:MoveTo(humanoidRootPart.Position)
   end
 
-  val85.RoomsAutoWalkActive = false
+  featureState.RoomsAutoWalkActive = false
 end)
 
 if currentRooms then
-  Connections.RoomsHandler = currentRooms.ChildAdded:Connect(function(child8)
-    for v429, v430 in val85.RoomsNodesFolder:GetChildren() do
-      if v430.Name == "StuckPart" then
-        v430:Destroy()
+  Connections.RoomsHandler = currentRooms.ChildAdded:Connect(function(child)
+    for _, child2 in featureState.RoomsNodesFolder:GetChildren() do
+      if child2.Name == "StuckPart" then
+        child2:Destroy()
       end
     end
 
-    if child8:GetAttribute("RawName")
-      and string.find(child8:GetAttribute("RawName"), "Eyestalk") then
-      local val249
+    if child:GetAttribute("RawName")
+      and string.find(child:GetAttribute("RawName"), "Eyestalk") then
+      local previousPart
 
-      local function createPart(position4)
-        local seekLightNode2 = Instance.new("Part")
-        seekLightNode2.Size = Vector3.one
-        seekLightNode2.Transparency = 1
-        seekLightNode2.Parent = val85.SeekNodesFolder
-        seekLightNode2.Anchored = true
-        seekLightNode2.Position = position4
-        seekLightNode2.CanCollide = false
-        seekLightNode2.Name = "SeekLightNode"
+      local function createPart(position)
+        local seekLightNode = Instance.new("Part")
+        seekLightNode.Size = Vector3.one
+        seekLightNode.Transparency = 1
+        seekLightNode.Parent = featureState.SeekNodesFolder
+        seekLightNode.Anchored = true
+        seekLightNode.Position = position
+        seekLightNode.CanCollide = false
+        seekLightNode.Name = "SeekLightNode"
 
-        local val250 = val249 or seekLightNode2
-        val249 = seekLightNode2
-        local beam2 = Instance.new("Beam")
+        local lastPart = previousPart or seekLightNode
+        previousPart = seekLightNode
+        local beam = Instance.new("Beam")
 
-        local value96 = rawget(toggles, "ShowEyestalkPathColor")
+        local value = rawget(toggles, "ShowEyestalkPathColor")
             and options.ShowEyestalkPathColor.Value
           or Color3.fromRGB(0, 255, 0)
 
-        beam2.Color = ColorSequence.new({
-          ColorSequenceKeypoint.new(0, value96), ColorSequenceKeypoint.new(1, value96), })
+        beam.Color = ColorSequence.new({
+          ColorSequenceKeypoint.new(0, value), ColorSequenceKeypoint.new(1, value), })
 
-        beam2.FaceCamera = true
-        beam2.Width0 = 0.2
-        beam2.Width1 = 0.2
-        beam2.Brightness = 10
-        beam2.LightInfluence = 0
-        beam2.LightEmission = 0
-        beam2.Enabled = true
+        beam.FaceCamera = true
+        beam.Width0 = 0.2
+        beam.Width1 = 0.2
+        beam.Brightness = 10
+        beam.LightInfluence = 0
+        beam.LightEmission = 0
+        beam.Enabled = true
 
-        local value97 = rawget(toggles, "ShowEyestalkPathToggle")
+        local pathToggle = rawget(toggles, "ShowEyestalkPathToggle")
             and toggles.ShowEyestalkPathToggle.Value and 0
           or 1
 
-        beam2.Transparency = NumberSequence.new({
-          NumberSequenceKeypoint.new(0, value97), NumberSequenceKeypoint.new(1, value97), })
+        beam.Transparency = NumberSequence.new({
+          NumberSequenceKeypoint.new(0, pathToggle), NumberSequenceKeypoint.new(1, pathToggle), })
 
-        beam2.Parent = val85.SeekNodesFolder
+        beam.Parent = featureState.SeekNodesFolder
 
-        local instance7 = Instance.new("Attachment", seekLightNode2)
-        local instance8 = Instance.new("Attachment", val250)
+        local instance = Instance.new("Attachment", seekLightNode)
+        local instance2 = Instance.new("Attachment", lastPart)
 
-        beam2.Attachment0 = instance7
-        beam2.Attachment1 = instance8
+        beam.Attachment0 = instance
+        beam.Attachment1 = instance2
 
-        table.insert(val114.EyestalkHighlights, beam2)
+        table.insert(worldObjects.EyestalkHighlights, beam)
       end
 
-      child8:WaitForChild("RoomEntrance", 9000000000)
-      child8:WaitForChild("RoomExit", 9000000000)
+      child:WaitForChild("RoomEntrance", 9000000000)
+      child:WaitForChild("RoomExit", 9000000000)
 
-      while not child8:GetAttribute("PathFound") do
+      while not child:GetAttribute("PathFound") do
         if rawget(toggles, "ShowEyestalkPathToggle") and toggles.ShowEyestalkPathToggle.Value then
-          local path2 = pathfindingService:CreatePath({
+          local path = pathfindingService:CreatePath({
             AgentCanJump = false, AgentCanClimb = false, WaypointSpacing = 2, AgentRadius = 1, AgentHeight = 1, })
 
-          local v433, success21 = pcall(
-            path2.ComputeAsync, path2, humanoidRootPart.Position, child8.RoomExit.Position
+          local success, result = pcall(
+            path.ComputeAsync, path, humanoidRootPart.Position, child.RoomExit.Position
           )
 
-          if success21 then
+          if result then
             break
           end
 
-          if path2.Status == Enum.PathStatus.Success then
-            child8:SetAttribute("PathFound", true)
+          if path.Status == Enum.PathStatus.Success then
+            child:SetAttribute("PathFound", true)
 
-            for v435, v436 in path2:GetWaypoints() do
-              createPart(v436.Position)
+            for _, waypoint in path:GetWaypoints() do
+              createPart(waypoint.Position)
               task.wait()
             end
 
@@ -11341,128 +11480,113 @@ if currentRooms then
   end)
 end
 
-local function helper69()
-  local gameData3 = replicatedStorage:FindFirstChild("GameData")
+local function watchFloorValue()
+  local gameData2 = replicatedStorage:FindFirstChild("GameData")
 
-  if gameData3 then
-    local floor4 = gameData3:FindFirstChild("Floor")
+  if gameData2 then
+    local floor = gameData2:FindFirstChild("Floor")
 
-    if floor4 then
-      _FloorConnection = floor4:GetPropertyChangedSignal("Value"):Connect(helper64)
-      helper64()
+    if floor then
+      _FloorConnection = floor:GetPropertyChangedSignal("Value"):Connect(updateFloor)
+      updateFloor()
       return
     end
 
-    local connect23 = gameData3.ChildAdded:Connect(function(child9)
-      if child9.Name == "Floor" then
+    local connection = gameData2.ChildAdded:Connect(function(child)
+      if child.Name == "Floor" then
         if connect23 then
           connect23:Disconnect()
         end
 
-        helper69()
+        watchFloorValue()
       end
     end)
 
-    helper64()
+    updateFloor()
     return
   end
 
-  local connect24 = replicatedStorage.ChildAdded:Connect(function(child10)
-    if child10.Name == "GameData" then
+  local connection = replicatedStorage.ChildAdded:Connect(function(child)
+    if child.Name == "GameData" then
       if connect24 then
         connect24:Disconnect()
       end
 
-      helper69()
+      watchFloorValue()
     end
   end)
 
-  helper64()
+  updateFloor()
 end
 
-helper69()
 
-Groupboxes.MinesLadder = element3.Mines:AddLeftGroupbox("Ladders")
-Groupboxes.MinesLadder:AddToggle("LaddersESP", { Text = "Ladders", Default = false })
-
-toggles.LaddersESP:AddColorPicker("LaddersESPColor", {
-  Text = "Ladders", Default = Color3.fromRGB(255, 255, 0), })
-
-Groupboxes.MinesLadder:AddToggle("LaddersTracers", { Text = "Ladders Tracers", Default = false })
-
-toggles.LaddersTracers:OnChanged(function(p147)
-  if p147 and not toggles.LaddersESP.Value then
+function Handlers.LaddersTracersChanged(value)
+  if value and not toggles.LaddersESP.Value then
     toggles.LaddersTracers:SetValue(false)
     return
   end
 
-  for index65, value98 in ipairs(ESPCategories.Ladders) do
-    local val251 = GetESPTarget(value98, "Ladders")
+  for _, ladder in ipairs(ESPCategories.Ladders) do
+    local target = GetESPTarget(ladder, "Ladders")
 
-    if val251 then
-      loader:SetTracersEnabled(val251, p147)
+    if target then
+      loader:SetTracersEnabled(target, value)
     end
   end
-end)
+end
 
-toggles.LaddersESP:OnChanged(function(p148)
-  if p148 then
-    for index66, value99 in ipairs(ESPCategories.Ladders) do
-      helper55(value99, "Ladders", "Ladder")
+
+function Handlers.LaddersESPChanged(value)
+  if value then
+    for _, ladder in ipairs(ESPCategories.Ladders) do
+      addCategoryESP(ladder, "Ladders", "Ladder")
     end
   else
-    iterate4("Ladders")
+    removeCategoryESP("Ladders")
   end
-end)
+end
 
-options.LaddersESPColor:OnChanged(function(p149)
-  for index67, value100 in ipairs(ESPCategories.Ladders) do
-    loader:UpdateObjectColor(GetESPTarget(value100, "Ladders"), p149)
+
+function Handlers.LaddersESPColorChanged(value)
+  for _, ladder in ipairs(ESPCategories.Ladders) do
+    loader:UpdateObjectColor(GetESPTarget(ladder, "Ladders"), value)
   end
-end)
+end
 
-Groupboxes.MinesAnticheat = element3.Mines:AddLeftGroupbox("Anticheat")
 
-Groupboxes.MinesAnticheat:AddToggle("DisableAnticheat", {
-  Text = "Anticheat Bypass", Default = false, Tooltip = "Completely disables the anticheat, after interacting with a ladder.", })
-
-toggles.DisableAnticheat:OnChanged(function(p150)
-  if val85.AnticheatDisabled == true and not p150 then
-    remotesFolder2.ClimbLadder:FireServer()
-    val85.AnticheatDisabled = false
+function Handlers.DisableAnticheatChanged(value)
+  if featureState.AnticheatDisabled == true and not value then
+    remotesFolder.ClimbLadder:FireServer()
+    featureState.AnticheatDisabled = false
   end
-end)
+end
 
-Groupboxes.MinesAnticheat:AddDivider()
 
-Groupboxes.MinesAnticheat:AddToggle("RemoveFigureMines", {
-  Text = "Delete Figure", Default = false, Tooltip = "Removes Figure, however this is inconsistent", DisabledTooltip = "Your executor doesn't support this feature :(", })
+function Handlers.RemoveFigureMinesChanged(value)
+  if value and Executor.isnetworkowner and workspace:FindFirstChild("Figure") then
+    local floorName = detectFloor()
 
-toggles.RemoveFigureMines:OnChanged(function(p151)
-  if p151 and Executor.isnetworkowner and workspace:FindFirstChild("Figure") then
-    local val252 = helper11()
+    for _, entity in ipairs(worldObjects.Entities) do
+      if entity.Name == "Figure" or entity.Name == "FigureRig"
+        or entity.Name == "FigureRagdoll" then
+        if floorName == "Mines" then
+          for _, descendant in entity:GetDescendants() do
+            local part = descendant
 
-    for index68, value101 in ipairs(val114.Entities) do
-      if value101.Name == "Figure" or value101.Name == "FigureRig"
-        or value101.Name == "FigureRagdoll" then
-        if val252 == "Mines" then
-          for v439, v440 in value101:GetDescendants() do
-            local element34 = v440
-
-            if v440:IsA("BasePart")
-              and pcall(function() return Executor.isnetworkowner(element34) end) then
-              element34.Position = Vector3.new(-49999, -49999, -49999)
+            if descendant:IsA("BasePart")
+              and pcall(function() return Executor.isnetworkowner(part) end) then
+              part.Position = Vector3.new(-49999, -49999, -49999)
             end
           end
-        elseif val252 == "OldHotel" or val252 == "Fools" then
-          for v442, v443 in value101:GetDescendants() do
-            local element35 = v443
+        elseif floorName == "OldHotel" or floorName == "Fools" then
+          for _, descendant in entity:GetDescendants() do
+            local part = descendant
 
-            if v443:IsA("BasePart") then
-              v443.CanCollide = false
+            if descendant:IsA("BasePart") then
+              descendant.CanCollide = false
 
-              if pcall(function() return Executor.isnetworkowner(element35) end) then
-                element35.Position = Vector3.new(
+              if pcall(function() return Executor.isnetworkowner(part) end) then
+                part.Position = Vector3.new(
                   math.random(-29999, 29999), math.random(-29999, 29999), math.random(-29999, 29999)
                 )
               end
@@ -11473,197 +11597,183 @@ toggles.RemoveFigureMines:OnChanged(function(p151)
     end
   end
 
-  if p151 then
-    local figure2 = workspace:FindFirstChild("Figure")
+  if value then
+    local figure = workspace:FindFirstChild("Figure")
 
-    if figure2 then
-      for v445, v446 in figure2:GetDescendants() do
-        if v446:IsA("BasePart") then
-          v446.CanCollide = false
+    if figure then
+      for _, descendant in figure:GetDescendants() do
+        if descendant:IsA("BasePart") then
+          descendant.CanCollide = false
         end
       end
     end
   end
-end)
+end
 
-function iterate7(val253, p153, val254)
-  local val255 = val254 and 0 or 1
+
+function setPathTransparency(beams, _, visible)
+  local transparency = visible and 0 or 1
 
   local numberSequence = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, val255), NumberSequenceKeypoint.new(1, val255), })
+    NumberSequenceKeypoint.new(0, transparency), NumberSequenceKeypoint.new(1, transparency), })
 
-  for index69, value102 in ipairs(val253) do
-    value102.Transparency = numberSequence
+  for _, beam in ipairs(beams) do
+    beam.Transparency = numberSequence
   end
 end
 
-function iterate8(val256, val257)
+function setPathColor(beams, color)
   local colorSequence = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, val257), ColorSequenceKeypoint.new(1, val257), })
+    ColorSequenceKeypoint.new(0, color), ColorSequenceKeypoint.new(1, color), })
 
-  for index70, value103 in ipairs(val256) do
-    value103.Color = colorSequence
+  for _, beam in ipairs(beams) do
+    beam.Color = colorSequence
   end
 end
 
-Groupboxes.MinesAutomation = element3.Mines:AddRightGroupbox("Automation")
 
-Groupboxes.MinesAutomation:AddToggle("AutoSteerMinecart", {
-  Text = "Auto Minecart", Default = false, Tooltip = "Automatically completes the minecart section of the seek chase", })
-
-Groupboxes.MinesAutomation:AddSlider("AutoSteerMinecartTurnDistance", {
-  Text = "Turn Distance", Min = 20, Max = 40, Default = 30, Rounding = 0, })
-
-Groupboxes.MinesAutomation:AddSlider("AutoSteerMinecartDuckDistance", {
-  Text = "Crouch Distance", Min = 20, Max = 40, Default = 30, Rounding = 0, })
-
-Groupboxes.MinesAutomation:AddToggle("AutoSolveAnchors", {
-  Text = "Auto Solve Anchors", Default = false, Tooltip = "Automatically enters the correct code into anchors when you are near them.", })
-
-Groupboxes.MinesAutomation:AddToggle("MinecartTeleport", {
-  Text = "Minecart Teleport", Default = false, Tooltip = "Teleports your minecart to complete the seek chase", })
-
-toggles.MinecartTeleport:OnChanged(function(p157)
+function Handlers.MinecartTeleportChanged(value)
   if not MainHook then
     return
   end
 
-  if p157 then
-    local findFirstChild12 = game:FindFirstChild("MinecartPos", true)
+  if value then
+    local findFirstChild = game:FindFirstChild("MinecartPos", true)
 
-    if not findFirstChild12 then
+    if not findFirstChild then
       library:Notify({
         Title = "Minecart Teleport", Description = "Minecart chase is not active yet.", Time = 3, })
 
       return
     end
 
-    local val258 = restorefunction or restore_function
+    local restorefunction = restorefunction or restore_function
 
-    local element36 = {
-      DecodeHook = nil, Decode = nil, MinecartPos = findFirstChild12, LatestRoom = tonumber(tostring(element2.Value)) or 0, LatestRoomConn = nil, GetDoor = nil, RestoreDecode = val258, }
+    local minecartState = {
+      DecodeHook = nil, Decode = nil, MinecartPos = findFirstChild, LatestRoom = tonumber(tostring(latestRoomValue.Value)) or 0, LatestRoomConn = nil, GetDoor = nil, RestoreDecode = restorefunction, }
 
-    pcall(function() element36.Decode = require(replicatedStorage.NodeObject.MinecartNodes).Decode end)
+    pcall(function() minecartState.Decode = require(replicatedStorage.NodeObject.MinecartNodes).Decode end)
 
-    function element36.GetDoor()
-      local findFirstChild13 = currentRooms
-        and currentRooms:FindFirstChild(tostring(element36.LatestRoom))
+    function minecartState.GetDoor()
+      local findFirstChild2 = currentRooms
+        and currentRooms:FindFirstChild(tostring(minecartState.LatestRoom))
 
-      return findFirstChild13 and findFirstChild13:FindFirstChild("Door")
+      return findFirstChild2 and findFirstChild2:FindFirstChild("Door")
     end
 
-    element36.LatestRoomConn = element2:GetPropertyChangedSignal("Value"):Connect(function()
+    minecartState.LatestRoomConn = latestRoomValue:GetPropertyChangedSignal("Value"):Connect(function()
       task.wait()
-      element36.LatestRoom = tonumber(tostring(element2.Value)) or 0
+      minecartState.LatestRoom = tonumber(tostring(latestRoomValue.Value)) or 0
     end)
 
-    val85.MinecartTeleportState = element36
+    featureState.MinecartTeleportState = minecartState
   else
-    local minecartTeleportState2 = val85.MinecartTeleportState
+    local minecartTeleportState = featureState.MinecartTeleportState
 
-    if minecartTeleportState2 then
-      if minecartTeleportState2.LatestRoomConn then
-        pcall(function() minecartTeleportState2.LatestRoomConn:Disconnect() end)
+    if minecartTeleportState then
+      if minecartTeleportState.LatestRoomConn then
+        pcall(function() minecartTeleportState.LatestRoomConn:Disconnect() end)
       end
 
-      if minecartTeleportState2.DecodeHook and minecartTeleportState2.RestoreDecode then
-        pcall(function() minecartTeleportState2.RestoreDecode(minecartTeleportState2.Decode) end)
+      if minecartTeleportState.DecodeHook and minecartTeleportState.RestoreDecode then
+        pcall(function() minecartTeleportState.RestoreDecode(minecartTeleportState.Decode) end)
       end
 
-      val85.MinecartTeleportState = nil
+      featureState.MinecartTeleportState = nil
     end
   end
-end)
+end
 
-Groupboxes.MinesAutomation:AddButton({
-  Text = "Complete Door 200", Tooltip = "Automatically teleports to and interacts with each water pump to complete the Dam Seek", Callback = function()
-    if not character then
-      library:Notify({ Title = "Error", Description = "Character not found", Time = 3 })
-      return
+
+function Handlers.CompleteDoor200()
+  if not character then
+    library:Notify({ Title = "Error", Description = "Character not found", Time = 3 })
+    return
+  end
+
+  library:Notify({
+    Title = "Door 200", Description = "Starting water pump automation...", Time = 3, })
+
+  local cutsceneActive = false
+
+  local connection = remotesFolder and remotesFolder:FindFirstChild("Cutscene") and remotesFolder.Cutscene.OnClientEvent:Connect(function()
+    cutsceneActive = true
+    task.wait(7)
+    cutsceneActive = false
+  end)
+
+  local function findLowestWaterPump()
+    local lowest = { Height = -69420, Object = nil }
+    local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
+
+    if not currentRooms2 then
+      return nil
     end
 
-    library:Notify({
-      Title = "Door 200", Description = "Starting water pump automation...", Time = 3, })
+    for _, child in currentRooms2:GetChildren() do
+      local waterPump = child:FindFirstChild("WaterPump")
 
-    local val259 = false
+      if waterPump and waterPump:GetAttribute("CH_Completed") ~= true then
+        local basePart = waterPump:FindFirstChildWhichIsA("BasePart")
 
-    local connect25 = remotesFolder2 and remotesFolder2:FindFirstChild("Cutscene") and remotesFolder2.Cutscene.OnClientEvent:Connect(function()
-      val259 = true
-      task.wait(7)
-      val259 = false
-    end)
-
-    local function helper70()
-      local element37 = { Height = -69420, Object = nil }
-      local currentRooms8 = workspace:FindFirstChild("CurrentRooms")
-
-      if not currentRooms8 then
-        return nil
-      end
-
-      for v452, v453 in currentRooms8:GetChildren() do
-        local waterPump = v453:FindFirstChild("WaterPump")
-
-        if waterPump and waterPump:GetAttribute("CH_Completed") ~= true then
-          local basePart3 = waterPump:FindFirstChildWhichIsA("BasePart")
-
-          if basePart3 and basePart3.Position.Y > element37.Height then
-            element37.Object = waterPump
-            element37.Height = basePart3.Position.Y
-          end
-        end
-      end
-
-      return element37.Object
-    end
-
-    local function waitLoop3(val260)
-      local count5 = 0
-
-      while task.wait(0.1) do
-        count5 = count5 + 1
-
-        if count5 > 600 then
-          break
-        end
-
-        if not val259 then
-          if character then
-            character:PivotTo(val260:GetPivot())
-          end
-
-          local findFirstChild14 = val260:FindFirstChild("ValvePrompt", true)
-
-          if findFirstChild14 then
-            Functions.ForceFirePrompt(findFirstChild14)
-          end
-
-          if val260:GetAttribute("CH_Completed") then
-            break
-          end
+        if basePart and basePart.Position.Y > lowest.Height then
+          lowest.Object = waterPump
+          lowest.Height = basePart.Position.Y
         end
       end
     end
+
+    return lowest.Object
+  end
+
+  local function waitLoop2(limit)
+    local count = 0
 
     while task.wait(0.1) do
-      local val261 = helper70()
+      count = count + 1
 
-      if val261 then
-        waitLoop3(val261)
-      else
+      if count > 600 then
         break
       end
+
+      if not cutsceneActive then
+        if character then
+          character:PivotTo(limit:GetPivot())
+        end
+
+        local findFirstChild = limit:FindFirstChild("ValvePrompt", true)
+
+        if findFirstChild then
+          Functions.ForceFirePrompt(findFirstChild)
+        end
+
+        if limit:GetAttribute("CH_Completed") then
+          break
+        end
+      end
     end
+  end
 
-    if connect25 then
-      connect25:Disconnect()
+  while task.wait(0.1) do
+    local waterPump = findLowestWaterPump()
+
+    if waterPump then
+      waitLoop2(waterPump)
+    else
+      break
     end
+  end
 
-    library:Notify({
-      Title = "Door 200", Description = "Finished water pump automation", Time = 4, })
-  end, })
+  if connection then
+    connection:Disconnect()
+  end
 
-toggles.AutoSolveAnchors:OnChanged(function()
+  library:Notify({
+    Title = "Door 200", Description = "Finished water pump automation", Time = 4, })
+end
+
+
+function Handlers.AutoSolveAnchorsChanged()
   if AutoSolveAnchorsConnection then
     AutoSolveAnchorsConnection:Disconnect()
     AutoSolveAnchorsConnection = nil
@@ -11673,7 +11783,7 @@ toggles.AutoSolveAnchors:OnChanged(function()
     return
   end
 
-  local val262 = 0
+  local timer = 0
 
   AutoSolveAnchorsConnection = runService.Heartbeat:Connect(function()
     if _Unloading then
@@ -11684,157 +11794,144 @@ toggles.AutoSolveAnchors:OnChanged(function()
       return
     end
 
-    local val263 = os.clock()
+    local now = os.clock()
 
-    if val263 - val262 < 0.1 then
+    if now - timer < 0.1 then
       return
     end
 
-    val262 = val263
-    local playerGui6 = localPlayer2:FindFirstChildOfClass("PlayerGui")
+    timer = now
+    local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
 
-    if not playerGui6 then
+    if not playerGui2 then
       return
     end
 
-    local findFirstChild15 = playerGui6:FindFirstChild("AnchorHintFrame", true)
+    local findFirstChild = playerGui2:FindFirstChild("AnchorHintFrame", true)
 
-    if not findFirstChild15 then
+    if not findFirstChild then
       return
     end
 
-    local anchorCode = findFirstChild15:FindFirstChild("AnchorCode")
-    local code2 = findFirstChild15:FindFirstChild("Code")
+    local anchorCode = findFirstChild:FindFirstChild("AnchorCode")
+    local code = findFirstChild:FindFirstChild("Code")
 
-    if not anchorCode or not code2 then
+    if not anchorCode or not code then
       return
     end
 
-    local strVal6 = tostring(anchorCode.Text or "")
+    local text = tostring(anchorCode.Text or "")
 
-    if strVal6 == "" then
+    if text == "" then
       return
     end
 
-    local currentRooms9 = workspace:FindFirstChild("CurrentRooms")
+    local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-    if not currentRooms9 then
+    if not currentRooms2 then
       return
     end
 
-    for v458, v459 in currentRooms9:GetDescendants() do
-      if v459.Name ~= "MinesAnchor" or not v459:IsA("Model") then
+    for _, descendant in currentRooms2:GetDescendants() do
+      if descendant.Name ~= "MinesAnchor" or not descendant:IsA("Model") then
         continue
       end
 
-      if v459:GetAttribute("Activated") then
+      if descendant:GetAttribute("Activated") then
         continue
       end
 
-      local sign2 = v459:FindFirstChild("Sign")
+      local sign = descendant:FindFirstChild("Sign")
 
-      if not sign2 then
+      if not sign then
         continue
       end
 
-      local textLabel4 = sign2:FindFirstChildOfClass("TextLabel")
+      local textLabel = sign:FindFirstChildOfClass("TextLabel")
 
-      if not textLabel4 or textLabel4.Text ~= strVal6 then
+      if not textLabel or textLabel.Text ~= text then
         continue
       end
 
-      local primaryPart2 = v459.PrimaryPart
+      local primaryPart = descendant.PrimaryPart
 
-      if not primaryPart2 then
+      if not primaryPart then
         continue
       end
 
-      local maxActivationDistance2 = v459:FindFirstChild("ActivateEventPrompt")
-          and v459.ActivateEventPrompt.MaxActivationDistance
+      local maxActivationDistance = descendant:FindFirstChild("ActivateEventPrompt")
+          and descendant.ActivateEventPrompt.MaxActivationDistance
         or 20
 
       if humanoidRootPart
         and humanoidRootPart.Position
-        and (humanoidRootPart.Position - primaryPart2.Position).Magnitude
-          <= maxActivationDistance2 then
-        local anchorRemote = v459:FindFirstChild("AnchorRemote")
+        and (humanoidRootPart.Position - primaryPart.Position).Magnitude
+          <= maxActivationDistance then
+        local anchorRemote = descendant:FindFirstChild("AnchorRemote")
 
         if anchorRemote then
-          anchorRemote:InvokeServer(code2.Text)
+          anchorRemote:InvokeServer(code.Text)
         end
 
         break
       end
     end
   end)
-end)
+end
 
-Groupboxes.MinesVisuals = element3.Mines:AddRightGroupbox("Visuals")
 
-Groupboxes.MinesVisuals:AddToggle("ShowSeekPathToggle", {
-  Text = "Show Seek Path", Default = false, Tooltip = "Shows you the correct path in the seek chase", })
-
-toggles.ShowSeekPathToggle:AddColorPicker("ShowSeekPathColor", {
-  Text = "Seek Path", Default = Color3.fromRGB(0, 255, 0), Transparency = 0, })
-
-toggles.ShowSeekPathToggle:OnChanged(function(p159)
-  iterate7(val114.SeekHighlights, "ShowSeekPathColor", p159)
-end)
-
-options.ShowSeekPathColor:OnChanged(function(p160) iterate8(val114.SeekHighlights, p160) end)
-
-toggles.AutoSteerMinecart:OnChanged(function()
+function Handlers.AutoSteerMinecartChanged()
   if AutoMinecartConnection then
     AutoMinecartConnection:Disconnect()
     AutoMinecartConnection = nil
   end
 
-  if val85.OriginalGetMoveVector then
+  if featureState.OriginalGetMoveVector then
     pcall(function()
-      local getControls = require(localPlayer2.PlayerScripts.PlayerModule):GetControls()
-      getControls.GetMoveVector = val85.OriginalGetMoveVector
+      local getControls = require(localPlayer.PlayerScripts.PlayerModule):GetControls()
+      getControls.GetMoveVector = featureState.OriginalGetMoveVector
     end)
 
-    val85.OriginalGetMoveVector = nil
+    featureState.OriginalGetMoveVector = nil
   end
 
   if not toggles.AutoSteerMinecart.Value then
     return
   end
 
-  local playerGui7 = localPlayer2:FindFirstChildOfClass("PlayerGui")
-  local mainUI5 = playerGui7 and playerGui7:FindFirstChild("MainUI")
-  local initiator4 = mainUI5 and mainUI5:FindFirstChild("Initiator")
-  local mainGame4 = initiator4 and initiator4:FindFirstChild("Main_Game")
+  local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
+  local mainUI = playerGui2 and playerGui2:FindFirstChild("MainUI")
+  local initiator = mainUI and mainUI:FindFirstChild("Initiator")
+  local mainGame = initiator and initiator:FindFirstChild("Main_Game")
 
-  if not mainGame4 then
+  if not mainGame then
     return
   end
 
-  local val264, success22 = pcall(require, mainGame4)
+  local success, result3 = pcall(require, mainGame)
 
-  if not val264 or not success22 then
+  if not success or not result3 then
     return
   end
 
-  local val265, success23 = pcall(function()
-    return require(localPlayer2.PlayerScripts.PlayerModule):GetControls()
+  local success2, result4 = pcall(function()
+    return require(localPlayer.PlayerScripts.PlayerModule):GetControls()
   end)
 
-  local element38
+  local result
 
-  if val265 and success23 then
-    element38 = success23
+  if success2 and result4 then
+    result = result4
   else
     return
   end
 
-  local getMoveVector = element38.GetMoveVector
-  val85.OriginalGetMoveVector = getMoveVector
+  local getMoveVector = result.GetMoveVector
+  featureState.OriginalGetMoveVector = getMoveVector
 
-  function element38.GetMoveVector(...)
+  function result.GetMoveVector(...)
     if toggles.AutoSteerMinecart.Value and CurrentFloor == "Mines" then
-      local nearestTurnNode = val85.NearestTurnNode
+      local nearestTurnNode = featureState.NearestTurnNode
 
       if nearestTurnNode and Functions.GetMinecart() then
         local turn = nearestTurnNode:GetAttribute("Turn")
@@ -11847,8 +11944,8 @@ toggles.AutoSteerMinecart:OnChanged(function()
     return getMoveVector(...)
   end
 
-  val85.AutoMinecartDucked = false
-  val85.LastDuck = tick()
+  featureState.AutoMinecartDucked = false
+  featureState.LastDuck = tick()
 
   AutoMinecartConnection = runService.Heartbeat:Connect(function()
     if _Unloading then
@@ -11856,39 +11953,32 @@ toggles.AutoSteerMinecart:OnChanged(function()
     end
 
     if not toggles.AutoSteerMinecart.Value or not Functions.GetMinecart()
-      or tick() - val85.LastDuck < 0.1 then
+      or tick() - featureState.LastDuck < 0.1 then
       return
     end
 
-    val85.NearestTurnNode = Functions.GetNearestTurnNode()
+    featureState.NearestTurnNode = Functions.GetNearestTurnNode()
 
-    if not val85.AutoMinecartDucked and Functions.GetNearestDuckBoard() then
-      success22.crouch(true)
-      val85.AutoMinecartDucked = true
-    elseif not Functions.GetNearestDuckBoard() and val85.AutoMinecartDucked then
-      success22.crouch(false)
-      val85.AutoMinecartDucked = false
+    if not featureState.AutoMinecartDucked and Functions.GetNearestDuckBoard() then
+      result3.crouch(true)
+      featureState.AutoMinecartDucked = true
+    elseif not Functions.GetNearestDuckBoard() and featureState.AutoMinecartDucked then
+      result3.crouch(false)
+      featureState.AutoMinecartDucked = false
     end
 
-    if success22 then
-      success22.fovtarget = options.FieldOfView.Value
+    if result3 then
+      result3.fovtarget = options.FieldOfView.Value
     else
       currentCamera.FieldOfView = options.FieldOfView.Value
     end
 
-    val85.LastDuck = tick()
+    featureState.LastDuck = tick()
   end)
-end)
+end
 
-Groupboxes.Visuals_Camera = element3.Visuals:AddRightGroupbox("Camera")
 
-Groupboxes.Visuals_Camera:AddToggle("Fullbright", {
-  Text = "Fullbright", Default = false, Tooltip = "Makes your game very bright, and removes shadows", })
-
-Groupboxes.Visuals_Camera:AddSlider("FullbrightBrightness", {
-  Text = "Brightness Level", Default = 3, Min = 1, Max = 10, Rounding = 1, Compact = true, })
-
-local function helper71()
+local function enableFullbright()
   Lighting.Ambient = Color3.new(1, 1, 1)
   Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
   Lighting.GlobalShadows = false
@@ -11912,7 +12002,7 @@ local function helper71()
   end
 end
 
-local function helper72()
+local function disableFullbright()
   if not fbDefaults then
     return
   end
@@ -11938,7 +12028,7 @@ local function helper72()
   end
 end
 
-toggles.Fullbright:OnChanged(function(p161)
+function Handlers.FullbrightChanged(value)
   if _FullbrightConnection then
     _FullbrightConnection:Disconnect()
     _FullbrightConnection = nil
@@ -11949,7 +12039,7 @@ toggles.Fullbright:OnChanged(function(p161)
     _FullbrightRoomConn = nil
   end
 
-  if p161 then
+  if value then
     fbDefaults = {
       Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient, GlobalShadows = Lighting.GlobalShadows, Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime, FogColor = Lighting.FogColor, FogEnd = Lighting.FogEnd, ColorShift_Top = Lighting.ColorShift_Top, ColorShift_Bottom = Lighting.ColorShift_Bottom, ExposureCompensation = Lighting.ExposureCompensation, }
 
@@ -11960,153 +12050,88 @@ toggles.Fullbright:OnChanged(function(p161)
         Haze = fbAtmos.Haze, Density = fbAtmos.Density, Offset = fbAtmos.Offset, Color = fbAtmos.Color, Decay = fbAtmos.Decay, Glare = fbAtmos.Glare, }
     end
 
-    helper71()
-    local val266 = 0
+    enableFullbright()
+    local timer = 0
 
     _FullbrightConnection = runService.Heartbeat:Connect(function()
       if _Unloading then
         return
       end
 
-      local val267 = tick()
+      local now = tick()
 
-      if val267 - val266 < 0.3 then
+      if now - timer < 0.3 then
         return
       end
 
-      val266 = val267
-      helper71()
+      timer = now
+      enableFullbright()
     end)
 
-    local currentRooms10 = workspace:FindFirstChild("CurrentRooms")
+    local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-    if currentRooms10 then
-      _FullbrightRoomConn = currentRooms10.ChildAdded:Connect(function() helper71() end)
+    if currentRooms2 then
+      _FullbrightRoomConn = currentRooms2.ChildAdded:Connect(function() enableFullbright() end)
     end
   else
-    helper72()
+    disableFullbright()
     fbDefaults = nil
     fbAtmosDefaults = nil
   end
-end)
+end
 
-Groupboxes.Visuals_Camera:AddToggle("AmbientToggle", {
-  Text = "Ambient", Default = false, Tooltip = "Changes the lighting color to the specified value", })
 
-toggles.AmbientToggle:AddColorPicker("AmbientColor", {
-  Text = "Ambient", Default = Color3.fromRGB(255, 255, 255), Transparency = 0, })
+function Handlers.AmbientToggleChanged(value)
+  local findFirstChild = currentRooms
+    and currentRooms:FindFirstChild(tostring(localPlayer:GetAttribute("CurrentRoom")))
 
-toggles.AmbientToggle:OnChanged(function(p162)
-  local findFirstChild16 = currentRooms
-    and currentRooms:FindFirstChild(tostring(localPlayer2:GetAttribute("CurrentRoom")))
-
-  local ambient = findFirstChild16 and findFirstChild16:GetAttribute("Ambient")
+  local ambient = findFirstChild and findFirstChild:GetAttribute("Ambient")
 
   TweenService:Create(Lighting, TweenInfo.new(0.2, Enum.EasingStyle.Exponential), {
-    Ambient = p162 and options.AmbientColor.Value or ambient or Color3.fromRGB(255, 255, 255), }):Play()
-end)
+    Ambient = value and options.AmbientColor.Value or ambient or Color3.fromRGB(255, 255, 255), }):Play()
+end
 
-options.AmbientColor:OnChanged(function()
+
+function Handlers.AmbientColorChanged()
   if toggles.AmbientToggle and toggles.AmbientToggle.Value then
     TweenService:Create(Lighting, TweenInfo.new(0.2, Enum.EasingStyle.Exponential), {
       Ambient = options.AmbientColor.Value, }):Play()
   end
-end)
+end
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddSlider("FieldOfView", {
-  Text = "Field of View", Min = 70, Max = 120, Default = 70, Rounding = 0, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddToggle("ThirdPerson", {
-  Text = "Third Person", Default = false, Tooltip = "Puts your camera in a third person view", })
-
-toggles.ThirdPerson:AddKeyPicker("ThirdPersonKeybind", {
-  Text = "Third Person", Default = "V", Mode = "Toggle", SyncToggleState = true, })
-
-Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetX", {
-  Text = "X Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetY", {
-  Text = "Y Offset", Min = -10, Max = 10, Default = 0.5, Rounding = 1, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetZ", {
-  Text = "Z Offset", Min = -10, Max = 10, Default = 7.5, Rounding = 1, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddToggle("ThirdPersonWallCheck", {
-  Text = "Wall Check", Default = false, Tooltip = "Prevents third person camera from going through walls", })
-
-toggles.ThirdPerson:OnChanged(helper18)
-
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("ViewmodelOffsetToggle", {
-  Text = "Viewmodel Offset", Default = false, Tooltip = "Changes the offset of your viewmodel while holding an item.", })
-
-Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetX", {
-  Text = "X Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetY", {
-  Text = "Y Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetZ", {
-  Text = "Z Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddToggle("FreecamToggle", {
-  Text = "Freecam", Default = false, Tooltip = "Enables freecam with WASD movement and mouse look", })
-
-toggles.FreecamToggle:AddKeyPicker("FreecamKeybind", {
-  Text = "Freecam", Default = "Q", Mode = "Toggle", SyncToggleState = true, })
-
-Groupboxes.Visuals_Camera:AddSlider("FreecamSpeed", {
-  Text = "Freecam Speed", Min = 10, Max = 300, Default = 75, Rounding = 0, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("RemoveCameraBobbing", {
-  Text = "Remove Camera Bobbing", Default = false, Tooltip = "Removes camera 'bobbing'", })
-
-Groupboxes.Visuals_Camera:AddToggle("RemoveCameraShake", {
-  Text = "Remove Camera Shake", Default = false, Tooltip = "Removes camera shake", })
-
-Groupboxes.Visuals_Camera:AddToggle("RemoveCameraFog", {
-  Text = "Remove Fog", Default = false, Tooltip = "Removes camera fog", })
-
-Groupboxes.Visuals_Camera:AddToggle("DisableFiredampEffect", {
-  Text = "Remove Firedamp Effect", Default = false, Tooltip = "Removes the firedamp fog/effect when inside a room", })
 
 FreecamConnection = nil
 
-local function helper73()
+local function stopFreecam()
   local freecamPart = workspace:FindFirstChild("FreecamPart")
 
   if freecamPart then
     freecamPart:Destroy()
   end
 
-  local humanoidRootPart8 = localPlayer2.Character
-    and localPlayer2.Character:FindFirstChild("HumanoidRootPart")
+  local humanoidRootPart2 = localPlayer.Character
+    and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 
-  if humanoidRootPart8 then
-    humanoidRootPart8.Anchored = false
+  if humanoidRootPart2 then
+    humanoidRootPart2.Anchored = false
   end
 
-  if localPlayer2:GetAttribute("fc_om") then
-    localPlayer2.CameraMinZoomDistance = localPlayer2:GetAttribute("fc_om")
+  if localPlayer:GetAttribute("fc_om") then
+    localPlayer.CameraMinZoomDistance = localPlayer:GetAttribute("fc_om")
   end
 
-  if localPlayer2:GetAttribute("fc_ox") then
-    localPlayer2.CameraMaxZoomDistance = localPlayer2:GetAttribute("fc_ox")
+  if localPlayer:GetAttribute("fc_ox") then
+    localPlayer.CameraMaxZoomDistance = localPlayer:GetAttribute("fc_ox")
   end
 end
 
-toggles.FreecamToggle:OnChanged(function(p163)
+function Handlers.FreecamToggleChanged(value)
   if FreecamConnection then
     FreecamConnection:Disconnect()
   end
 
-  if not p163 then
-    helper73()
+  if not value then
+    stopFreecam()
   else
     FreecamConnection = runService.RenderStepped:Connect(function(delta)
       if _Unloading then
@@ -12117,160 +12142,116 @@ toggles.FreecamToggle:OnChanged(function(p163)
         return
       end
 
-      local character12 = localPlayer2.Character
-      local humanoid12 = character12 and character12:FindFirstChildOfClass("Humanoid")
-      local humanoidRootPart9 = character12 and character12:FindFirstChild("HumanoidRootPart")
+      local character2 = localPlayer.Character
+      local humanoid2 = character2 and character2:FindFirstChildOfClass("Humanoid")
+      local humanoidRootPart2 = character2 and character2:FindFirstChild("HumanoidRootPart")
 
-      if humanoidRootPart9 and not humanoidRootPart9.Anchored then
-        humanoidRootPart9.Anchored = true
+      if humanoidRootPart2 and not humanoidRootPart2.Anchored then
+        humanoidRootPart2.Anchored = true
       end
 
       if not workspace:FindFirstChild("FreecamPart") then
-        local freecamPart2 = Instance.new("Part")
-        freecamPart2.Name = "FreecamPart"
-        freecamPart2.Size = Vector3.new(0.01, 0.01, 0.01)
-        freecamPart2.Transparency = 1
-        freecamPart2.CanCollide = false
-        freecamPart2.Anchored = true
-        freecamPart2.CFrame = currentCamera.CFrame
-        freecamPart2.Parent = workspace
+        local freecamPart = Instance.new("Part")
+        freecamPart.Name = "FreecamPart"
+        freecamPart.Size = Vector3.new(0.01, 0.01, 0.01)
+        freecamPart.Transparency = 1
+        freecamPart.CanCollide = false
+        freecamPart.Anchored = true
+        freecamPart.CFrame = currentCamera.CFrame
+        freecamPart.Parent = workspace
 
-        localPlayer2:SetAttribute("fc_om", localPlayer2.CameraMinZoomDistance)
-        localPlayer2:SetAttribute("fc_ox", localPlayer2.CameraMaxZoomDistance)
-        localPlayer2.CameraMinZoomDistance = 0
-        localPlayer2.CameraMaxZoomDistance = 0
+        localPlayer:SetAttribute("fc_om", localPlayer.CameraMinZoomDistance)
+        localPlayer:SetAttribute("fc_ox", localPlayer.CameraMaxZoomDistance)
+        localPlayer.CameraMinZoomDistance = 0
+        localPlayer.CameraMaxZoomDistance = 0
 
-        local val268, val269, v469 = currentCamera.CFrame:ToOrientation()
+        local pitch, yaw, _ = currentCamera.CFrame:ToOrientation()
 
-        localPlayer2:SetAttribute("fc_p", math.deg(val268))
-        localPlayer2:SetAttribute("fc_y", math.deg(val269))
+        localPlayer:SetAttribute("fc_p", math.deg(pitch))
+        localPlayer:SetAttribute("fc_y", math.deg(yaw))
       end
 
-      local freecamPart3 = workspace:FindFirstChild("FreecamPart")
-      local val270 = currentCamera
+      local freecamPart = workspace:FindFirstChild("FreecamPart")
+      local currentCamera2 = currentCamera
 
-      if freecamPart3 and val270 then
+      if freecamPart and currentCamera2 then
         local getMouseDelta = userInputService:GetMouseDelta()
         local keyboardEnabled = userInputService.KeyboardEnabled and 0.3 or 0.6
 
-        local val271 = (localPlayer2:GetAttribute("fc_p") or 0)
+        local pitch = (localPlayer:GetAttribute("fc_p") or 0)
           - getMouseDelta.Y * keyboardEnabled
 
-        local val272 = (localPlayer2:GetAttribute("fc_y") or 0)
+        local yaw = (localPlayer:GetAttribute("fc_y") or 0)
           - getMouseDelta.X * keyboardEnabled
 
-        val271 = math.max(-80, math.min(80, val271))
+        pitch = math.max(-80, math.min(80, pitch))
 
-        localPlayer2:SetAttribute("fc_p", val271)
-        localPlayer2:SetAttribute("fc_y", val272)
+        localPlayer:SetAttribute("fc_p", pitch)
+        localPlayer:SetAttribute("fc_y", yaw)
 
-        freecamPart3.CFrame = CFrame.new(freecamPart3.Position)
-          * CFrame.fromOrientation(math.rad(val271), math.rad(val272), 0)
+        freecamPart.CFrame = CFrame.new(freecamPart.Position)
+          * CFrame.fromOrientation(math.rad(pitch), math.rad(yaw), 0)
 
-        val270.CFrame = freecamPart3.CFrame
-        val270.Focus = val270.CFrame * CFrame.new(0, 0, -10)
+        currentCamera2.CFrame = freecamPart.CFrame
+        currentCamera2.Focus = currentCamera2.CFrame * CFrame.new(0, 0, -10)
 
-        if humanoid12 and humanoid12.MoveDirection.Magnitude > 0 then
-          local value105 = options.FreecamSpeed and options.FreecamSpeed.Value or 75
-          local vectorToObjectSpace = val270.CFrame:VectorToObjectSpace(humanoid12.MoveDirection)
+        if humanoid2 and humanoid2.MoveDirection.Magnitude > 0 then
+          local freecamSpeed = options.FreecamSpeed and options.FreecamSpeed.Value or 75
+          local vectorToObjectSpace = currentCamera2.CFrame:VectorToObjectSpace(humanoid2.MoveDirection)
 
-          local val273 = val270.CFrame.RightVector * vectorToObjectSpace.X
-            + val270.CFrame.LookVector * -vectorToObjectSpace.Z
+          local moveVector = currentCamera2.CFrame.RightVector * vectorToObjectSpace.X
+            + currentCamera2.CFrame.LookVector * -vectorToObjectSpace.Z
 
-          freecamPart3.Position = freecamPart3.Position + val273 * value105 * delta
+          freecamPart.Position = freecamPart.Position + moveVector * freecamSpeed * delta
         end
       end
     end)
   end
-end)
+end
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("NotifyOxygen", {
-  Text = "Oxygen Notifications", Default = false, Tooltip = "Shows a notification when your oxygen level changes", })
-
-Groupboxes.Visuals_Camera:AddToggle("NotifyHasteTime", {
-  Text = "Haste/Time Notifications", Default = false, Tooltip = "Shows a notification of the remaining time before Haste spawns", })
-
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("TransparentHidingSpotsToggle", {
-  Text = "Transparent Hiding Spots", Default = false, Tooltip = "Makes a hiding spot transparent when you enter it", })
-
-Groupboxes.Visuals_Camera:AddSlider("TransparentHidingSpotsSlider", {
-  Text = "Transparency", Min = 0, Max = 1, Default = 0.5, Rounding = 2, Compact = true, })
-
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("DisableJumpscares", {
-  Text = "Disable Jumpscares", Default = false, Tooltip = "Removes jumpscares from the chosen entities", })
-
-Groupboxes.Visuals_Camera:AddDropdown("JumpscaresList", {
-  Text = "Jumpscares To Disable", Values = { "Glitch", "Timothy", "Void", "Rush", "Ambush", "Screech", "Figure", "Seek" }, Multi = true, AllowNull = true, })
-
-Groupboxes.Visuals_Camera:AddDivider()
 
 CutsceneNames = {
   "Figure", "FigureEnd", "FigureHotelEnd", "FigureHotelFire", "SeekIntroFools", "SeekIntroHotel", "SeekIntroMines", "SeekIntroMines2", "SerewSeekDrain", "SewerSeekLower", "GrumbleNestEnd", "EyestalkIntro", }
 
-Groupboxes.Visuals_Camera:AddToggle("RemoveCutscenes", {
-  Text = "Remove Cutscenes", Default = false, Tooltip = "Removes cutscenes that aren't needed for progression", })
 
-toggles.RemoveCutscenes:OnChanged(function(p164)
-  local playerGui8 = localPlayer2:FindFirstChildOfClass("PlayerGui")
-  local mainUI6 = playerGui8 and playerGui8:FindFirstChild("MainUI")
-  local initiator5 = mainUI6 and mainUI6:FindFirstChild("Initiator")
-  local mainGame5 = initiator5 and initiator5:FindFirstChild("Main_Game")
-  local remoteListener2 = mainGame5 and mainGame5:FindFirstChild("RemoteListener")
+function Handlers.RemoveCutscenesChanged(value)
+  local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
+  local mainUI = playerGui2 and playerGui2:FindFirstChild("MainUI")
+  local initiator = mainUI and mainUI:FindFirstChild("Initiator")
+  local mainGame = initiator and initiator:FindFirstChild("Main_Game")
+  local remoteListener = mainGame and mainGame:FindFirstChild("RemoteListener")
 
-  if not remoteListener2 then
+  if not remoteListener then
     return
   end
 
-  local cutscenes = remoteListener2:FindFirstChild("Cutscenes")
+  local cutscenes = remoteListener:FindFirstChild("Cutscenes")
 
   if cutscenes then
-    for key13, value106 in pairs(cutscenes:GetChildren()) do
-      if TableFind(CutsceneNames, value106.Name) and value106:IsA("ModuleScript")
-        or TableFind(CutsceneNames, value106:GetAttribute("OriginalName"))
-          and value106:IsA("ModuleScript") then
-        value106.Name = p164 and value106.Name .. "_Disabled"
-          or value106:GetAttribute("OriginalName") or value106.Name
+    for _, child in pairs(cutscenes:GetChildren()) do
+      if TableFind(CutsceneNames, child.Name) and child:IsA("ModuleScript")
+        or TableFind(CutsceneNames, child:GetAttribute("OriginalName"))
+          and child:IsA("ModuleScript") then
+        child.Name = value and child.Name .. "_Disabled"
+          or child:GetAttribute("OriginalName") or child.Name
       end
     end
   end
 
-  local floorReplicated2 = replicatedStorage:FindFirstChild("FloorReplicated")
+  local floorReplicated = replicatedStorage:FindFirstChild("FloorReplicated")
 
-  if floorReplicated2 then
-    for key14, value107 in pairs(floorReplicated2:GetChildren()) do
-      if TableFind(CutsceneNames, value107.Name) and value107:IsA("ModuleScript")
-        or TableFind(CutsceneNames, value107:GetAttribute("OriginalName"))
-          and value107:IsA("ModuleScript") then
-        value107.Name = p164 and value107.Name .. "_Disabled"
-          or value107:GetAttribute("OriginalName") or value107.Name
+  if floorReplicated then
+    for _, child in pairs(floorReplicated:GetChildren()) do
+      if TableFind(CutsceneNames, child.Name) and child:IsA("ModuleScript")
+        or TableFind(CutsceneNames, child:GetAttribute("OriginalName"))
+          and child:IsA("ModuleScript") then
+        child.Name = value and child.Name .. "_Disabled"
+          or child:GetAttribute("OriginalName") or child.Name
       end
     end
   end
-end)
+end
 
-Groupboxes.Visuals_Settings:AddToggle("ESPRainbow", { Text = "Rainbow ESP", Default = false })
-Groupboxes.Visuals_Settings:AddDivider()
-
-Groupboxes.Visuals_Settings:AddToggle("TracersMaster", {
-  Text = "Tracers",
-  Default = false,
-  Tooltip = "Master toggle for tracers",
-})
-
-Groupboxes.Visuals_Settings:AddDropdown("TracersList", {
-  Text = "Tracers Selection",
-  Values = { "Entities", "Doors", "Keys", "Objectives", "Items", "Coins", "Chests", "Hiding Spots" },
-  Default = { "Entities", "Doors", "Keys", "Objectives", "Items", "Coins", "Chests", "Hiding Spots" },
-  Multi = true,
-  AllowNull = true,
-  Tooltip = "Select which categories to show tracers for",
-})
 
 TracerCategories = { "Entities", "Doors", "Keys", "Objectives", "Items", "Gold", "Chests", "HidingSpots" }
 
@@ -12285,27 +12266,6 @@ local TracerCatToDisplayName = {
   ["HidingSpots"] = "Hiding Spots",
 }
 
-for index71, value108 in ipairs(TracerCategories) do
-  local val274 = value108
-  local val275 = val274 .. "Tracers"
-  local val276 = ESPToggleKeys[val274]
-  createProxyToggle(val275)
-
-  toggles[val275]:OnChanged(function(p165)
-    if p165 and not toggles[val276].Value then
-      toggles[val275]:SetValue(false)
-      return
-    end
-
-    for index72, value109 in ipairs(ESPCategories[val274]) do
-      local val278 = GetESPTarget(value109, val274)
-
-      if val278 then
-        loader:SetTracersEnabled(val278, p165)
-      end
-    end
-  end)
-end
 
 local function syncTracers()
   local master = toggles.TracersMaster and toggles.TracersMaster.Value
@@ -12313,288 +12273,266 @@ local function syncTracers()
   for _, cat in ipairs(TracerCategories) do
     local disp = TracerCatToDisplayName[cat] or cat
     local isEnabled = master and (selected[disp] == true)
-    local val275 = cat .. "Tracers"
-    if toggles[val275] then
-      toggles[val275]:SetValue(isEnabled)
+    local text = cat .. "Tracers"
+    if toggles[text] then
+      toggles[text]:SetValue(isEnabled)
     end
   end
 end
 
-toggles.TracersMaster:OnChanged(syncTracers)
-options.TracersList:OnChanged(syncTracers)
 
-Groupboxes.Visuals_Settings:AddDropdown("ESPTracerOrigin", {
-  Text = "Tracer Origin", Values = { "Top", "Middle", "Bottom" }, Default = 3, })
+-- ---------------------------------------------------------------------
+--  MoroESP look: boxes / chams / labels / presets (default = "Full Info")
+-- ---------------------------------------------------------------------
+do
+local ESP_FLAGS = {
+  ESPBoxStyle = { key = "box", kind = "option" },
+  ESPBoxThickness = { key = "boxThick", kind = "option" },
+  ESPChamsStyle = { key = "chams", kind = "option" },
+  ESPNameStyle = { key = "nameStyle", kind = "option" },
+  ESPHpBar = { key = "hpBar", kind = "toggle" },
+  ESPHpText = { key = "hpText", kind = "toggle" },
+  ESPSkeleton = { key = "skeleton", kind = "toggle" },
+  ESPHeadDot = { key = "headDot", kind = "toggle" },
+  ESPLookLine = { key = "lookLine", kind = "toggle" },
+  ESPDistFade = { key = "distFade", kind = "toggle" },
+}
 
-Groupboxes.Visuals_Settings:AddToggle("ESPShowText", { Text = "Show ESP Text", Default = true })
+local ESP_BASE = {
+  ESPBoxStyle = "Rounded Glow", ESPBoxThickness = 1.6, ESPChamsStyle = "Flat", ESPNameStyle = "Pill",
+  ESPHpBar = true, ESPHpText = true, ESPSkeleton = true, ESPHeadDot = true, ESPLookLine = true, ESPDistFade = true,
+}
 
-Groupboxes.Visuals_Settings:AddToggle("ESPShowDistance", {
-  Text = "Show Distance", Default = true, })
+local ESP_PRESETS = {
+  ["Full Info"] = {},
+  ["Elegant"] = { ESPBoxStyle = "Corners", ESPChamsStyle = "Glow", ESPHpText = false, ESPSkeleton = false, ESPHeadDot = false, ESPLookLine = false },
+  ["Minimal"] = { ESPBoxStyle = "Corners", ESPChamsStyle = "Off", ESPHpBar = false, ESPHpText = false, ESPSkeleton = false, ESPHeadDot = false, ESPLookLine = false },
+  ["Clean Outline"] = { ESPBoxStyle = "Off", ESPChamsStyle = "Outline", ESPNameStyle = "Plain", ESPHpBar = false, ESPHpText = false, ESPSkeleton = false, ESPHeadDot = false, ESPLookLine = false },
+  ["Chams Only"] = { ESPBoxStyle = "Off", ESPChamsStyle = "Glow", ESPHpBar = false, ESPHpText = false, ESPSkeleton = false, ESPHeadDot = false, ESPLookLine = false },
+  ["Neon 3D"] = { ESPBoxStyle = "3D Box", ESPChamsStyle = "Rainbow", ESPHpText = false, ESPSkeleton = false, ESPHeadDot = false, ESPLookLine = false },
+}
 
-Groupboxes.Visuals_Settings:AddSlider("ESPTextSize", {
-  Text = "Text Size", Min = 8, Max = 24, Default = 15, Rounding = 0, Compact = true, })
+local function applyESPPreset(name)
+  local preset = ESP_PRESETS[name]
+  if not preset then return end
 
-Groupboxes.Visuals_Settings:AddDropdown("ESPTextFont", {
-  Text = "Text Font", Values = {
-    "Legacy", "Arial", "ArialBold", "SourceSans", "SourceSansBold", "SourceSansLight", "SourceSansItalic", "Bodoni", "Garamond", "Cartoon", "Code", "Highway", "SciFi", "Arcade", "Fantasy", "Antique", "SourceSansSemibold", "Gotham", "GothamMedium", "GothamBold", "GothamBlack", "AmaticSC", "Bangers", "Creepster", "DenkOne", "Fondamento", "FredokaOne", "GrenzeGotisch", "IndieFlower", "JosefinSans", "Jura", "Kalam", "LuckiestGuy", "Merriweather", "Michroma", "Nunito", "Oswald", "PatrickHand", "PermanentMarker", "Roboto", "RobotoCondensed", "RobotoMono", "Sarpanch", "SpecialElite", "TitilliumWeb", "Ubuntu", }, Default = 11, })
+  for flag, spec in pairs(ESP_FLAGS) do
+    local value = preset[flag]
+    if value == nil then value = ESP_BASE[flag] end
 
-Groupboxes.Visuals_Settings:AddSlider("ESPRenderLimit", {
-  Text = "ESP Highlight Limit", Min = 30, Max = 240, Default = 240, Rounding = 0, Compact = true, })
+    loader:SetSetting(spec.key, value)
 
-Groupboxes.Visuals_Settings:AddSlider("ESPMaxDistance", {
-  Text = "ESP Distance", Min = 50, Max = 500, Default = 250, Rounding = 0, Compact = true, Suffix = " studs", })
-
-Groupboxes.Visuals_Settings:AddDivider()
-
-Groupboxes.Visuals_Settings:AddToggle("UseESPOutlineColour", {
-  Text = "Use ESP Outline (colour)", Default = false, Tooltip = "Makes the outline of all ESP the same colour as the ESP itself", })
-
-toggles.UseESPOutlineColour:AddColorPicker("ESPOutline", {
-  Text = "ESP Outline", Default = Color3.fromRGB(255, 255, 255), })
-
-Groupboxes.Visuals_Settings:AddSlider("ESPFillTransparency", {
-  Text = "Fill Transparency", Min = 0, Max = 1, Default = 0.75, Rounding = 2, Compact = true, })
-
-Groupboxes.Visuals_Settings:AddSlider("ESPOutlineTransparency", {
-  Text = "Outline Transparency", Min = 0, Max = 1, Default = 0, Rounding = 2, Compact = true, })
-
-Groupboxes.Visuals_Settings:AddSlider("ESPTextTransparency", {
-  Text = "Text Transparency", Min = 0, Max = 1, Default = 0, Rounding = 2, Compact = true, })
-
-Groupboxes.Visuals_Settings:AddSlider("ESPTextOutlineTransparency", {
-  Text = "Text Outline Transparency", Min = 0, Max = 1, Default = 0, Rounding = 2, Compact = true, })
-
-Groupboxes.Visuals_Settings:AddSlider("ESPTracerThickness", {
-  Text = "Tracer Thickness", Min = 0.5, Max = 2, Default = 0.75, Rounding = 2, Compact = true, })
-
-Groupboxes.Visuals_Notifs = element3.Visuals:AddLeftGroupbox("Entity Notifications")
-
-Groupboxes.Visuals_Notifs:AddToggle("NotifyEntities", {
-  Text = "Entity Notifications", Default = false, Tooltip = "Receive notifications/popups when entities spawn", })
-
-Groupboxes.Visuals_Notifs:AddDropdown("EntityList", {
-  Text = "Entity List", Values = {
-    "Rush", "Ambush", "A-60", "A-120", "Blitz", "Eyes", "Lookman", "Monument", "Sally", "Gloombat Swarm", "Glitch Rush", "Glitch Ambush", "Drones", "Bash", "Electric Puddle", "Scribbles", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected entities (leave empty to notify all)", })
-
-Groupboxes.Visuals_Notifs:AddDropdown("NotifyStyle", {
-  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
-
-Groupboxes.Visuals_Notifs:AddDropdown("NotifySound", {
-  Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 5, })
-
-Groupboxes.Visuals_Notifs:AddDivider()
-
-Groupboxes.Visuals_Notifs:AddToggle("EntityChatToggle", {
-  Text = "Notify Chat", Default = false, Tooltip = "Sends a message in the chat when an entity spawns", })
-
-Groupboxes.Visuals_Notifs:AddInput("EntityChatMessage", {
-  Text = "Message", Default = "spawned!", Numeric = false, Placeholder = "Message", })
-
-Groupboxes.Visuals_ItemNotifs = element3.Visuals:AddLeftGroupbox("Item Notifications")
-
-Groupboxes.Visuals_ItemNotifs:AddToggle("NotifyItems", {
-  Text = "Item Notifications", Default = false, Tooltip = "Receive notifications/popups when items spawn (shows distance)", })
-
-Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemList", {
-  Text = "Item List", Values = {
-    "Alarm Clock", "Aloe Vera", "Bandage", "Bandage Pack", "Battery", "Battery Pack", "Big Bomb", "Big Shield Potion", "Bomb", "Boxing Gloves", "Briefcase", "Bread", "Candle", "Candy", "Cheese", "Compass", "Crucifix", "Donut", "Flashlight", "FihFlakes", "Glitch Fragment", "Glowstick", "Golden Gun", "Gummy Flashlight", "Gween Soda", "Hiding Box", "Holy Hand Grenade", "Iron Key", "Knockbomb", "Lantern", "Laser Pointer", "Lighter", "Lockpicks", "Lotus", "Lotus Petal", "Mini Shield Potion", "Moonlight Candle", "Moonlight Smoothie", "Multitool", "Nanner", "Paper Plane", "Pizza", "Leftovers", "Rift Jar", "Shears", "Skeleton Key", "Smoothie", "Spotlight", "Starlight Barrel", "Starlight Bottle", "Starlight Vial", "Stop Sign", "Straplight", "Tablet", "Tip Jar", "Vitamins", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected items (leave empty to notify all)", })
-
-Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifyStyle", {
-  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
-
-Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifySound", {
-  Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 4, })
-
-Groupboxes.Visuals_ItemNotifs:AddDivider()
-
-Groupboxes.Visuals_ItemNotifs:AddToggle("ItemChatToggle", {
-  Text = "Notify Chat", Default = false, Tooltip = "Sends a message in the chat when an item spawns", })
-
-Groupboxes.Visuals_ItemNotifs:AddInput("ItemChatMessage", {
-  Text = "Message", Default = "spawned!", Numeric = false, Placeholder = "Message", })
-
-toggles.ESPRainbow:OnChanged(function(p166) loader:SetRainbow(p166) end)
-
-options.ESPTracerOrigin:OnChanged(function(p167)
-  local val279 = { Top = "Top", Middle = "Center", Bottom = "Bottom" }
-  loader:SetTracerOrigin(val279[p167] or "Bottom")
-end)
-
-toggles.ESPShowText:OnChanged(function(showESPText) loader.ShowESPText = showESPText end)
-toggles.ESPShowDistance:OnChanged(function(p168) loader:SetShowDistance(p168) end)
-
-options.ESPTextSize:OnChanged(function(p169) loader:SetTextSize(p169) end)
-options.ESPTextFont:OnChanged(function(p170) loader:SetFont(Enum.Font[p170]) end)
-options.ESPRenderLimit:OnChanged(function(p171) loader:SetRenderLimit(p171) end)
-options.ESPMaxDistance:OnChanged(function(maxDistance) loader.MaxDistance = maxDistance end)
-options.ESPFillTransparency:OnChanged(function(p172) loader:SetFillTransparency(p172) end)
-options.ESPOutlineTransparency:OnChanged(function(p173) loader:SetOutlineTransparency(p173) end)
-options.ESPTextTransparency:OnChanged(function(p174) loader:SetTextTransparency(p174) end)
-
-options.ESPTextOutlineTransparency:OnChanged(function(p175)
-  loader:SetTextOutlineTransparency(p175)
-end)
-
-options.ESPFadeTime:OnChanged(function(p176)
-  if toggles.ESPFade.Value then
-    loader:SetFadeTime(p176)
+    local control = spec.kind == "toggle" and toggles[flag] or options[flag]
+    pcall(function() control:SetValue(value) end)
   end
-end)
 
-toggles.ESPFade:OnChanged(function(p177)
-  loader:SetFadeTime(p177 and options.ESPFadeTime.Value or 0)
-end)
-
-toggles.ESPArrowsToggle:OnChanged(function(p178) loader:SetArrows(p178) end)
-
-options.ESPArrowsRadius:OnChanged(function(p179) loader:SetArrowRadius(p179) end)
-options.ESPTracerThickness:OnChanged(function(p180) loader:SetTracerSize(p180) end)
-
-toggles.UseESPOutlineColour:OnChanged(function(p181) loader:SetMatchColors(p181) end)
-options.ESPOutline:OnChanged(function(p182) loader:SetOutlineColor(p182) end)
-
-loader:SetMatchColors(toggles.UseESPOutlineColour.Value)
-loader:SetOutlineColor(options.ESPOutline.Value)
-loader:SetShowDistance(true)
-loader:SetFont(Enum.Font.Code)
-loader:SetTextSize(15)
-loader.ShowESPText = true
-loader:SetRenderLimit(240)
-loader.MaxDistance = 250
-loader:SetFillTransparency(0.75)
-loader:SetOutlineTransparency(0)
-loader:SetTextTransparency(0)
-loader:SetTextOutlineTransparency(0)
-loader:SetFadeTime(toggles.ESPFade and toggles.ESPFade.Value and options.ESPFadeTime.Value or 0)
-loader:SetArrows(false)
-loader:SetArrowRadius(250)
-loader:SetTracerSize(0.75)
-
-local floorReplicated3 = replicatedStorage:FindFirstChild("FloorReplicated")
-
-if not floorReplicated3 then
-  floorReplicated3 = Instance.new("Folder")
+  library:Notify({ Title = "ESP", Description = "Preset: " .. name, Time = 2 })
 end
 
-local val280
 
-local function helper74()
-  if val280 then
-    return val280
+-- menu of this block: built later, from the MENU section at the end of the file
+Menus.ESPLook = function()
+  Groupboxes.Visuals_Preset:AddDropdown("ESPPreset", {
+    Text = "Preset", Values = { "Full Info", "Elegant", "Minimal", "Clean Outline", "Chams Only", "Neon 3D" }, Default = "Full Info",
+    Tooltip = "Ready-made ESP looks. Health, skeleton, head dot and look line only apply to players",
+    Callback = function(value) if value then applyESPPreset(value) end end,
+  })
+
+  Groupboxes.Visuals_Preset:AddLabel("Full Info: rounded glow box, skeleton, head dot, look line, health, tracers, arrows and chams.")
+
+  Groupboxes.Visuals_Style:AddDropdown("ESPBoxStyle", {
+    Text = "Box Style", Values = { "Off", "Corners", "Full", "Rounded Glow", "3D Box" }, Default = "Rounded Glow",
+    Callback = function(v) loader:SetSetting("box", v or "Off") end,
+  })
+
+  Groupboxes.Visuals_Style:AddSlider("ESPBoxThickness", {
+    Text = "Box Thickness", Min = 0.5, Max = 4, Default = 1.6, Rounding = 1,
+    Callback = function(v) loader:SetSetting("boxThick", v) end,
+  })
+
+  Groupboxes.Visuals_Style:AddSlider("ESPBoxFill", {
+    Text = "Box Fill Transparency", Min = 0.5, Max = 1, Default = 0.88, Rounding = 2,
+    Callback = function(v) loader:SetSetting("boxFill", v) end,
+  })
+
+  Groupboxes.Visuals_Style:AddDropdown("ESPChamsStyle", {
+    Text = "Chams Style", Values = { "Off", "Flat", "Glow", "Pulse", "Rainbow", "Outline", "Visible Only" }, Default = "Flat",
+    Tooltip = "Highlight on the object itself (Outline = no fill, Visible Only = hidden behind walls)",
+    Callback = function(v) loader:SetSetting("chams", v or "Off") end,
+  })
+
+  Groupboxes.Visuals_Style:AddToggle("ESPDistFade", {
+    Text = "Distance Fade", Default = true, Tooltip = "Far objects get more transparent",
+    Callback = function(v) loader:SetSetting("distFade", v) end,
+  })
+
+  Groupboxes.Visuals_Labels:AddDropdown("ESPNameStyle", {
+    Text = "Name Style", Values = { "Pill", "Plain" }, Default = "Pill",
+    Callback = function(v) loader:SetSetting("nameStyle", v or "Pill") end,
+  })
+
+  Groupboxes.Visuals_Labels:AddToggle("ESPHpBar", {
+    Text = "Health Bar", Default = true, Tooltip = "Players only",
+    Callback = function(v) loader:SetSetting("hpBar", v) end,
+  })
+
+  Groupboxes.Visuals_Labels:AddToggle("ESPHpText", {
+    Text = "Health Text", Default = true, Tooltip = "Players only",
+    Callback = function(v) loader:SetSetting("hpText", v) end,
+  })
+
+  Groupboxes.Visuals_Labels:AddToggle("ESPSkeleton", {
+    Text = "Skeleton", Default = true, Tooltip = "Players only",
+    Callback = function(v) loader:SetSetting("skeleton", v) end,
+  })
+
+  Groupboxes.Visuals_Labels:AddToggle("ESPHeadDot", {
+    Text = "Head Dot", Default = true, Tooltip = "Players only",
+    Callback = function(v) loader:SetSetting("headDot", v) end,
+  })
+
+  Groupboxes.Visuals_Labels:AddToggle("ESPLookLine", {
+    Text = "Look Line", Default = true, Tooltip = "Shows where a player is looking",
+    Callback = function(v) loader:SetSetting("lookLine", v) end,
+  })
+end
+
+end
+
+
+function Handlers.ESPFadeTimeChanged(value)
+  if toggles.ESPFade.Value then
+    loader:SetFadeTime(value)
+  end
+end
+
+
+loader.ShowESPText = true
+
+loader.MaxDistance = 250
+
+
+local floorReplicated = replicatedStorage:FindFirstChild("FloorReplicated")
+
+if not floorReplicated then
+  floorReplicated = Instance.new("Folder")
+end
+
+local mainGameModule
+
+local function getMainGameModule()
+  if mainGameModule then
+    return mainGameModule
   end
 
-  local playerGui9 = localPlayer2:FindFirstChildOfClass("PlayerGui")
-  local mainUI7 = playerGui9 and playerGui9:FindFirstChild("MainUI")
-  local initiator6 = mainUI7 and mainUI7:FindFirstChild("Initiator")
-  local mainGame6 = initiator6 and initiator6:FindFirstChild("Main_Game")
+  local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
+  local mainUI = playerGui2 and playerGui2:FindFirstChild("MainUI")
+  local initiator = mainUI and mainUI:FindFirstChild("Initiator")
+  local mainGame = initiator and initiator:FindFirstChild("Main_Game")
 
-  if mainGame6 then
-    local val281, success24 = pcall(require, mainGame6)
+  if mainGame then
+    local success, result = pcall(require, mainGame)
 
-    if val281 and success24 then
-      val280 = success24
-      return val280
+    if success and result then
+      mainGameModule = result
+      return mainGameModule
     end
   end
 
   return nil
 end
 
-toggles.RemoveCameraBobbing:OnChanged(function(p183)
-  local element39 = helper74()
+function Handlers.RemoveCameraBobbingChanged(value)
+  local module = getMainGameModule()
 
-  if element39 and element39.spring then
-    element39.spring.Speed = p183 and 9000000000 or 8
+  if module and module.spring then
+    module.spring.Speed = value and 9000000000 or 8
   end
-end)
+end
 
-toggles.RemoveCameraFog:OnChanged(function(p184)
-  Lighting.FogEnd = p184 and 10000000 or val85.OldFog or Lighting.FogEnd
 
-  for index73, value110 in ipairs(val85.FogInstances) do
-    value110.Density = p184 and 0 or value110:GetAttribute("Density_Old")
+function Handlers.RemoveCameraFogChanged(value)
+  Lighting.FogEnd = value and 10000000 or featureState.OldFog or Lighting.FogEnd
+
+  for _, fogInstance in ipairs(featureState.FogInstances) do
+    fogInstance.Density = value and 0 or fogInstance:GetAttribute("Density_Old")
   end
-end)
+end
 
-toggles.DisableFiredampEffect:OnChanged(function(p185)
-  local currentRooms11 = workspace:FindFirstChild("CurrentRooms")
 
-  if currentRooms11 then
-    for v484, v485 in currentRooms11:GetChildren() do
-      if p185 then
-        v485:SetAttribute("Firedamp", false)
+function Handlers.DisableFiredampEffectChanged(value)
+  local currentRooms2 = workspace:FindFirstChild("CurrentRooms")
 
-        for v486, v487 in currentCamera:GetChildren() do
-          if v487.Name == "LiveFiredamp" then
-            v487:Destroy()
+  if currentRooms2 then
+    for _, child in currentRooms2:GetChildren() do
+      if value then
+        child:SetAttribute("Firedamp", false)
+
+        for _, child2 in currentCamera:GetChildren() do
+          if child2.Name == "LiveFiredamp" then
+            child2:Destroy()
           end
         end
       else
-        v485:SetAttribute("Firedamp", v485:GetAttribute("Firedamp_Old"))
+        child:SetAttribute("Firedamp", child:GetAttribute("Firedamp_Old"))
       end
     end
   end
 
-  local currentRoom2 = localPlayer2:GetAttribute("CurrentRoom")
-  localPlayer2:SetAttribute("CurrentRoom", 0)
+  local currentRoom = localPlayer:GetAttribute("CurrentRoom")
+  localPlayer:SetAttribute("CurrentRoom", 0)
   task.wait()
-  localPlayer2:SetAttribute("CurrentRoom", currentRoom2)
-end)
+  localPlayer:SetAttribute("CurrentRoom", currentRoom)
+end
 
-local function iterate9(val282, val283)
-  for index74, value111 in ipairs(ESPCategories.HidingSpots) do
-    local val284 = false
 
-    for v489, v490 in value111:GetDescendants() do
-      if v490.Name == "HiddenPlayer" and v490.Value == character then
-        val284 = true
+local function updateHidingSpotTransparency(enabled, opacity)
+  for _, hidingSpot in ipairs(ESPCategories.HidingSpots) do
+    local isHiding = false
+
+    for _, descendant in hidingSpot:GetDescendants() do
+      if descendant.Name == "HiddenPlayer" and descendant.Value == character then
+        isHiding = true
         break
       end
     end
 
-    for v491, v492 in value111:GetDescendants() do
-      if v492:IsA("BasePart") and v492:GetAttribute("Transparency_Old") then
-        TweenService:Create(v492, TweenInfo.new(0.25, Enum.EasingStyle.Linear), {
-          Transparency = val282 and val284 and val283 or v492:GetAttribute("Transparency_Old"), }):Play()
+    for _, descendant in hidingSpot:GetDescendants() do
+      if descendant:IsA("BasePart") and descendant:GetAttribute("Transparency_Old") then
+        TweenService:Create(descendant, TweenInfo.new(0.25, Enum.EasingStyle.Linear), {
+          Transparency = enabled and isHiding and opacity or descendant:GetAttribute("Transparency_Old"), }):Play()
       end
     end
   end
 end
 
-toggles.TransparentHidingSpotsToggle:OnChanged(function(p188)
-  iterate9(p188, options.TransparentHidingSpotsSlider.Value)
-end)
 
-options.TransparentHidingSpotsSlider:OnChanged(function(p189)
-  iterate9(toggles.TransparentHidingSpotsToggle.Value, p189)
-end)
-
-local function iterate10(val285)
-  local playerGui10 = localPlayer2:FindFirstChildOfClass("PlayerGui")
-  local mainUI8 = playerGui10 and playerGui10:FindFirstChild("MainUI")
-  local initiator7 = mainUI8 and mainUI8:FindFirstChild("Initiator")
-  local mainGame7 = initiator7 and initiator7:FindFirstChild("Main_Game")
-  local remoteListener3 = mainGame7 and mainGame7:FindFirstChild("RemoteListener")
-  local value112 = options.JumpscaresList.Value or {}
+local function setupMainGameHooks(enabled)
+  local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
+  local mainUI = playerGui2 and playerGui2:FindFirstChild("MainUI")
+  local initiator = mainUI and mainUI:FindFirstChild("Initiator")
+  local mainGame = initiator and initiator:FindFirstChild("Main_Game")
+  local remoteListener = mainGame and mainGame:FindFirstChild("RemoteListener")
+  local value = options.JumpscaresList.Value or {}
 
   pcall(function()
-    local jumpscares = remoteListener3
-      and (remoteListener3:FindFirstChild("Jumpscares")
-        or remoteListener3:FindFirstChild("Jumpscares_Disabled"))
+    local jumpscares = remoteListener
+      and (remoteListener:FindFirstChild("Jumpscares")
+        or remoteListener:FindFirstChild("Jumpscares_Disabled"))
 
     if jumpscares then
-      jumpscares.Name = val285 and "Jumpscares_Disabled" or "Jumpscares"
+      jumpscares.Name = enabled and "Jumpscares_Disabled" or "Jumpscares"
 
-      for v493, v494 in jumpscares:GetDescendants() do
-        if v494:IsA("ModuleScript") then
-          local chOriginalName = v494:GetAttribute("CHOriginalName")
-            or v494.Name:gsub("_Disabled", "")
+      for _, descendant in jumpscares:GetDescendants() do
+        if descendant:IsA("ModuleScript") then
+          local chOriginalName = descendant:GetAttribute("CHOriginalName")
+            or descendant.Name:gsub("_Disabled", "")
 
-          v494:SetAttribute("CHOriginalName", chOriginalName)
+          descendant:SetAttribute("CHOriginalName", chOriginalName)
 
-          for key15, value113 in pairs(value112) do
-            if chOriginalName:lower():find(tostring(key15):lower(), 1, true) then
-              v494.Name = val285 and chOriginalName .. "_Disabled" or chOriginalName
+          for key, _ in pairs(value) do
+            if chOriginalName:lower():find(tostring(key):lower(), 1, true) then
+              descendant.Name = enabled and chOriginalName .. "_Disabled" or chOriginalName
               break
             end
           end
@@ -12604,16 +12542,16 @@ local function iterate10(val285)
   end)
 end
 
-toggles.DisableJumpscares:OnChanged(iterate10)
 
-options.JumpscaresList:OnChanged(function()
+function Handlers.JumpscaresListChanged()
   if toggles.DisableJumpscares.Value then
-    iterate10(true)
+    setupMainGameHooks(true)
   end
-end)
+end
+
 
 do
-  local connect26 = runService.RenderStepped:Connect(function()
+  local connection = runService.RenderStepped:Connect(function()
     if _Unloading then
       if connect26 then
         connect26:Disconnect()
@@ -12622,19 +12560,19 @@ do
       return
     end
 
-    local element40 = helper74()
+    local module = getMainGameModule()
 
-    if element40 then
+    if module then
       if toggles.RemoveCameraShake.Value then
-        element40.csgo = CFrame.new()
+        module.csgo = CFrame.new()
       end
 
       if toggles.ViewmodelOffsetToggle.Value then
-        element40.tooloffset = Vector3.new(
+        module.tooloffset = Vector3.new(
           options.ViewmodelOffsetX.Value, options.ViewmodelOffsetY.Value, options.ViewmodelOffsetZ.Value
         )
       else
-        element40.tooloffset = Vector3.zero
+        module.tooloffset = Vector3.zero
       end
     end
 
@@ -12651,23 +12589,23 @@ EntityNotifyData = {
     Alias = "Gloombat Swarm", Text = "Gloombats have spawned, turn off lights!", }, ["RNIUSHCG=="] = { Alias = "Glitch Rush", Danger = true }, AR0xMBUSH = { Alias = "Glitch Ambush", Danger = true }, GlitchRush = { Alias = "Glitch Rush", Danger = true }, GlitchAmbush = { Alias = "Glitch Ambush", Danger = true }, GiggleCeiling = { Alias = "Giggle" }, GrumbleRig = { Alias = "Grumble" }, DronesStampede = { Alias = "Drones", Danger = true, Text = "Drones are stampeding, hide!" }, BashMoving = { Alias = "Bash", Danger = true }, Water = { Alias = "Electric Puddle", Danger = false, Text = "Electric Puddle nearby!" }, TellerRig = { Alias = "Teller", Danger = true, NoNotify = true }, Scribbles = {
     Alias = "Scribbles", Danger = true, Text = "Scribbles is coming, godmode does not work, hide!", }, Noise = { Alias = "Noise", Danger = true, NoNotify = true }, Creak = { Alias = "Creak", Danger = true, NoNotify = true }, }
 
-local function helper75(val286)
-  if val286.Text then
-    return val286.Text
+local function getEntityMessage(entityData)
+  if entityData.Text then
+    return entityData.Text
   end
 
-  if val286.GodmodeText then
-    return val286.GodmodeText
+  if entityData.GodmodeText then
+    return entityData.GodmodeText
   end
 
-  if val286.Danger then
-    return val286.Alias .. " is coming, hide!"
+  if entityData.Danger then
+    return entityData.Alias .. " is coming, hide!"
   end
 
   return "Entity detected!"
 end
 
-val171.SoundAssets = {
+notifier.SoundAssets = {
   Achievement = "rbxassetid://10469938989", Tone = nil, Alert = nil, ["Windows XP"] = nil, ["GTA Cell"] = nil, }
 
 pcall(function()
@@ -12676,108 +12614,108 @@ pcall(function()
       makefolder("moro/Notification Sounds")
     end
 
-    local function fetchData2(val287, val288)
-      local val289 = "moro/Notification Sounds" .. "/" .. val287 .. "."
-        .. (val288:match("%.([a-zA-Z0-9]+)$") or "mp3")
+    local function fetchData(soundName, url)
+      local text = "moro/Notification Sounds" .. "/" .. soundName .. "."
+        .. (url:match("%.([a-zA-Z0-9]+)$") or "mp3")
 
-      if not isfile(val289) then
-        writefile(val289, game:HttpGet(val288))
+      if not isfile(text) then
+        writefile(text, game:HttpGet(url))
       end
 
-      return getcustomasset(val289)
+      return getcustomasset(text)
     end
 
-    val171.SoundAssets.Tone = fetchData2(
+    notifier.SoundAssets.Tone = fetchData(
       "tone", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/tone%20notification.mp3"
     )
 
-    val171.SoundAssets.Alert = fetchData2(
+    notifier.SoundAssets.Alert = fetchData(
       "alert", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/alert%20notification.mp3"
     )
 
-    val171.SoundAssets["Windows XP"] = fetchData2(
+    notifier.SoundAssets["Windows XP"] = fetchData(
       "xp", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/windows%20xp%20exclamation.ogg"
     )
 
-    val171.SoundAssets["GTA Cell"] = fetchData2(
+    notifier.SoundAssets["GTA Cell"] = fetchData(
       "gta", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/gta%20notification.ogg"
     )
   end
 end)
 
-val171.SoundInstance = Instance.new("Sound")
-val171.SoundInstance.Name = "morohubnotifsound"
-val171.SoundInstance.Volume = 0.65
+notifier.SoundInstance = Instance.new("Sound")
+notifier.SoundInstance.Name = "morohubnotifsound"
+notifier.SoundInstance.Volume = 0.65
 
-pcall(function() val171.SoundInstance.Parent = SoundService end)
+pcall(function() notifier.SoundInstance.Parent = SoundService end)
 
-function val171.PlaySound(p194)
-  p194 = p194 or "NotifySound"
+function notifier.PlaySound(soundName)
+  soundName = soundName or "NotifySound"
 
   pcall(function()
-    local achievement = val171.SoundAssets[options[p194].Value] or val171.SoundAssets.Achievement
+    local achievement = notifier.SoundAssets[options[soundName].Value] or notifier.SoundAssets.Achievement
 
-    val171.SoundInstance.SoundId = achievement
-    val171.SoundInstance.TimePosition = 0
-    val171.SoundInstance:Play()
+    notifier.SoundInstance.SoundId = achievement
+    notifier.SoundInstance.TimePosition = 0
+    notifier.SoundInstance:Play()
   end)
 end
 
-val171.ActiveAchievement = {}
+notifier.ActiveAchievement = {}
 
-local function helper76(val290)
-  for i14 = val290, #val171.ActiveAchievement do
-    local val291 = 72 + (i14 - 1) * 150
+local function shiftAchievements(startIndex)
+  for i = startIndex, #notifier.ActiveAchievement do
+    local targetY = 72 + (i - 1) * 150
 
     TweenService:Create(
-      val171.ActiveAchievement[i14], TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(1, -22, 0, val291) }
+      notifier.ActiveAchievement[i], TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(1, -22, 0, targetY) }
     ):Play()
   end
 end
 
-function val171.CustomAchievement(p196, p197, p198)
+function notifier.CustomAchievement(title, description, extra)
   local morohubentitynotif = Instance.new("ScreenGui")
   morohubentitynotif.Name = "morohubentitynotif"
   morohubentitynotif.ResetOnSpawn = false
   morohubentitynotif.IgnoreGuiInset = true
   morohubentitynotif.Parent = CoreGui
 
-  local val292 = p198 and 110 or 90
+  local height = extra and 110 or 90
 
-  local frame6 = Instance.new("Frame")
-  frame6.Size = UDim2.new(0, 350, 0, val292)
-  frame6.AnchorPoint = Vector2.new(1, 0)
-  frame6.BackgroundTransparency = 1
-  frame6.Parent = morohubentitynotif
+  local frame = Instance.new("Frame")
+  frame.Size = UDim2.new(0, 350, 0, height)
+  frame.AnchorPoint = Vector2.new(1, 0)
+  frame.BackgroundTransparency = 1
+  frame.Parent = morohubentitynotif
 
-  local val293 = 72 + (#val171.ActiveAchievement + 1 - 1) * 150
-  frame6.Position = UDim2.new(1, 370, 0, val293)
-  table.insert(val171.ActiveAchievement, frame6)
+  local targetY = 72 + (#notifier.ActiveAchievement + 1 - 1) * 150
+  frame.Position = UDim2.new(1, 370, 0, targetY)
+  table.insert(notifier.ActiveAchievement, frame)
 
-  local textLabel5 = Instance.new("TextLabel")
-  textLabel5.BackgroundTransparency = 1
-  textLabel5.Position = UDim2.new(0, 0, 0, -30)
-  textLabel5.Size = UDim2.new(1, 0, 0, 28)
-  textLabel5.Font = Enum.Font.GothamBlack
-  textLabel5.Text = "Entity detected"
-  textLabel5.TextColor3 = Color3.fromRGB(255, 238, 216)
-  textLabel5.TextStrokeTransparency = 0.75
-  textLabel5.TextSize = 20
-  textLabel5.TextXAlignment = Enum.TextXAlignment.Left
-  textLabel5.Parent = frame6
+  local textLabel = Instance.new("TextLabel")
+  textLabel.BackgroundTransparency = 1
+  textLabel.Position = UDim2.new(0, 0, 0, -30)
+  textLabel.Size = UDim2.new(1, 0, 0, 28)
+  textLabel.Font = Enum.Font.GothamBlack
+  textLabel.Text = "Entity detected"
+  textLabel.TextColor3 = Color3.fromRGB(255, 238, 216)
+  textLabel.TextStrokeTransparency = 0.75
+  textLabel.TextSize = 20
+  textLabel.TextXAlignment = Enum.TextXAlignment.Left
+  textLabel.Parent = frame
 
-  local frame7 = Instance.new("Frame")
-  frame7.Name = "Frame"
-  frame7.Size = UDim2.new(1, 0, 1, 0)
-  frame7.BackgroundColor3 = Color3.fromRGB(35, 22, 18)
-  frame7.BorderSizePixel = 0
-  frame7.Parent = frame6
+  local frame2 = Instance.new("Frame")
+  frame2.Name = "Frame"
+  frame2.Size = UDim2.new(1, 0, 1, 0)
+  frame2.BackgroundColor3 = Color3.fromRGB(35, 22, 18)
+  frame2.BorderSizePixel = 0
+  frame2.Parent = frame
 
-  Instance.new("UICorner", frame7).CornerRadius = UDim.new(0, 9)
+  Instance.new("UICorner", frame2).CornerRadius = UDim.new(0, 9)
 
-  local instance9 = Instance.new("UIStroke", frame7)
-  instance9.Color = Color3.fromRGB(255, 236, 214)
-  instance9.Thickness = 3
+  local instance = Instance.new("UIStroke", frame2)
+  instance.Color = Color3.fromRGB(255, 236, 214)
+  instance.Thickness = 3
 
   local imageLabel = Instance.new("ImageLabel")
   imageLabel.Name = "ImageLabel"
@@ -12786,57 +12724,57 @@ function val171.CustomAchievement(p196, p197, p198)
   imageLabel.Size = UDim2.new(0, 76, 0, 76)
   imageLabel.Position = UDim2.new(0, 10, 0, 10)
   imageLabel.ScaleType = Enum.ScaleType.Fit
-  imageLabel.Parent = frame7
+  imageLabel.Parent = frame2
 
   local details = Instance.new("Frame")
   details.Name = "Details"
   details.BackgroundTransparency = 1
   details.Position = UDim2.new(0, 96, 0, 10)
   details.Size = UDim2.new(1, -106, 1, -20)
-  details.Parent = frame7
+  details.Parent = frame2
 
-  local function createTextLabel(name8, text5, val294, val295, font)
-    local textLabel6 = Instance.new("TextLabel")
-    textLabel6.Name = name8
-    textLabel6.BackgroundTransparency = 1
-    textLabel6.Position = UDim2.new(0, 0, 0, val294)
-    textLabel6.Size = UDim2.new(1, 0, 0, val295 + 12)
-    textLabel6.Font = font
-    textLabel6.Text = text5
-    textLabel6.TextScaled = true
-    textLabel6.TextSize = val295
-    textLabel6.TextWrapped = true
-    textLabel6.TextXAlignment = Enum.TextXAlignment.Left
-    textLabel6.TextYAlignment = Enum.TextYAlignment.Top
-    textLabel6.TextColor3 = Color3.fromRGB(255, 238, 216)
-    textLabel6.TextStrokeTransparency = 0.8
-    textLabel6.Parent = details
+  local function createTextLabel(name, text, offsetY, textSize, font)
+    local textLabel2 = Instance.new("TextLabel")
+    textLabel2.Name = name
+    textLabel2.BackgroundTransparency = 1
+    textLabel2.Position = UDim2.new(0, 0, 0, offsetY)
+    textLabel2.Size = UDim2.new(1, 0, 0, textSize + 12)
+    textLabel2.Font = font
+    textLabel2.Text = text
+    textLabel2.TextScaled = true
+    textLabel2.TextSize = textSize
+    textLabel2.TextWrapped = true
+    textLabel2.TextXAlignment = Enum.TextXAlignment.Left
+    textLabel2.TextYAlignment = Enum.TextYAlignment.Top
+    textLabel2.TextColor3 = Color3.fromRGB(255, 238, 216)
+    textLabel2.TextStrokeTransparency = 0.8
+    textLabel2.Parent = details
   end
 
-  createTextLabel("Title", p196, 0, 18, Enum.Font.GothamBold)
-  createTextLabel("Desc", p197, 34, 14, Enum.Font.Gotham)
+  createTextLabel("Title", title, 0, 18, Enum.Font.GothamBold)
+  createTextLabel("Desc", description, 34, 14, Enum.Font.Gotham)
 
-  if p198 then
-    createTextLabel("Reason", p198, 64, 14, Enum.Font.Gotham)
+  if extra then
+    createTextLabel("Reason", extra, 64, 14, Enum.Font.Gotham)
   end
 
   task.spawn(function()
     TweenService:Create(
-      frame6, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(1, -22, 0, val293) }
+      frame, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(1, -22, 0, targetY) }
     ):Play()
 
     task.wait(5.5)
 
     TweenService:Create(
-      frame6, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.new(1, 370, 0, val293) }
+      frame, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.new(1, 370, 0, targetY) }
     ):Play()
 
     task.wait(0.5)
 
-    for index75, value115 in ipairs(val171.ActiveAchievement) do
-      if value115 == frame6 then
-        table.remove(val171.ActiveAchievement, index75)
-        helper76(index75)
+    for index, activeAchievementEntry in ipairs(notifier.ActiveAchievement) do
+      if activeAchievementEntry == frame then
+        table.remove(notifier.ActiveAchievement, index)
+        shiftAchievements(index)
         break
       end
     end
@@ -12845,60 +12783,60 @@ function val171.CustomAchievement(p196, p197, p198)
   end)
 end
 
-function val171.ShowAchievement(p201, p202, p203, p204)
-  if not localPlayer2 then
-    val171.CustomAchievement(p201, p202, p203)
+function notifier.ShowAchievement(title, description, extra, options2)
+  if not localPlayer then
+    notifier.CustomAchievement(title, description, extra)
     return
   end
 
-  local playerGui11 = localPlayer2:FindFirstChild("PlayerGui")
+  local playerGui2 = localPlayer:FindFirstChild("PlayerGui")
 
-  local globalUI = playerGui11
-    and (playerGui11:FindFirstChild("GlobalUI") or playerGui11:FindFirstChild("MainUI"))
+  local globalUI = playerGui2
+    and (playerGui2:FindFirstChild("GlobalUI") or playerGui2:FindFirstChild("MainUI"))
 
   local achievementsHolder = globalUI and globalUI:FindFirstChild("AchievementsHolder")
-  local achievement2 = achievementsHolder and achievementsHolder:FindFirstChild("Achievement")
+  local achievement = achievementsHolder and achievementsHolder:FindFirstChild("Achievement")
 
-  if not (globalUI and achievementsHolder and achievement2) then
-    val171.CustomAchievement(p201, p202, p203)
+  if not (globalUI and achievementsHolder and achievement) then
+    notifier.CustomAchievement(title, description, extra)
     return
   end
 
-  local function createSound(parent6, soundId, val296)
-    local sound3 = Instance.new("Sound")
-    sound3.SoundId = soundId
-    sound3.Volume = val296 or 1
-    sound3.Parent = parent6
+  local function createSound(parent, soundId, volume)
+    local sound = Instance.new("Sound")
+    sound.SoundId = soundId
+    sound.Volume = volume or 1
+    sound.Parent = parent
 
     task.spawn(function()
       task.wait(0.1)
 
-      sound3:Play()
-      sound3.Ended:Wait()
-      sound3:Destroy()
+      sound:Play()
+      sound.Ended:Wait()
+      sound:Destroy()
     end)
   end
 
-  local liveAchievement = achievement2:Clone()
+  local liveAchievement = achievement:Clone()
   liveAchievement.Size = UDim2.new(0, 0, 0, 0)
   liveAchievement.Frame.Position = UDim2.new(1.1, 0, 0, 0)
   liveAchievement.Name = "LiveAchievement"
   liveAchievement.Visible = true
-  liveAchievement.Frame.TextLabel.Text = p201 or "NOTIFICATION"
-  liveAchievement.Frame.Details.Title.Text = p204 or p201 or ""
-  liveAchievement.Frame.Details.Desc.Text = p202 or ""
-  liveAchievement.Frame.Details.Reason.Text = p203 or ""
+  liveAchievement.Frame.TextLabel.Text = title or "NOTIFICATION"
+  liveAchievement.Frame.Details.Title.Text = options2 or title or ""
+  liveAchievement.Frame.Details.Desc.Text = description or ""
+  liveAchievement.Frame.Details.Reason.Text = extra or ""
   liveAchievement.Frame.TextLabel.TextWrapped = true
   liveAchievement.Frame.Details.Title.TextWrapped = true
   liveAchievement.Frame.Details.Desc.TextWrapped = true
   liveAchievement.Frame.Details.Reason.TextWrapped = true
   liveAchievement.Frame.ImageLabel.Image = "rbxassetid://106990021902592"
 
-  local color2 = Color3.new(1, 1, 1)
+  local color = Color3.new(1, 1, 1)
 
-  liveAchievement.Frame.TextLabel.TextColor3 = color2
-  liveAchievement.Frame.UIStroke.Color = color2
-  liveAchievement.Frame.Glow.ImageColor3 = color2
+  liveAchievement.Frame.TextLabel.TextColor3 = color
+  liveAchievement.Frame.UIStroke.Color = color
+  liveAchievement.Frame.Glow.ImageColor3 = color
   liveAchievement.Parent = achievementsHolder
 
   createSound(achievementsHolder, "rbxassetid://10469938989", 1)
@@ -12921,20 +12859,20 @@ function val171.ShowAchievement(p201, p202, p203, p204)
   end)
 end
 
-val171.ActiveEntity = 0
+notifier.ActiveEntity = 0
 
-function helper57(val297)
-  if not val167[val297.Name] then
+function notifyEntitySpawn(object)
+  if not espEntityNames[object.Name] then
     return
   end
 
-  local element41 = EntityNotifyData[val297.Name]
+  local entityData = EntityNotifyData[object.Name]
 
-  if not element41 then
+  if not entityData then
     return
   end
 
-  if element41.NoNotify then
+  if entityData.NoNotify then
     return
   end
 
@@ -12942,123 +12880,123 @@ function helper57(val297)
     return
   end
 
-  local value116 = options.EntityList.Value
+  local value = options.EntityList.Value
 
-  if value116 and next(value116) ~= nil and not value116[element41.Alias] then
+  if value and next(value) ~= nil and not value[entityData.Alias] then
     return
   end
 
-  if val171.ActiveEntity >= 6 then
+  if notifier.ActiveEntity >= 6 then
     return
   end
 
-  val171.ActiveEntity = val171.ActiveEntity + 1
-  val171.PlaySound()
+  notifier.ActiveEntity = notifier.ActiveEntity + 1
+  notifier.PlaySound()
 
-  local val298 = helper75(element41)
+  local message = getEntityMessage(entityData)
 
-  local val299 = {
+  local dangerousEntities = {
     RushMoving = true, AmbushMoving = true, A60 = true, BackdoorRush = true, ["RNIUSHCG=="] = true, AR0xMBUSH = true, BashMoving = true, }
 
-  if toggles.Godmode.Value and val299[val297.Name] then
-    val298 = element41.Alias .. " is coming, but you have godmode enabled so don't worry!"
+  if toggles.Godmode.Value and dangerousEntities[object.Name] then
+    message = entityData.Alias .. " is coming, but you have godmode enabled so don't worry!"
   end
 
   if options.NotifyStyle.Value == "Obsidian" then
-    library:Notify({ Title = "Entity detected", Description = val298, Time = 5 })
+    library:Notify({ Title = "Entity detected", Description = message, Time = 5 })
   else
     task.spawn(function()
-      val171.ShowAchievement(
-        "Entity detected", val298, nil, "Entity '" .. (element41.Alias or "") .. "' has spawned"
+      notifier.ShowAchievement(
+        "Entity detected", message, nil, "Entity '" .. (entityData.Alias or "") .. "' has spawned"
       )
     end)
   end
 
   if toggles.EntityChatToggle.Value then
-    Functions.SendChat(element41.Alias .. " " .. options.EntityChatMessage.Value)
+    Functions.SendChat(entityData.Alias .. " " .. options.EntityChatMessage.Value)
   end
 
-  task.delay(6, function() val171.ActiveEntity = math.max(0, val171.ActiveEntity - 1) end)
+  task.delay(6, function() notifier.ActiveEntity = math.max(0, notifier.ActiveEntity - 1) end)
 end
 
-for v504, v505 in workspace:GetDescendants() do
-  task.spawn(helper58, v505)
-  task.spawn(helper27, v505)
-  task.spawn(helper36, v505)
+for _, descendant in workspace:GetDescendants() do
+  task.spawn(handleESPObject, descendant)
+  task.spawn(registerPrompt, descendant)
+  task.spawn(handleRoomObject, descendant)
 end
 
-val85.OldFog = Lighting.FogEnd
+featureState.OldFog = Lighting.FogEnd
 
-for v506, v507 in Lighting:GetChildren() do
-  if v507:IsA("Atmosphere") then
-    local element42 = v507
-    element42:SetAttribute("Density_Old", element42.Density)
+for _, child in Lighting:GetChildren() do
+  if child:IsA("Atmosphere") then
+    local descendant = child
+    descendant:SetAttribute("Density_Old", descendant.Density)
 
-    local connect27 = element42:GetPropertyChangedSignal("Density"):Connect(function()
-      if element42.Density ~= 0 then
-        element42:SetAttribute("Density_Old", element42.Density)
+    local connection = descendant:GetPropertyChangedSignal("Density"):Connect(function()
+      if descendant.Density ~= 0 then
+        descendant:SetAttribute("Density_Old", descendant.Density)
       end
 
       if toggles.RemoveCameraFog.Value then
-        element42.Density = 0
+        descendant.Density = 0
       end
     end)
 
-    v507.Destroying:Once(function() connect27:Disconnect() end)
+    child.Destroying:Once(function() connection:Disconnect() end)
 
-    table.insert(Connections, connect27)
-    table.insert(val85.FogInstances, v507)
+    table.insert(Connections, connection)
+    table.insert(featureState.FogInstances, child)
   end
 end
 
-workspace.DescendantAdded:Connect(helper58)
-workspace.DescendantAdded:Connect(helper27)
-workspace.DescendantAdded:Connect(helper36)
+workspace.DescendantAdded:Connect(handleESPObject)
+workspace.DescendantAdded:Connect(registerPrompt)
+workspace.DescendantAdded:Connect(handleRoomObject)
 
-for v509, v510 in workspace:GetDescendants() do
-  if v510:IsA("ProximityPrompt") and not v510:GetAttribute("FakePrompt") then
-    task.spawn(helper27, v510)
+for _, descendant in workspace:GetDescendants() do
+  if descendant:IsA("ProximityPrompt") and not descendant:GetAttribute("FakePrompt") then
+    task.spawn(registerPrompt, descendant)
   end
 end
 
-local val300 = tick()
+local now2 = tick()
 
 runService.Heartbeat:Connect(function()
   if _Unloading then
     return
   end
 
-  if tick() - val300 <= 0.5 then
+  if tick() - now2 <= 0.5 then
     return
   end
 
-  val300 = tick()
+  now2 = tick()
 
-  for index76, value117 in ipairs(_TrackedPrompts) do
-    if value117 and value117.Parent then
-      if value117:HasTag("DisableWhenEnabledOnClient") then
-        value117:RemoveTag("DisableWhenEnabledOnClient")
+  for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
+    if _TrackedPrompt and _TrackedPrompt.Parent then
+      if _TrackedPrompt:HasTag("DisableWhenEnabledOnClient") then
+        _TrackedPrompt:RemoveTag("DisableWhenEnabledOnClient")
       end
 
       if toggles and toggles.InstantInteract and toggles.InstantInteract.Value
-        and value117.HoldDuration ~= 0 then
-        value117.HoldDuration = 0
+        and _TrackedPrompt.HoldDuration ~= 0 then
+        _TrackedPrompt.HoldDuration = 0
       end
 
       if toggles and toggles.PromptClip and toggles.PromptClip.Value
-        and value117.RequiresLineOfSight ~= false then
-        value117.RequiresLineOfSight = false
+        and _TrackedPrompt.RequiresLineOfSight ~= false then
+        _TrackedPrompt.RequiresLineOfSight = false
       end
 
       if toggles and toggles.PromptReach and toggles.PromptReach.Value then
-        local maxActivationDistanceOld = value117:GetAttribute("MaxActivationDistance_Old")
+        local maxActivationDistanceOld = _TrackedPrompt:GetAttribute("MaxActivationDistance_Old")
 
         if maxActivationDistanceOld then
           local promptRange = options and options.PromptRange
             and maxActivationDistanceOld * options.PromptRange.Value
 
-          if promptRange and value117.MaxActivationDistance ~= promptRange then
-            value117.MaxActivationDistance = promptRange
+          if promptRange and _TrackedPrompt.MaxActivationDistance ~= promptRange then
+            _TrackedPrompt.MaxActivationDistance = promptRange
           end
         end
       end
@@ -13067,10 +13005,10 @@ runService.Heartbeat:Connect(function()
 
   if toggles and toggles.NotifyVulnerable and toggles.NotifyVulnerable.Value
     and humanoidRootPart then
-    local val301 = humanoidRootPart.Position.Y
+    local y = humanoidRootPart.Position.Y
 
     if VulnerableLastY then
-      if val301 - VulnerableLastY >= 3 and tick() - VulnerableNotifCooldown >= 3 then
+      if y - VulnerableLastY >= 3 and tick() - VulnerableNotifCooldown >= 3 then
         library:Notify({
           Title = "Vulnerable", Description = "You've moved 3+ studs upward!", Time = 3, })
 
@@ -13078,18 +13016,18 @@ runService.Heartbeat:Connect(function()
       end
     end
 
-    VulnerableLastY = val301
+    VulnerableLastY = y
   end
 end)
 
 AutoHide = { Last = tick(), ThreatConns = {} }
-toggles.AutoClosetToggle:OnChanged(function(p207)
+function Handlers.AutoClosetToggleChanged(value)
   if _AutoHideConnection then
     _AutoHideConnection:Disconnect()
     _AutoHideConnection = nil
   end
 
-  if p207 then
+  if value then
     _AutoHideConnection = runService.Heartbeat:Connect(function()
       if _Unloading then
         return
@@ -13104,76 +13042,77 @@ toggles.AutoClosetToggle:OnChanged(function(p207)
       end
 
       if Functions.GetNearestEntity(true, options.AutoClosetEntityList.Value) then
-        local functions6 = Functions.GetNearestHidingSpot()
+        local functions = Functions.GetNearestHidingSpot()
 
-        if character:GetAttribute("Hiding") ~= true and functions6 then
-          Functions.ForceFirePrompt(functions6.HidePrompt)
+        if character:GetAttribute("Hiding") ~= true and functions then
+          Functions.ForceFirePrompt(functions.HidePrompt)
         end
       elseif character:GetAttribute("Hiding") == true then
-        remotesFolder2.CamLock:FireServer()
+        remotesFolder.CamLock:FireServer()
       end
 
       if toggles.RemoveClosetDelay.Value and humanoid.MoveDirection ~= Vector3.zero
         and (collisionPart.Anchored or humanoidRootPart.Anchored)
         and character:GetAttribute("AnimatingClient") ~= true
         and character:GetAttribute("Hiding") == true then
-        remotesFolder2.CamLock:FireServer()
+        remotesFolder.CamLock:FireServer()
       end
 
       AutoHide.Last = tick()
     end)
   end
-end)
+end
 
-local function helper77()
+
+local function watchOxygen()
   if character then
-    local val302 = -1
-    local val303 = { 80, 60, 40, 20 }
+    local lastOxygen = -1
+    local warningLevels = { 80, 60, 40, 20 }
 
     character:GetAttributeChangedSignal("Oxygen"):Connect(function()
       local oxygen = character:GetAttribute("Oxygen")
 
       if toggles.NotifyOxygen and toggles.NotifyOxygen.Value then
-        local floorVal2 = math.floor(oxygen + 0.5)
+        local floorVal = math.floor(oxygen + 0.5)
 
-        if floorVal2 ~= val302 and TableFind(val303, floorVal2) then
+        if floorVal ~= lastOxygen and TableFind(warningLevels, floorVal) then
           library:Notify({
-            Title = "Oxygen decreasing", Description = "Your oxygen is at " .. tostring(floorVal2) .. "%", Time = 3, })
+            Title = "Oxygen decreasing", Description = "Your oxygen is at " .. tostring(floorVal) .. "%", Time = 3, })
 
-          val302 = floorVal2
+          lastOxygen = floorVal
         end
       end
     end)
   end
 
-  if floorReplicated3:FindFirstChild("DigitalTimer") then
-    local val304 = -1
+  if floorReplicated:FindFirstChild("DigitalTimer") then
+    local lastSecond = -1
 
-    floorReplicated3.DigitalTimer:GetPropertyChangedSignal("Value"):Connect(function()
+    floorReplicated.DigitalTimer:GetPropertyChangedSignal("Value"):Connect(function()
       if toggles.NotifyHasteTime and toggles.NotifyHasteTime.Value then
-        local value118 = floorReplicated3.DigitalTimer.Value
+        local value = floorReplicated.DigitalTimer.Value
 
-        if TableFind({ 90, 60, 30, 15 }, value118) and value118 ~= val304 then
-          val304 = value118
+        if TableFind({ 90, 60, 30, 15 }, value) and value ~= lastSecond then
+          lastSecond = value
 
           library:Notify({
-            Title = "Haste notification", Description = "Haste is coming in " .. value118 .. " seconds!", Time = 3, })
+            Title = "Haste notification", Description = "Haste is coming in " .. value .. " seconds!", Time = 3, })
         end
       end
     end)
   end
 end
 
-helper77()
+watchOxygen()
 
-localPlayer2.CharacterAdded:Connect(function()
+localPlayer.CharacterAdded:Connect(function()
   task.wait(1)
-  helper77()
+  watchOxygen()
 end)
 
 Connections.FogHandler = Lighting:GetPropertyChangedSignal("FogEnd"):Connect(function()
   if Lighting.FogEnd ~= 10000000 then
-    val85.OldFog = Lighting.FogEnd
+    featureState.OldFog = Lighting.FogEnd
   end
 
   if toggles.RemoveCameraFog.Value then
@@ -13181,53 +13120,53 @@ Connections.FogHandler = Lighting:GetPropertyChangedSignal("FogEnd"):Connect(fun
   end
 end)
 
-Connections.FogHandler2 = Lighting.DescendantAdded:Connect(function(descendant7)
-  if not descendant7:IsA("Atmosphere") then
+Connections.FogHandler2 = Lighting.DescendantAdded:Connect(function(descendant)
+  if not descendant:IsA("Atmosphere") then
     return
   end
 
-  descendant7:SetAttribute("Density_Old", descendant7.Density)
+  descendant:SetAttribute("Density_Old", descendant.Density)
 
   if toggles.RemoveCameraFog.Value then
-    descendant7.Density = 0
+    descendant.Density = 0
   end
 
-  local connect28 = descendant7:GetPropertyChangedSignal("Density"):Connect(function()
-    if descendant7.Density ~= 0 then
-      descendant7:SetAttribute("Density_Old", descendant7.Density)
+  local connection = descendant:GetPropertyChangedSignal("Density"):Connect(function()
+    if descendant.Density ~= 0 then
+      descendant:SetAttribute("Density_Old", descendant.Density)
     end
 
     if toggles.RemoveCameraFog.Value then
-      descendant7.Density = 0
+      descendant.Density = 0
     end
   end)
 
-  descendant7.Destroying:Once(function() connect28:Disconnect() end)
+  descendant.Destroying:Once(function() connection:Disconnect() end)
 
-  table.insert(Connections, connect28)
-  table.insert(val85.FogInstances, descendant7)
+  table.insert(Connections, connection)
+  table.insert(featureState.FogInstances, descendant)
 end)
 
-localPlayer2.CharacterAppearanceLoaded:Connect(function()
+localPlayer.CharacterAppearanceLoaded:Connect(function()
   task.wait(1)
-  local element43 = helper74()
+  local module = getMainGameModule()
 
-  if toggles.RemoveCameraBobbing.Value and element43 and element43.spring then
-    element43.spring.Speed = 9000000000
+  if toggles.RemoveCameraBobbing.Value and module and module.spring then
+    module.spring.Speed = 9000000000
   end
 end)
 
-localPlayer2.CharacterAdded:Connect(function()
+localPlayer.CharacterAdded:Connect(function()
   task.wait(1)
-  val280 = nil
-  local element44 = helper74()
+  mainGameModule = nil
+  local module = getMainGameModule()
 
-  if toggles.RemoveCameraBobbing.Value and element44 and element44.spring then
-    element44.spring.Speed = 9000000000
+  if toggles.RemoveCameraBobbing.Value and module and module.spring then
+    module.spring.Speed = 9000000000
   end
 
   if toggles.DisableJumpscares.Value then
-    iterate10(true)
+    setupMainGameHooks(true)
   end
 end)
 
@@ -13261,20 +13200,65 @@ KnobFarm.StatsRecordedThisRun = false
 KnobFarm.RunGold = 0
 KnobFarm.Teleporting = false
 KnobFarm.InLobby = false
-KnobFarm.DisabledNoclipForSeek = false
-KnobFarm.NoclipBeforeJeff = false
+KnobFarm.SeekMode = false
 KnobFarm.IgnoredDoors = setmetatable({}, { __mode = "k" })
 KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
+KnobFarm.LootDoneAt = setmetatable({}, { __mode = "k" })
+KnobFarm.FireplacesDisabled = setmetatable({}, { __mode = "k" })
 
 local STATS_FILE = "Doors_Farm_Stats.json"
 
+-- Номера комнат и таймауты в одном месте (раньше были разбросаны числами по условиям)
+local ROOMS = {
+  LAST_NORMAL = 49,        -- дальше 49-й «быстрый цикл» заканчивается (если Farm to Door 100 выключен)
+  FIGURE = 50,             -- библиотека с Фигурой
+  SHOP_FROM = 54,          -- магазин Джеффа: 54-59, ничего не покупаем
+  SHOP_TO = 59,
+  SECOND_SEEK = 60,        -- с 60-й комнаты вторая погоня Seek; саму 60-ю игнорируем
+  IGNORE_FROM = 89,        -- 89-99: ничего не лутаем и не ждём, летим к двери
+  IGNORE_TO = 99,
+  ELEVATOR = 100,          -- щитовая и лифт
+  SEEK_DOORS_FIRST = 7,    -- дверей в первой погоне
+  SEEK_DOORS_SECOND = 10,  -- и во второй
+  SKIP_DOOR_AFTER = 90,    -- секунд в одной комнате до принудительного скипа двери
+  PLAY_AGAIN_AFTER = 600,  -- секунд в одной комнате до Play Again
+  LOOT_RESCAN = 6,         -- секунд, в течение которых вылутанную комнату не сканируем заново
+}
+
+-- Что фарм меняет в других функциях (Godmode, Instant Interact и т.д.) идёт через SetFeature:
+-- первое изменение запоминает исходное значение, Stop() возвращает всё обратно (если пользователь
+-- сам не поменял тумблер после фарма).
+local featureBackup = {}
+local function SetFeature(name, value, isOption)
+  local control = isOption and options and options[name] or (not isOption and toggles and toggles[name])
+  if not control then return end
+  local current = control.Value
+  if current == value then return end
+  local record = featureBackup[name]
+  if not record then
+    record = { original = current, control = control }
+    featureBackup[name] = record
+  end
+  record.set = value
+  pcall(function() control:SetValue(value) end)
+end
+
+local function RestoreFeatures()
+  for name, record in pairs(featureBackup) do
+    pcall(function()
+      if record.control.Value == record.set then record.control:SetValue(record.original) end
+    end)
+    featureBackup[name] = nil
+  end
+end
+
 local function GetPlayerKnobs()
   local val = nil
-  if localPlayer2 then
-    val = localPlayer2:GetAttribute("Knobs") or localPlayer2:GetAttribute("Knob")
+  if localPlayer then
+    val = localPlayer:GetAttribute("Knobs") or localPlayer:GetAttribute("Knob")
     if typeof(val) == "number" then return val end
 
-    local leaderstats = localPlayer2:FindFirstChild("leaderstats")
+    local leaderstats = localPlayer:FindFirstChild("leaderstats")
     if leaderstats then
       local k = leaderstats:FindFirstChild("Knobs") or leaderstats:FindFirstChild("Knob")
       if k and typeof(k.Value) == "number" then return k.Value end
@@ -13288,7 +13272,7 @@ local function GetPlayerKnobs()
   end
 
   pcall(function()
-    local mainUI = localPlayer2 and localPlayer2:FindFirstChild("PlayerGui") and localPlayer2.PlayerGui:FindFirstChild("MainUI")
+    local mainUI = localPlayer and localPlayer:FindFirstChild("PlayerGui") and localPlayer.PlayerGui:FindFirstChild("MainUI")
     if mainUI then
       local itemShop = mainUI:FindFirstChild("ItemShop")
       if itemShop then
@@ -13315,16 +13299,16 @@ local function LoadStats()
   }
 
   if isfile and isfile(STATS_FILE) then
-    local ok, content = pcall(readfile, STATS_FILE)
-    if ok and content and #content > 0 then
-      local decodeOk, data = pcall(function()
-        return httpService:JSONDecode(content)
+    local success, result = pcall(readfile, STATS_FILE)
+    if success and result and #result > 0 then
+      local success2, result3 = pcall(function()
+        return httpService:JSONDecode(result)
       end)
-      if decodeOk and typeof(data) == "table" then
-        stats.TotalEarned = tonumber(data.TotalEarned) or 0
-        stats.TotalSpent = tonumber(data.TotalSpent) or 0
-        stats.NetProfit = tonumber(data.NetProfit) or 0
-        stats.RunsCompleted = tonumber(data.RunsCompleted) or 0
+      if success2 and typeof(result3) == "table" then
+        stats.TotalEarned = tonumber(result3.TotalEarned) or 0
+        stats.TotalSpent = tonumber(result3.TotalSpent) or 0
+        stats.NetProfit = tonumber(result3.NetProfit) or 0
+        stats.RunsCompleted = tonumber(result3.RunsCompleted) or 0
       end
     end
   end
@@ -13399,10 +13383,10 @@ task.spawn(function()
   UpdateStatsGUI()
 end)
 
-if not val85.HotelNodesFolder then
-  val85.HotelNodesFolder = Instance.new("Folder")
-  val85.HotelNodesFolder.Name = "HotelPathNodes"
-  val85.HotelNodesFolder.Parent = workspace
+if not featureState.HotelNodesFolder then
+  featureState.HotelNodesFolder = Instance.new("Folder")
+  featureState.HotelNodesFolder.Name = "HotelPathNodes"
+  featureState.HotelNodesFolder.Parent = workspace
 end
 
 local lastStatusText = nil
@@ -13428,8 +13412,8 @@ local function ClearPathNodes()
   end
   table.clear(currentNodes)
 
-  if val85.HotelNodesFolder then
-    for _, child in ipairs(val85.HotelNodesFolder:GetChildren()) do
+  if featureState.HotelNodesFolder then
+    for _, child in ipairs(featureState.HotelNodesFolder:GetChildren()) do
       if child.Name == "PathNode" then
         pcall(function() child:Destroy() end)
       end
@@ -13458,11 +13442,11 @@ local function ResetFarmState()
   KnobFarm.SeekDoorsSkipped = 0
   KnobFarm.LastSkippedRoom = nil
   KnobFarm.SeekChaseStartRoom = nil
-  -- Эти флаги раньше НЕ сбрасывались: после смерти посреди Seek/босса Teleporting оставался true,
-  -- и античит-«страж» PhantomNoclip переставал откатывать подозрительные телепорты до перезапуска.
+  -- Эти флаги раньше НЕ сбрасывались: после смерти посреди Seek/босса они оставались включёнными.
   KnobFarm.Teleporting = false
-  KnobFarm.DisabledNoclipForSeek = false
-  KnobFarm.NoclipBeforeJeff = false
+  KnobFarm.SeekMode = false
+  KnobFarm.LootDoneAt = setmetatable({}, { __mode = "k" })
+  KnobFarm.FireplacesDisabled = setmetatable({}, { __mode = "k" })
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
@@ -13477,7 +13461,7 @@ end
 
 local function RenderPathNodes(waypoints)
   ClearPathNodes()
-  if not val85.HotelNodesFolder then return end
+  if not featureState.HotelNodesFolder then return end
 
   local showPath = true
   if toggles and toggles.AutoFarmShowPath then
@@ -13498,21 +13482,21 @@ local function RenderPathNodes(waypoints)
       node.Name = "PathNode"
       node.Color = Color3.fromRGB(0, 255, 0)
       node.Material = Enum.Material.Neon
-      node.Parent = val85.HotelNodesFolder
+      node.Parent = featureState.HotelNodesFolder
       currentNodes[i] = node
     end
   end
 end
 
 local function GetMainGameModule()
-  local pGui = localPlayer2 and localPlayer2:FindFirstChildOfClass("PlayerGui")
+  local pGui = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
   local mUI = pGui and pGui:FindFirstChild("MainUI")
   local init = mUI and mUI:FindFirstChild("Initiator")
   local mg = init and init:FindFirstChild("Main_Game")
   if mg and mg:IsA("ModuleScript") then
-    local ok, res = pcall(require, mg)
-    if ok and type(res) == "table" then
-      return res
+    local success, result = pcall(require, mg)
+    if success and type(result) == "table" then
+      return result
     end
   end
   return nil
@@ -13529,7 +13513,7 @@ local function SetCrouched(state)
   LastCrouchCall = tick()
 
   pcall(function()
-    local char = localPlayer2 and localPlayer2.Character
+    local char = localPlayer and localPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then
       if state then
@@ -13552,12 +13536,12 @@ local function SetCrouched(state)
   end)
 
   pcall(function()
-    local char = localPlayer2 and localPlayer2.Character
+    local char = localPlayer and localPlayer.Character
     if char then
       char:SetAttribute("Crouching", state)
     end
-    if remotesFolder2 and remotesFolder2:FindFirstChild("Crouch") then
-      remotesFolder2.Crouch:FireServer(state, true)
+    if remotesFolder and remotesFolder:FindFirstChild("Crouch") then
+      remotesFolder.Crouch:FireServer(state, true)
     end
     if collisionPart then
       collisionPart.CollisionGroup = state and "PlayerCrouching" or "Player"
@@ -13585,22 +13569,31 @@ local function GetInstancePosition(inst)
     local prim = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
     if prim then return prim.Position end
   end
-  local ok, pv = pcall(function() return inst:GetPivot().Position end)
-  if ok and pv then return pv end
+  local success, result = pcall(function() return inst:GetPivot().Position end)
+  if success and result then return result end
   return nil
+end
+
+-- Один RaycastParams на весь фарм: раньше он создавался заново на каждый рейкаст (десятки раз в секунду)
+local sharedRayParams = RaycastParams.new()
+sharedRayParams.FilterType = Enum.RaycastFilterType.Exclude
+local rayChar, rayNodes
+local function GetRayParams()
+  local char = localPlayer and localPlayer.Character
+  local nodes = featureState and featureState.HotelNodesFolder
+  if char ~= rayChar or nodes ~= rayNodes then
+    rayChar, rayNodes = char, nodes
+    local filter = {}
+    if char then table.insert(filter, char) end
+    if nodes then table.insert(filter, nodes) end
+    sharedRayParams.FilterDescendantsInstances = filter
+  end
+  return sharedRayParams
 end
 
 local function HasFloorUnder(pos, maxDist)
   if not pos then return false, nil end
-  local rayParams = RaycastParams.new()
-  rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  local char = localPlayer2 and localPlayer2.Character
-  local filter = {}
-  if char then table.insert(filter, char) end
-  if val85 and val85.HotelNodesFolder then table.insert(filter, val85.HotelNodesFolder) end
-  rayParams.FilterDescendantsInstances = filter
-
-  local hit = workspace:Raycast(pos + Vector3.new(0, 2.5, 0), Vector3.new(0, -(maxDist or 30), 0), rayParams)
+  local hit = workspace:Raycast(pos + Vector3.new(0, 2.5, 0), Vector3.new(0, -(maxDist or 30), 0), GetRayParams())
   if hit and hit.Instance then
     return true, hit.Position, hit.Instance
   end
@@ -13616,95 +13609,68 @@ local function GetFloorPosition(pos)
   return nil
 end
 
+-- Безопасная точка внутри комнаты (вход/выход или над полом); общая для void- и roof-восстановления
+local function FindSafePosition(room)
+  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
+  local curRoom = room
+  if not curRoom and roomsFolder then
+    if KnobFarm.CurrentRoomNum then
+      curRoom = roomsFolder:FindFirstChild(tostring(KnobFarm.CurrentRoomNum))
+    end
+    if not curRoom then
+      local maxNum = -1
+      for _, r in ipairs(roomsFolder:GetChildren()) do
+        local n = tonumber(r.Name)
+        if n and n > maxNum then
+          maxNum = n
+          curRoom = r
+        end
+      end
+    end
+  end
+
+  local safePart = curRoom and (curRoom:FindFirstChild("RoomEntrance") or curRoom:FindFirstChild("RoomExit"))
+  if safePart and safePart:IsA("BasePart") then
+    return safePart.Position + Vector3.new(0, 3, 0)
+  end
+  if curRoom then
+    local floor = curRoom:FindFirstChild("Floor", true) or curRoom:FindFirstChild("Parts", true)
+    if floor and floor:IsA("BasePart") then
+      return floor.Position + Vector3.new(0, 4, 0)
+    end
+  end
+  return nil
+end
+
 local isRecoveringFromVoid = false
 local function RecoverFromVoid(room)
   if isRecoveringFromVoid then return end
   isRecoveringFromVoid = true
 
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then
     isRecoveringFromVoid = false
     return
   end
 
-  if KnobFarm and KnobFarm.SetStatus then
-    KnobFarm.SetStatus("Fell into void! Disabling noclip for 3s...")
-  end
+  KnobFarm.SetStatus("Fell into void! Returning to the room...")
 
-  -- 1. Выключаем ноуклип
-  pcall(function()
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(false)
-    end
-    if toggles and toggles.Noclip and toggles.Noclip.Value then
-      toggles.Noclip:SetValue(false)
-    end
-  end)
-
-  -- 2. Включаем коллизию персонажа (чтобы встать на пол)
-  pcall(function()
-    if char then
-      for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-          p.CanCollide = true
-        end
-      end
-    end
-  end)
-
-  -- 3. Находим безопасную точку входа текущей комнаты
-  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
-  local curR = room
-  if not curR and roomsFolder then
-    if KnobFarm and KnobFarm.CurrentRoomNum then
-      curR = roomsFolder:FindFirstChild(tostring(KnobFarm.CurrentRoomNum))
-    end
-    if not curR then
-      local maxNum = -1
-      for _, r in ipairs(roomsFolder:GetChildren()) do
-        local n = tonumber(r.Name)
-        if n and n > maxNum then
-          maxNum = n
-          curR = r
-        end
-      end
-    end
-  end
-
-  local safePart = curR and (curR:FindFirstChild("RoomEntrance") or curR:FindFirstChild("RoomExit"))
-  local safePos = nil
-  if safePart and safePart:IsA("BasePart") then
-    safePos = safePart.Position + Vector3.new(0, 3, 0)
-  elseif curR then
-    local floor = curR:FindFirstChild("Floor", true) or curR:FindFirstChild("Parts", true)
-    if floor and floor:IsA("BasePart") then
-      safePos = floor.Position + Vector3.new(0, 4, 0)
-    end
-  end
-
-  if safePos and root then
+  local safePos = FindSafePosition(room)
+  if safePos then
+    KnobFarm.Teleporting = true   -- иначе откат Phantom Noclip вернёт персонажа обратно в пустоту
     root.CFrame = CFrame.new(safePos)
     root.AssemblyLinearVelocity = Vector3.zero
   end
 
-  -- 4. Ждем ровно 3 секунды с выключенным ноуклипом
-  task.wait(3.0)
+  task.wait(0.5)
 
-  -- 5. Включаем ноуклип обратно
-  pcall(function()
-    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
-    end
-  end)
-
-  if safePos and root then
+  if safePos then
     root.AssemblyLinearVelocity = Vector3.zero
   end
+  KnobFarm.Teleporting = false
 
-  if KnobFarm and KnobFarm.SetStatus then
-    KnobFarm.SetStatus("Noclip re-enabled. Resuming...")
-  end
+  KnobFarm.SetStatus("Back in the room. Resuming...")
   isRecoveringFromVoid = false
 end
 
@@ -13721,8 +13687,20 @@ KnobFarm.RecoverFromVoid = RecoverFromVoid
 local activeMoveConn = nil
 
 local function GetRoot()
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- Предмет по имени: сначала в руках, потом в рюкзаке (раньше этот поиск был скопирован ~6 раз)
+local function FindTool(...)
+  local char = localPlayer and localPlayer.Character
+  local backpack = localPlayer and localPlayer:FindFirstChildOfClass("Backpack")
+  for i = 1, select("#", ...) do
+    local name = select(i, ...)
+    local tool = (char and char:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name))
+    if tool then return tool end
+  end
+  return nil
 end
 
 local function GetFarmSpeed()
@@ -13733,9 +13711,7 @@ end
 -- Единая точка управления скоростью (раньше — 6 копий с разными дефолтами 22/35)
 local function ApplyFarmSpeed(hum)
   local speed = GetFarmSpeed()
-  if toggles and toggles.EnableWalkspeed and not toggles.EnableWalkspeed.Value then
-    toggles.EnableWalkspeed:SetValue(true)
-  end
+  SetFeature("EnableWalkspeed", true)
   if options and options.Walkspeed and options.Walkspeed.Value ~= speed then
     options.Walkspeed:SetValue(speed)
   end
@@ -13772,11 +13748,6 @@ local function FirePrompt(prompt, withHold, withForce)
   end
 end
 
--- старое имя, на него ссылается handleRoom50
-local function safeFirePrompt(prompt)
-  FirePrompt(prompt, false, true)
-end
-
 local function GetGameData()
   return replicatedStorage and replicatedStorage:FindFirstChild("GameData")
 end
@@ -13792,7 +13763,7 @@ local function RequestPlayAgain()
   if toggles and toggles.AutoFarmPlayAgain and not toggles.AutoFarmPlayAgain.Value then
     return false
   end
-  local remote = (remotesFolder2 and remotesFolder2:FindFirstChild("PlayAgain"))
+  local remote = (remotesFolder and remotesFolder:FindFirstChild("PlayAgain"))
     or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder")
       and replicatedStorage.RemotesFolder:FindFirstChild("PlayAgain"))
   if remote then
@@ -13806,7 +13777,7 @@ end
 local function ConfirmShopIfOpen()
   pcall(function()
     if Functions and Functions.ConfirmPreRunShop then
-      local pGui = localPlayer2 and localPlayer2:FindFirstChild("PlayerGui")
+      local pGui = localPlayer and localPlayer:FindFirstChild("PlayerGui")
       local mainUI = pGui and pGui:FindFirstChild("MainUI")
       local itemShop = mainUI and mainUI:FindFirstChild("ItemShop")
       if itemShop and itemShop.Visible then
@@ -13838,10 +13809,10 @@ local function HasCeilingAbove(pos, maxDist)
   if not pos then return false, nil, nil end
   local rayParams = RaycastParams.new()
   rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local filter = {}
   if char then table.insert(filter, char) end
-  if val85 and val85.HotelNodesFolder then table.insert(filter, val85.HotelNodesFolder) end
+  if featureState and featureState.HotelNodesFolder then table.insert(filter, featureState.HotelNodesFolder) end
   rayParams.FilterDescendantsInstances = filter
 
   local rayOrigin = pos + Vector3.new(0, 1.5, 0)
@@ -13854,7 +13825,7 @@ local function HasCeilingAbove(pos, maxDist)
 end
 
 local function IsOnRoof(room)
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return false end
 
@@ -13929,97 +13900,30 @@ local function RecoverFromRoof(room)
   if isRecoveringFromRoof then return end
   isRecoveringFromRoof = true
 
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then
     isRecoveringFromRoof = false
     return
   end
 
-  if KnobFarm and KnobFarm.SetStatus then
-    KnobFarm.SetStatus("Landed on roof! Returning inside room...")
-  end
+  KnobFarm.SetStatus("Landed on roof! Returning inside room...")
 
-  -- 1. Выключаем ноуклип
-  local wasPhantom = false
-  local wasNoclip = false
-  pcall(function()
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      wasPhantom = true
-      toggles.PhantomNoclip:SetValue(false)
-    end
-    if toggles and toggles.Noclip and toggles.Noclip.Value then
-      wasNoclip = true
-      toggles.Noclip:SetValue(false)
-    end
-  end)
-
-  -- 2. Включаем коллизию персонажа (чтобы не провалиться сквозь пол)
-  pcall(function()
-    if char then
-      for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-          p.CanCollide = true
-        end
-      end
-    end
-  end)
-
-  -- 3. Находим безопасную точку входа текущей комнаты
-  local roomsFolder = workspace:FindFirstChild("CurrentRooms")
-  local curR = room
-  if not curR and roomsFolder then
-    if KnobFarm and KnobFarm.CurrentRoomNum then
-      curR = roomsFolder:FindFirstChild(tostring(KnobFarm.CurrentRoomNum))
-    end
-    if not curR and roomsFolder then
-      local maxNum = -1
-      for _, r in ipairs(roomsFolder:GetChildren()) do
-        local n = tonumber(r.Name)
-        if n and n > maxNum then
-          maxNum = n
-          curR = r
-        end
-      end
-    end
-  end
-
-  local safePart = curR and (curR:FindFirstChild("RoomEntrance") or curR:FindFirstChild("RoomExit"))
-  local safePos = nil
-  if safePart and safePart:IsA("BasePart") then
-    safePos = safePart.Position + Vector3.new(0, 3, 0)
-  elseif curR then
-    local floor = curR:FindFirstChild("Floor", true) or curR:FindFirstChild("Parts", true)
-    if floor and floor:IsA("BasePart") then
-      safePos = floor.Position + Vector3.new(0, 4, 0)
-    end
-  end
-
-  if safePos and root then
+  local safePos = FindSafePosition(room)
+  if safePos then
+    KnobFarm.Teleporting = true   -- иначе откат Phantom Noclip вернёт персонажа обратно на крышу
     root.CFrame = CFrame.new(safePos)
     root.AssemblyLinearVelocity = Vector3.zero
   end
 
   task.wait(0.4)
 
-  -- 4. Возвращаем ноуклип если был активен
-  pcall(function()
-    if wasPhantom and toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
-    end
-    if wasNoclip and toggles and toggles.Noclip and not toggles.Noclip.Value then
-      toggles.Noclip:SetValue(true)
-    end
-  end)
-
-  if safePos and root then
+  if safePos then
     root.AssemblyLinearVelocity = Vector3.zero
   end
+  KnobFarm.Teleporting = false
 
-  if KnobFarm and KnobFarm.SetStatus then
-    KnobFarm.SetStatus("Returned inside from roof! Resuming...")
-  end
-
+  KnobFarm.SetStatus("Returned inside from roof! Resuming...")
   isRecoveringFromRoof = false
 end
 
@@ -14070,8 +13974,8 @@ local function HasLockpick()
     local lp = Functions.HasItem("Lockpick") or Functions.HasItem("Lockpicks")
     if lp then return true, lp end
   end
-  local char = localPlayer2 and localPlayer2.Character
-  local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+  local char = localPlayer and localPlayer.Character
+  local bp = localPlayer and localPlayer:FindFirstChildOfClass("Backpack")
   if char then
     for _, it in ipairs(char:GetChildren()) do
       if it:IsA("Tool") and it.Name:lower():find("lockpick", 1, true) then
@@ -14094,8 +13998,8 @@ local function HasKeyTool()
     local k = Functions.HasItem("Key") or Functions.HasItem("KeyObtain") or Functions.HasItem("KeyElectrical") or Functions.HasItem("KeyIron")
     if k then return true, k end
   end
-  local char = localPlayer2 and localPlayer2.Character
-  local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
+  local char = localPlayer and localPlayer.Character
+  local bp = localPlayer and localPlayer:FindFirstChildOfClass("Backpack")
   if char then
     for _, it in ipairs(char:GetChildren()) do
       if it:IsA("Tool") then
@@ -14120,7 +14024,7 @@ local function HasKeyTool()
 end
 
 local function EquipUnlockTool(preferLockpick)
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not hum or not char then return end
 
@@ -14298,9 +14202,9 @@ local function GetDoorCenter(door)
 
   local bboxCenter = nil
   if door:IsA("Model") then
-    local ok, cf = pcall(function() return door:GetBoundingBox() end)
-    if ok and cf then
-      bboxCenter = cf.Position
+    local success, result = pcall(function() return door:GetBoundingBox() end)
+    if success and result then
+      bboxCenter = result.Position
     end
   end
 
@@ -14325,15 +14229,12 @@ local function GetPlayerCurrentRoom()
   local roomsFolder = workspace:FindFirstChild("CurrentRooms")
   if not roomsFolder then return nil, 0 end
 
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return nil, 0 end
 
   -- 1. Raycast downward
-  local rayParams = RaycastParams.new()
-  rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  rayParams.FilterDescendantsInstances = { char, val85.HotelNodesFolder }
-  local hit = workspace:Raycast(root.Position + Vector3.new(0, 2, 0), Vector3.new(0, -35, 0), rayParams)
+  local hit = workspace:Raycast(root.Position + Vector3.new(0, 2, 0), Vector3.new(0, -35, 0), GetRayParams())
   if hit and hit.Instance then
     local p = hit.Instance
     while p and p.Parent and p.Parent ~= roomsFolder do
@@ -14486,13 +14387,14 @@ local function SetupObstacleListener()
 end
 
 
+local MOVE_KEYS = {
+  Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
+  Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Left, Enum.KeyCode.Right,
+}
+
 local function IsUserMovingManually()
   if not userInputService then return false end
-  local keys = {
-    Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
-    Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Left, Enum.KeyCode.Right
-  }
-  for _, k in ipairs(keys) do
+  for _, k in ipairs(MOVE_KEYS) do
     if userInputService:IsKeyDown(k) then return true end
   end
   return false
@@ -14502,7 +14404,7 @@ end
 -- потому что промпты товаров попадали под «подбираемые предметы»)
 local function IsJeffShopPrompt(prompt)
   local n = KnobFarm.CurrentRoomNum or 0
-  if n < 54 or n > 59 then return false end
+  if n < ROOMS.SHOP_FROM or n > ROOMS.SHOP_TO then return false end
   local act = (prompt.ActionText or ""):lower()
   local obj = (prompt.ObjectText or ""):lower()
   if act:find("purchase", 1, true) or act:find("buy", 1, true)
@@ -14530,13 +14432,13 @@ local function IsLootablePrompt(prompt)
   if KnobFarm and (KnobFarm.CurrentRoomNum == 50) then
     local pp = prompt.Parent
     local ppName = pp and pp.Name:lower() or ""
-    local obj50 = (prompt.ObjectText or ""):lower()
-    local act50 = (prompt.ActionText or ""):lower()
+    local obj = (prompt.ObjectText or ""):lower()
+    local act = (prompt.ActionText or ""):lower()
     if ppName:find("drawer", 1, true) or ppName:find("nightstand", 1, true)
       or ppName:find("dresser", 1, true) or ppName:find("chest", 1, true)
-      or obj50:find("drawer", 1, true) or obj50:find("nightstand", 1, true)
-      or obj50:find("chest", 1, true)
-      or act50 == "open" or act50 == "search" or act50 == "loot" then
+      or obj:find("drawer", 1, true) or obj:find("nightstand", 1, true)
+      or obj:find("chest", 1, true)
+      or act == "open" or act == "search" or act == "loot" then
       return false
     end
   end
@@ -14648,7 +14550,7 @@ local function ScanLootables(room)
     if desc:IsA("ProximityPrompt") and desc.Enabled and not KnobFarm.LootedObjects[desc]
       and IsLootablePrompt(desc) then
       local pos = GetInstancePosition(desc.Parent) or GetInstancePosition(desc)
-      if pos and HasFloorUnder(pos) then
+      if pos then
         list[#list + 1] = { prompt = desc, pos = pos, parent = desc.Parent }
       end
     end
@@ -14694,7 +14596,8 @@ local function LootAround(room, radius, list)
   local count = 0
   for _, item in ipairs(list) do
     if not KnobFarm.Active or _Unloading then break end
-    if not KnobFarm.LootedObjects[item.prompt] and (item.pos - root.Position).Magnitude <= radius then
+    if not KnobFarm.LootedObjects[item.prompt] and (item.pos - root.Position).Magnitude <= radius
+      and HasFloorUnder(item.pos) then
       LootPrompt(item.prompt, item.parent)
       count = count + 1
     end
@@ -14706,7 +14609,14 @@ local function LootAllInRoom(room)
   if not room or not KnobFarm.Active or _Unloading then return end
   if not GetRoot() then return end
 
-  DisableFireplaces(room)
+  -- Комната уже вылутана: не сканируем её заново на каждом тике (полный GetDescendants)
+  local doneAt = KnobFarm.LootDoneAt[room]
+  if doneAt and tick() - doneAt < ROOMS.LOOT_RESCAN then return end
+
+  if not KnobFarm.FireplacesDisabled[room] then
+    KnobFarm.FireplacesDisabled[room] = true
+    DisableFireplaces(room)
+  end
 
   -- Сначала всё, что лежит прямо у входа в комнату
   if LootAround(room, 8.0) > 0 then
@@ -14715,6 +14625,7 @@ local function LootAllInRoom(room)
   end
 
   local attempts = 0
+  local exhausted = false
   while attempts < 35 and KnobFarm.Active and not _Unloading do
     attempts = attempts + 1
 
@@ -14728,7 +14639,14 @@ local function LootAllInRoom(room)
     local list = ScanLootables(room)
     local target = NearestLootable(list, root and root.Position)
     if not target then
+      exhausted = true
       break -- всё доступное в комнате собрано
+    end
+
+    -- Пол под целью проверяем только у ближайшей (раньше рейкаст делался для каждого промпта комнаты)
+    if not HasFloorUnder(target.pos) then
+      KnobFarm.LootedObjects[target.prompt] = true
+      continue
     end
 
     local label = (target.parent and target.parent.Name) or "Item"
@@ -14752,6 +14670,10 @@ local function LootAllInRoom(room)
 
     task.wait(0.04)
   end
+
+  if exhausted then
+    KnobFarm.LootDoneAt[room] = tick()
+  end
 end
 
 local THREAT_NAMES = {
@@ -14769,19 +14691,13 @@ local THREAT_NAMES = {
 -- вызывает один раз за тик; все остальные читают KnobFarm.InSeekChase.
 
 local function HasEntityThreat()
-  if val83 and val83.ActiveThreats then
-    for threat, active in pairs(val83.ActiveThreats) do
+  if threatState and threatState.ActiveThreats then
+    for threat, active in pairs(threatState.ActiveThreats) do
       if active and threat and threat.Parent and THREAT_NAMES[threat.Name] then return true end
     end
   end
   for name in pairs(THREAT_NAMES) do
     if workspace:FindFirstChild(name) then return true end
-  end
-  local curRooms = workspace:FindFirstChild("CurrentRooms")
-  if curRooms then
-    for name in pairs(THREAT_NAMES) do
-      if curRooms:FindFirstChild(name, true) then return true end
-    end
   end
   return false
 end
@@ -14827,11 +14743,11 @@ local function HasSeekEyes(room)
 end
 
 local function MaxSeekDoors(roomNum)
-  return ((roomNum or 0) < 60) and 7 or 10   -- 7 дверей в 1-й погоне, 10 во 2-й
+  return ((roomNum or 0) < ROOMS.SECOND_SEEK) and ROOMS.SEEK_DOORS_FIRST or ROOMS.SEEK_DOORS_SECOND
 end
 
 local function MarkSeekDone(roomNum)
-  if (roomNum or 0) < 60 then
+  if (roomNum or 0) < ROOMS.SECOND_SEEK then
     KnobFarm.FirstChaseDone = true
   else
     KnobFarm.SecondChaseDone = true
@@ -14848,8 +14764,8 @@ local function UpdateSeekState(room, roomNum)
   local targetRoom = (curRooms and curRooms:FindFirstChild(tostring(curNum))) or room
 
   -- Погоня каждого типа бывает один раз за забег
-  if curNum < 60 and KnobFarm.FirstChaseDone then return false end
-  if curNum >= 60 and KnobFarm.SecondChaseDone then return false end
+  if curNum < ROOMS.SECOND_SEEK and KnobFarm.FirstChaseDone then return false end
+  if curNum >= ROOMS.SECOND_SEEK and KnobFarm.SecondChaseDone then return false end
 
   -- Погоня уже идёт: пропускаем ровно MaxSeekDoors дверей, без досрочного выхода
   if KnobFarm.InSeekChase then
@@ -14923,14 +14839,14 @@ local function WaitForThreats(roomNum, room)
   -- Во время Сика или внутри комнат 50/100 (Фигура) никогда не стоим на месте
   if KnobFarm.InSeekChase then return end
   local currentLatest = GetLatestRoomNum() or (roomNum or 0)
-  if roomNum == 50 or roomNum >= 100 or currentLatest == 50 or currentLatest >= 100 then return end
+  if roomNum == ROOMS.FIGURE or roomNum >= ROOMS.ELEVATOR or currentLatest == ROOMS.FIGURE or currentLatest >= ROOMS.ELEVATOR then return end
 
-  local isThreatZone = IsSeekThreatZone(room, roomNum) or roomNum == 49 or roomNum == 99
+  local isThreatZone = IsSeekThreatZone(room, roomNum) or roomNum == ROOMS.LAST_NORMAL or roomNum == ROOMS.IGNORE_TO
   if not isThreatZone then return end
 
   if HasEntityThreat() then
     KnobFarm.SetStatus("Threat detected (Room " .. tostring(roomNum) .. ")! Waiting...")
-    local char = localPlayer2 and localPlayer2.Character
+    local char = localPlayer and localPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then hum:Move(Vector3.zero, false) end
     while HasEntityThreat() and KnobFarm.Active and not _Unloading do
@@ -14943,7 +14859,7 @@ local function WaitForThreats(roomNum, room)
 end
 
 local function IsStuck()
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not root then return false end
 
@@ -15011,7 +14927,7 @@ local function GetDoorVectors(door, fromPos)
 
   -- 3. Фолбэк: вектор движения к двери
   if not passDir then
-    local char = localPlayer2 and localPlayer2.Character
+    local char = localPlayer and localPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local pPos = fromPos or (root and root.Position) or doorCenter
     local toDoor = doorCenter - pPos
@@ -15127,12 +15043,6 @@ PassDoorStraight = function(door, root, hum)
     end
     ApplyFarmSpeed(hum)
     hum:Move(passDir, false)
-    pcall(function()
-      local cam = workspace.CurrentCamera
-      if cam then
-        cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + passDir)
-      end
-    end)
     task.wait(0.02)
   end
 
@@ -15163,7 +15073,7 @@ local function GetRoomTarget(room)
   local doorCenter = GetDoorCenter(exitDoor)
   if not doorCenter then return nil, nil, nil end
 
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local rootPos = root and root.Position
 
@@ -15181,7 +15091,7 @@ end
 local function IsDirectPathClear(startPos, endPos, char)
   local rayParams = RaycastParams.new()
   rayParams.FilterType = Enum.RaycastFilterType.Exclude
-  rayParams.FilterDescendantsInstances = { char, val85.HotelNodesFolder }
+  rayParams.FilterDescendantsInstances = { char, featureState.HotelNodesFolder }
   local dir = endPos - startPos
   local dist = dir.Magnitude
   if dist < 0.2 then return true end
@@ -15481,7 +15391,7 @@ local function WaitFigureClear(pos, timeout)
     if not fp or not pos or FlatDist(fp, pos) >= FIGURE_HOLD_DIST then return true end
 
     KnobFarm.SetStatus("Figure near target — waiting...")
-    local char = localPlayer2 and localPlayer2.Character
+    local char = localPlayer and localPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local root = GetRoot()
     if hum and root then
@@ -15548,7 +15458,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
   local figureHoldAt = 0          -- когда последний раз стояли из-за Фигуры
   local figureHoldTotal = 0
 
-  local startChar = localPlayer2 and localPlayer2.Character
+  local startChar = localPlayer and localPlayer.Character
   ApplyFarmSpeed(startChar and startChar:FindFirstChildOfClass("Humanoid"))
 
   local isOrtho = (options and options.AutoFarmMovementMode and options.AutoFarmMovementMode.Value == "Orthogonal")
@@ -15563,6 +15473,9 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     currentNodes[i] = nil
   end
 
+  -- Рейкасты (лестница, пол впереди) делаем раз в 3 кадра: за 50 мс результат не успевает измениться
+  local frameCount, onStairs, groundAhead = 0, false, true
+
   -- Непрерывное рулевое управление каждый кадр (плавно, без рывков MoveTo)
   local moveConn
   moveConn = runService.RenderStepped:Connect(function()
@@ -15571,7 +15484,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       return
     end
 
-    local c = localPlayer2 and localPlayer2.Character
+    local c = localPlayer and localPlayer.Character
     local root = c and c:FindFirstChild("HumanoidRootPart")
     local h = c and c:FindFirstChildOfClass("Humanoid")
     if not c or not root or not h or h.Health <= 0 then
@@ -15626,8 +15539,12 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     currentTargetPoint = targetPoint
 
     -- Лестница: гасим физический подброс от ступенек, не прыгаем
-    local _, _, floorPart = HasFloorUnder(rootPos, 4)
-    local onStairs = IsStairPart(floorPart)
+    frameCount = frameCount + 1
+    local sampleNow = frameCount % 3 == 1
+    if sampleNow then
+      local _, _, floorPart = HasFloorUnder(rootPos, 4)
+      onStairs = IsStairPart(floorPart)
+    end
     if onStairs then
       local vel = root.AssemblyLinearVelocity
       if vel.Y > 0.1 then
@@ -15644,21 +15561,13 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     if steerDist > 0.1 then
       local moveDir = Vector3.new(steerX / steerDist, 0, steerZ / steerDist)
       -- Защита от шага в пустоту
-      if HasFloorUnder(rootPos + (moveDir * 2.0), 25) then
+      if sampleNow then groundAhead = HasFloorUnder(rootPos + (moveDir * 2.0), 25) end
+      if groundAhead then
         h:Move(moveDir, false)
       else
         h:Move(Vector3.zero, false)
         finished = true
       end
-
-      pcall(function()
-        local cam = workspace.CurrentCamera
-        if cam then
-          local camPos = cam.CFrame.Position
-          local lookTarget = Vector3.new(targetPoint.X, camPos.Y, targetPoint.Z)
-          cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
-        end
-      end)
     else
       h:Move(Vector3.zero, false)
     end
@@ -15690,7 +15599,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       break
     end
 
-    local c = localPlayer2 and localPlayer2.Character
+    local c = localPlayer and localPlayer.Character
     local root = c and c:FindFirstChild("HumanoidRootPart")
     local h = c and c:FindFirstChildOfClass("Humanoid")
     if not root or not h or h.Health <= 0 then break end
@@ -15725,13 +15634,6 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
       local stalled = now - lastProgressTime
       if stalled > 1.8 and now - lastNudgeTime > 1.0 then
         lastNudgeTime = now
-        local tp = currentTargetPoint or targetPos
-        local cam = workspace.CurrentCamera
-        if cam and tp then
-          pcall(function()
-            cam.CFrame = CFrame.new(cam.CFrame.Position, Vector3.new(tp.X, cam.CFrame.Position.Y, tp.Z))
-          end)
-        end
         local _, _, fp = HasFloorUnder(root.Position, 4)
         if not IsStairPart(fp) then
           h.Jump = true
@@ -15769,7 +15671,7 @@ FollowPath = function(waypoints, target, targetPos, targetType, room, roomNum)
     activeMoveConn = nil
   end
 
-  local c = localPlayer2 and localPlayer2.Character
+  local c = localPlayer and localPlayer.Character
   local h = c and c:FindFirstChildOfClass("Humanoid")
   local root = c and c:FindFirstChild("HumanoidRootPart")
 
@@ -15792,7 +15694,7 @@ end
 -- поэтому «не смогли дойти — пропускаем» в луте не срабатывало никогда)
 NavigateTo = function(targetPos, targetInstance, label, maxWaitTime, targetType)
   if not targetPos or not KnobFarm.Active or _Unloading then return false end
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not root or not hum or hum.Health <= 0 then return false end
@@ -15821,14 +15723,6 @@ NavigateTo = function(targetPos, targetInstance, label, maxWaitTime, targetType)
       RecoverFromVoid(nil)
       break
     end
-    pcall(function()
-      local cam = workspace.CurrentCamera
-      if cam then
-        local camPos = cam.CFrame.Position
-        local lookTarget = Vector3.new(floorPos.X, camPos.Y, floorPos.Z)
-        cam.CFrame = cam.CFrame:Lerp(CFrame.new(camPos, lookTarget), 0.2)
-      end
-    end)
     task.wait(0.1)
   end
   return (root.Position - floorPos).Magnitude <= 6
@@ -15851,12 +15745,12 @@ function KnobFarm.StopFly()
     pcall(function() KnobFarm.FlyBody:Destroy() end)
     KnobFarm.FlyBody = nil
   end
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if hum then hum.PlatformStand = false end
   if root then
-    root.CanCollide = true   -- PhantomNoclip оставляет HRP с коллизиями, возвращаем как было
+    root.CanCollide = true   -- полёт отключал коллизию корня, возвращаем
     root.AssemblyLinearVelocity = Vector3.zero
   end
 end
@@ -15864,21 +15758,12 @@ end
 -- Возвращает true, если долетели (до 6 студов по плоскости от цели).
 function KnobFarm.FlyTo(targetPos, label, timeout)
   if not targetPos or not KnobFarm.Active or _Unloading then return false end
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not root or not hum or hum.Health <= 0 then return false end
 
   KnobFarm.StopFly()
-  -- Обычный Noclip не нужен (он и роняет бота под карту), нужен только Phantom
-  pcall(function()
-    if toggles and toggles.Noclip and toggles.Noclip.Value then
-      toggles.Noclip:SetValue(false)
-    end
-    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
-    end
-  end)
 
   local targetFloor = GetFloorPosition(targetPos)
   local landY = (targetFloor and targetFloor.Y or (targetPos.Y - 2)) + 3   -- центр HRP стоящего персонажа
@@ -15934,7 +15819,7 @@ end
 -- BOSS ROOM SOLVERS (Room 50 and Room 100)
 -- ═══════════════════════════════════════════════════════════════════
 
--- Надёжно забрать предмет (книгу/листок): с PhantomNoclip персонаж «дрейфует» и одного
+-- Надёжно забрать предмет (книгу/листок): персонаж «дрейфует» и одного
 -- нажатия мало. Подходим вплотную, жмём промпт каждые 0.15с и проверяем, что предмет взят.
 local function CollectBossItem(item, isDone)
   local pos = (item:IsA("BasePart") and item.Position) or (item:IsA("Model") and item:GetPivot().Position)
@@ -15948,7 +15833,7 @@ local function CollectBossItem(item, isDone)
     local fp = GetFigurePosition()
     if fp and FlatDist(fp, pos) < FIGURE_HOLD_DIST then WaitFigureClear(pos, 10) end
 
-    local c = localPlayer2 and localPlayer2.Character
+    local c = localPlayer and localPlayer.Character
     local h = c and c:FindFirstChildOfClass("Humanoid")
     local root = c and c:FindFirstChild("HumanoidRootPart")
     if h and root then
@@ -15962,14 +15847,14 @@ local function CollectBossItem(item, isDone)
     FirePrompt(pr, false, true)
     task.wait(0.15)
   end
-  local c = localPlayer2 and localPlayer2.Character
+  local c = localPlayer and localPlayer.Character
   local h = c and c:FindFirstChildOfClass("Humanoid")
   if h then h:Move(Vector3.zero, false) end
   return (isDone ~= nil and isDone()) or false
 end
 
-local function handleRoom50(room, door)
-  local char = localPlayer2 and localPlayer2.Character
+local function handleRoom(room, door)
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not root or not hum or hum.Health <= 0 then return end
@@ -15981,10 +15866,7 @@ local function handleRoom50(room, door)
 
   -- Вспомогательная функция: есть ли лист у игрока (в руках или в рюкзаке)
   local function hasSheet()
-    local c = localPlayer2 and localPlayer2.Character
-    local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
-    return (c and (c:FindFirstChild("LibraryHintPaper") or c:FindFirstChild("LibraryHintPaperHard")))
-      or (bp and (bp:FindFirstChild("LibraryHintPaper") or bp:FindFirstChild("LibraryHintPaperHard")))
+    return FindTool("LibraryHintPaper", "LibraryHintPaperHard")
   end
 
   local sheetWasPresent = hasSheet()
@@ -15995,31 +15877,31 @@ local function handleRoom50(room, door)
     or (door and door:FindFirstChild("Padlock", true))
 
   -- Находим дверь 51 (выход из библиотеки в коридор 51)
-  local door51 = nil
+  local door2 = nil
   if padlock then
-    door51 = padlock:FindFirstAncestor("Door")
+    door2 = padlock:FindFirstAncestor("Door")
   end
-  if not door51 and targetRoom then
+  if not door2 and targetRoom then
     for _, d in ipairs(targetRoom:GetDescendants()) do
       if d.Name == "Door" and d:IsA("Model") then
         local sign = d:FindFirstChild("Sign")
         local txt = sign and sign:FindFirstChildWhichIsA("TextLabel", true)
         if txt and txt.Text == "51" then
-          door51 = d
+          door2 = d
           break
         end
       end
     end
   end
-  if not door51 then
-    door51 = targetRoom and targetRoom:FindFirstChild("Door")
+  if not door2 then
+    door2 = targetRoom and targetRoom:FindFirstChild("Door")
   end
-  if not door51 then
-    door51 = door
+  if not door2 then
+    door2 = door
   end
 
   -- Вспомогательная функция: найти дверь 52
-  local function findDoor52()
+  local function findDoor()
     local curR = workspace:FindFirstChild("CurrentRooms")
     if not curR then return nil end
     -- 1. Табличка с цифрой 52
@@ -16036,9 +15918,9 @@ local function handleRoom50(room, door)
     local r51 = curR:FindFirstChild("51")
     if r51 then
       local d51Exit = r51:FindFirstChild("Door")
-      if d51Exit and d51Exit ~= door51 then return d51Exit end
+      if d51Exit and d51Exit ~= door2 then return d51Exit end
       for _, d in ipairs(r51:GetDescendants()) do
-        if d.Name == "Door" and d:IsA("Model") and d ~= door51 then return d end
+        if d.Name == "Door" and d:IsA("Model") and d ~= door2 then return d end
       end
     end
     -- 3. Комната 52
@@ -16056,11 +15938,7 @@ local function handleRoom50(room, door)
   if not isAlreadyOpened then
     -- 1. Настройки для комнаты 50
     KnobFarm.DisableGodmodeForBoss = true
-    pcall(function()
-      if toggles and toggles.Godmode and toggles.Godmode.Value then
-        toggles.Godmode:SetValue(false)
-      end
-    end)
+    SetFeature("Godmode", false)
     SetCrouched(true)
     KnobFarm.Teleporting = false
     KnobFarm.AvoidFigure = true
@@ -16121,11 +15999,9 @@ local function handleRoom50(room, door)
 
         KnobFarm.SetStatus("Room 50: Walking to Book (avoiding Figure)...")
         local floorPos = GetFloorPosition(bPos) or bPos
-        if NavigateTo then
-          NavigateTo(floorPos, targetBook, "LiveHintBook", 8.0, "Loot")
-        end
+        NavigateTo(floorPos, targetBook, "LiveHintBook", 8.0, "Loot")
 
-        local curChar = localPlayer2 and localPlayer2.Character
+        local curChar = localPlayer and localPlayer.Character
         local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
         local dist = curRoot and (curRoot.Position - bPos).Magnitude or 999
 
@@ -16161,11 +16037,9 @@ local function handleRoom50(room, door)
         if pPos then
           local floorPos = GetFloorPosition(pPos) or pPos
           WaitFigureClear(pPos, 15)
-          if NavigateTo then
-            NavigateTo(floorPos, paper, "Hint Paper", 8.0, "Loot")
-          end
+          NavigateTo(floorPos, paper, "Hint Paper", 8.0, "Loot")
 
-          local curChar = localPlayer2 and localPlayer2.Character
+          local curChar = localPlayer and localPlayer.Character
           local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
           local dist = curRoot and (curRoot.Position - pPos).Magnitude or 999
 
@@ -16175,9 +16049,7 @@ local function handleRoom50(room, door)
             task.wait(0.3)
 
             -- Берет листочек в руки (EquipTool)
-            local bp = localPlayer2:FindFirstChildOfClass("Backpack")
-            local paperTool = (curChar and (curChar:FindFirstChild("LibraryHintPaper") or curChar:FindFirstChild("LibraryHintPaperHard")))
-              or (bp and (bp:FindFirstChild("LibraryHintPaper") or bp:FindFirstChild("LibraryHintPaperHard")))
+            local paperTool = hasSheet()
             if paperTool and hum and paperTool.Parent ~= curChar then
               pcall(function() hum:EquipTool(paperTool) end)
               task.wait(0.3)
@@ -16194,42 +16066,45 @@ local function handleRoom50(room, door)
     -- 4. Идет к двери / замку по полу
     local padPart = (padlock and padlock:IsA("BasePart") and padlock)
       or (padlock and padlock:FindFirstChildWhichIsA("BasePart", true))
-      or (door51 and door51:FindFirstChild("Door"))
-      or (door51 and door51.PrimaryPart)
+      or (door2 and door2:FindFirstChild("Door"))
+      or (door2 and door2.PrimaryPart)
 
     if padPart and padlock and padlock.Parent then
       KnobFarm.SetStatus("Room 50: Walking to Door / Padlock...")
       local padPos = (padPart:IsA("BasePart") and padPart.Position) or padPart:GetPivot().Position
       local floorPos = GetFloorPosition(padPos) or padPos
       WaitFigureClear(padPos, 20)
-      if NavigateTo then
-        NavigateTo(floorPos, padPart, "Door Padlock", 10.0, "Door")
-      end
+      NavigateTo(floorPos, padPart, "Door Padlock", 10.0, "Door")
       task.wait(0.3)
     end
 
     -- 5. Решение кодового замка
     if padlock and padlock.Parent then
       local code = Functions and Functions.GetLibraryCode and Functions.GetLibraryCode()
-      if code and remotesFolder2 and remotesFolder2:FindFirstChild("PL") then
+      if code and remotesFolder and remotesFolder:FindFirstChild("PL") then
         if not string.find(code, "_") and code ~= "_____" then
-          remotesFolder2.PL:FireServer(code)
+          remotesFolder.PL:FireServer(code)
         else
-          task.spawn(function()
-            local function brute(s)
-              local idx = string.find(s, "_")
-              if not idx then
-                pcall(function() remotesFolder2.PL:FireServer(s) end)
-                task.wait(0.02)
-                return
+          -- Перебор только если неизвестно не больше 3 цифр (≤1000 попыток) и только пока замок закрыт
+          -- и фарм работает. Раньше это был неуправляемый поток с десятками тысяч вызовов ремоута.
+          local _, blanks = string.gsub(code, "_", "")
+          if blanks <= 3 then
+            task.spawn(function()
+              local function brute(s)
+                if not (KnobFarm.Active and not _Unloading and padlock and padlock.Parent) then return end
+                local idx = string.find(s, "_")
+                if not idx then
+                  pcall(function() remotesFolder.PL:FireServer(s) end)
+                  task.wait(0.02)
+                  return
+                end
+                for d = 0, 9 do
+                  brute(string.sub(s, 1, idx - 1) .. tostring(d) .. string.sub(s, idx + 1))
+                end
               end
-              for d = 0, 9 do
-                local newS = string.sub(s, 1, idx - 1) .. tostring(d) .. string.sub(s, idx + 1)
-                brute(newS)
-              end
-            end
-            brute(code)
-          end)
+              brute(code)
+            end)
+          end
         end
       end
 
@@ -16251,44 +16126,25 @@ local function handleRoom50(room, door)
 
   -- 6. Открытие 51 двери и проход сквозь неё строго ВПЕРЕД в комнату 51
   KnobFarm.SetStatus("Room 50: Opening Door 51...")
-  if door51 then
-    if OpenDoor then
-      pcall(function() OpenDoor(door51) end)
-    else
-      local co = door51:FindFirstChild("ClientOpen")
-      if co then pcall(function() co:FireServer() end) end
-      local pr = door51:FindFirstChildWhichIsA("ProximityPrompt", true)
-      if pr then pcall(safeFirePrompt, pr) end
-    end
+  if door2 then
+    pcall(OpenDoor, door2)
     pcall(function()
-      for _, dp in ipairs(door51:GetDescendants()) do
+      for _, dp in ipairs(door2:GetDescendants()) do
         if dp:IsA("BasePart") then dp.CanCollide = false end
       end
     end)
   end
 
-  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
-  -- чтобы бот не застревал в одной точке
-  pcall(function()
-    if toggles and toggles.Godmode and not toggles.Godmode.Value then
-      toggles.Godmode:SetValue(true)
-    end
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      KnobFarm.NoclipBeforeJeff = true
-      toggles.PhantomNoclip:SetValue(false)
-    else
-      KnobFarm.NoclipBeforeJeff = true
-    end
-  end)
+  SetFeature("Godmode", true)
 
   -- Проходим сквозь дверной проем 51 строго вперед (к коридору 51, никогда не назад!)
-  local curChar = localPlayer2 and localPlayer2.Character
+  local curChar = localPlayer and localPlayer.Character
   local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
   local curHum = curChar and curChar:FindFirstChildOfClass("Humanoid")
   if curRoot and curHum then
-    local d51Center = GetDoorCenter(door51)
+    local d51Center = GetDoorCenter(door2)
     local passDir = nil
-    local hidden = door51 and door51:FindFirstChild("Hidden")
+    local hidden = door2 and door2:FindFirstChild("Hidden")
     local flatToDoor = d51Center and Vector3.new(d51Center.X - curRoot.Position.X, 0, d51Center.Z - curRoot.Position.Z)
     local approachDir = (flatToDoor and flatToDoor.Magnitude > 0.5) and flatToDoor.Unit or nil
 
@@ -16312,62 +16168,49 @@ local function handleRoom50(room, door)
       if passedDot >= 4.0 then break end
       ApplyFarmSpeed(curHum)
       curHum:Move(passDir, false)
-      pcall(function()
-        local cam = workspace.CurrentCamera
-        if cam then
-          cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + passDir)
-        end
-      end)
       task.wait(0.04)
     end
     if curHum then curHum:Move(Vector3.zero, false) end
   end
 
   -- 7. Идем к двери 52 через NavigateTo (обычный фарм пешком)
-  local door52 = nil
+  local door3 = nil
   local findStart = tick()
-  while tick() - findStart < 3.0 and not door52 and KnobFarm.Active and not _Unloading do
-    door52 = findDoor52()
-    if door52 then break end
+  while tick() - findStart < 3.0 and not door3 and KnobFarm.Active and not _Unloading do
+    door3 = findDoor()
+    if door3 then break end
     task.wait(0.15)
   end
 
-  if door52 then
-    local d52Part = door52:FindFirstChild("Door") or door52.PrimaryPart
-      or door52:FindFirstChildWhichIsA("BasePart", true)
-    if d52Part and NavigateTo then
+  if door3 then
+    local d52Part = door3:FindFirstChild("Door") or door3.PrimaryPart
+      or door3:FindFirstChildWhichIsA("BasePart", true)
+    if d52Part then
       KnobFarm.SetStatus("Walking to Door 52...")
       local d52Pos = d52Part.Position
       local floorPos = GetFloorPosition(d52Pos) or d52Pos
       NavigateTo(floorPos, d52Part, "Door 52", 10.0, "Door")
 
       -- Открываем дверь 52
-      if OpenDoor then
-        pcall(function() OpenDoor(door52) end)
-      else
-        local pr52 = door52:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if pr52 then pcall(safeFirePrompt, pr52) end
-        local co52 = door52:FindFirstChild("ClientOpen")
-        if co52 then pcall(function() co52:FireServer() end) end
-      end
+      pcall(OpenDoor, door3)
       pcall(function()
-        for _, dp in ipairs(door52:GetDescendants()) do
+        for _, dp in ipairs(door3:GetDescendants()) do
           if dp:IsA("BasePart") then dp.CanCollide = false end
         end
       end)
-      KnobFarm.OpenedDoors[door52] = true
+      KnobFarm.OpenedDoors[door3] = true
     end
   end
 
   -- УДАЛЯЕМ ИЗ ПАМЯТИ 51-УЮ ДВЕРЬ
   KnobFarm.IgnoredDoors = KnobFarm.IgnoredDoors or setmetatable({}, { __mode = "k" })
-  if door51 then
-    KnobFarm.OpenedDoors[door51] = true
-    KnobFarm.IgnoredDoors[door51] = true
+  if door2 then
+    KnobFarm.OpenedDoors[door2] = true
+    KnobFarm.IgnoredDoors[door2] = true
   end
 
   -- Запоминаем текущую комнату как минимум 51/52, чтобы бот никогда не шел назад в 50
-  if door52 and KnobFarm.OpenedDoors and KnobFarm.OpenedDoors[door52] then
+  if door3 and KnobFarm.OpenedDoors and KnobFarm.OpenedDoors[door3] then
     KnobFarm.CurrentRoomNum = 52
     KnobFarm.LastRoomNum = 52
   else
@@ -16379,49 +16222,13 @@ local function handleRoom50(room, door)
   KnobFarm.DisableGodmodeForBoss = false
   KnobFarm.AvoidFigure = false
   KnobFarm.Teleporting = false
-
-  -- В коридоре перед магазином Джеффа (51–55) выключаем Phantom Noclip,
-  -- чтобы бот не застревал в одной точке
-  pcall(function()
-    if toggles and toggles.Godmode and not toggles.Godmode.Value then
-      toggles.Godmode:SetValue(true)
-    end
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      KnobFarm.NoclipBeforeJeff = true
-      toggles.PhantomNoclip:SetValue(false)
-    else
-      KnobFarm.NoclipBeforeJeff = true
-    end
-  end)
   KnobFarm.SetStatus("Room 50 completed! Resuming Knob Farm...")
   task.wait(0.5)
 end
 
--- Комната 100: самоубийство ради быстрого Play Again (пока прохождение 100-й двери не сделано)
-local function ResetAtRoom100(char, hum)
-  KnobFarm.SetStatus("Door 100 reached! Resetting character for Play Again...")
-  pcall(function()
-    if toggles and toggles.Godmode and toggles.Godmode.Value then
-      toggles.Godmode:SetValue(false)
-    end
-  end)
-  pcall(function()
-    char = char or (localPlayer2 and localPlayer2.Character)
-    hum = hum or (char and char:FindFirstChildOfClass("Humanoid"))
-    if hum then hum.Health = 0 end
-    if char then char:BreakJoints() end
-    local underwater = (remotesFolder2 and remotesFolder2:FindFirstChild("Underwater"))
-      or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder")
-        and replicatedStorage.RemotesFolder:FindFirstChild("Underwater"))
-    if underwater then
-      underwater:FireServer(true)
-    end
-  end)
-  task.wait(1.0)
-end
-
-local function solveRoom100_Legacy(room)
-  local char = localPlayer2 and localPlayer2.Character
+-- Комната 100: щитовая, лифт и конец забега
+local function SolveRoom100(room)
+  local char = localPlayer and localPlayer.Character
   local root = char and char:FindFirstChild("HumanoidRootPart")
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if not root or not hum or hum.Health <= 0 then return end
@@ -16440,20 +16247,9 @@ local function solveRoom100_Legacy(room)
     task.wait(0.5)
   end
 
-  -- Подготовка: отключаем годмод для босса. Обычный Noclip выключен (на лестницах он ронял бота под карту),
-  -- сквозь объекты летим с PhantomNoclip.
+  -- Подготовка: отключаем годмод для босса
   KnobFarm.DisableGodmodeForBoss = true
-  pcall(function()
-    if toggles and toggles.Godmode and toggles.Godmode.Value then
-      toggles.Godmode:SetValue(false)
-    end
-    if toggles and toggles.Noclip and toggles.Noclip.Value then
-      toggles.Noclip:SetValue(false)
-    end
-    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
-    end
-  end)
+  SetFeature("Godmode", false)
 
   SetCrouched(true)
   KnobFarm.Teleporting = false
@@ -16534,7 +16330,7 @@ local function solveRoom100_Legacy(room)
       local floorPos = GetFloorPosition(fPos) or fPos
       KnobFarm.FlyTo(floorPos, "Fuse")
 
-      local curChar = localPlayer2 and localPlayer2.Character
+      local curChar = localPlayer and localPlayer.Character
       local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
       local dist = curRoot and (curRoot.Position - fPos).Magnitude or 999
       if dist <= 14.0 then
@@ -16560,7 +16356,7 @@ local function solveRoom100_Legacy(room)
       local floorPos = GetFloorPosition(kPos) or kPos
       KnobFarm.FlyTo(floorPos, "Electrical Key")
 
-      local curChar = localPlayer2 and localPlayer2.Character
+      local curChar = localPlayer and localPlayer.Character
       local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
       local dist = curRoot and (curRoot.Position - kPos).Magnitude or 999
       if dist <= 14.0 then
@@ -16569,10 +16365,8 @@ local function solveRoom100_Legacy(room)
       end
 
       -- Берем ключ в руки
-      local bp = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
       local curHum = curChar and curChar:FindFirstChildOfClass("Humanoid")
-      local keyTool = (curChar and (curChar:FindFirstChild("KeyElectrical") or curChar:FindFirstChild("ElectricalKeyObtain")))
-        or (bp and (bp:FindFirstChild("KeyElectrical") or bp:FindFirstChild("ElectricalKeyObtain")))
+      local keyTool = FindTool("KeyElectrical", "ElectricalKeyObtain")
       if keyTool and curHum and keyTool.Parent ~= curChar then
         pcall(function() curHum:EquipTool(keyTool) end)
         task.wait(0.2)
@@ -16601,13 +16395,11 @@ local function solveRoom100_Legacy(room)
 
   -- Перед щитовой убеждаемся, что ключ в руках (после рычага он мог остаться в рюкзаке)
   do
-    local c2 = localPlayer2 and localPlayer2.Character
-    local bp2 = localPlayer2 and localPlayer2:FindFirstChildOfClass("Backpack")
-    local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
-    local k2 = (c2 and (c2:FindFirstChild("KeyElectrical") or c2:FindFirstChild("ElectricalKeyObtain")))
-      or (bp2 and (bp2:FindFirstChild("KeyElectrical") or bp2:FindFirstChild("ElectricalKeyObtain")))
-    if k2 and h2 and k2.Parent ~= c2 then
-      pcall(function() h2:EquipTool(k2) end)
+    local character2 = localPlayer and localPlayer.Character
+    local humanoid2 = character2 and character2:FindFirstChildOfClass("Humanoid")
+    local keyElectrical = FindTool("KeyElectrical", "ElectricalKeyObtain")
+    if keyElectrical and humanoid2 and keyElectrical.Parent ~= character2 then
+      pcall(function() humanoid2:EquipTool(keyElectrical) end)
       task.wait(0.2)
     end
   end
@@ -16670,23 +16462,17 @@ local function solveRoom100_Legacy(room)
 
   -- 5. Мгновенно проходит щиток с помощью эксплоита
   KnobFarm.SetStatus("Room 100: Solving Breaker Box with exploit...")
-  pcall(function()
-    if toggles and toggles.AutoBreakerBox and not toggles.AutoBreakerBox.Value then
-      toggles.AutoBreakerBox:SetValue(true)
-    end
-    if options and options.BreakerBoxMethod then
-      options.BreakerBoxMethod:SetValue("Instant")
-    end
-  end)
+  SetFeature("AutoBreakerBox", true)
+  SetFeature("BreakerBoxMethod", "Instant", true)
 
-  if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-    pcall(function() remotesFolder2.EBF:FireServer() end)
+  if remotesFolder and remotesFolder:FindFirstChild("EBF") then
+    pcall(function() remotesFolder.EBF:FireServer() end)
   end
 
   local solveWait = tick()
   while tick() - solveWait < 3.5 and KnobFarm.Active and not _Unloading do
-    if remotesFolder2 and remotesFolder2:FindFirstChild("EBF") then
-      pcall(function() remotesFolder2.EBF:FireServer() end)
+    if remotesFolder and remotesFolder:FindFirstChild("EBF") then
+      pcall(function() remotesFolder.EBF:FireServer() end)
     end
     task.wait(0.5)
   end
@@ -16701,7 +16487,7 @@ local function solveRoom100_Legacy(room)
     KnobFarm.Teleporting = true
     SetCrouched(false)
     local ePos = elevator:GetPivot().Position
-    local curChar = localPlayer2 and localPlayer2.Character
+    local curChar = localPlayer and localPlayer.Character
     local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
     if curRoot then
       curRoot.CFrame = CFrame.new(ePos + Vector3.new(0, 2.0, 0))
@@ -16720,19 +16506,6 @@ local function solveRoom100_Legacy(room)
   KnobFarm.SetStatus("Game Completed! Waiting for Play Again...")
   task.wait(4.0)
   RequestPlayAgain()
-end
-
--- Переключатель: true — проходим 100 комнату полётом, false — прежний быстрый ресет персонажа
-KnobFarm.SolveRoom100 = true
-
-local function handleRoom100(room)
-  if KnobFarm.SolveRoom100 then
-    solveRoom100_Legacy(room)
-    return
-  end
-  local char = localPlayer2 and localPlayer2.Character
-  local hum = char and char:FindFirstChildOfClass("Humanoid")
-  ResetAtRoom100(char, hum)
 end
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -16795,36 +16568,14 @@ end
 -- Общее восстановление после завершения Seek (раньше этот блок был скопирован дважды)
 local function EndSeek(curRoomNum)
   MarkSeekDone(curRoomNum)
-  KnobFarm.DisabledNoclipForSeek = false
+  KnobFarm.SeekMode = false
   KnobFarm.Teleporting = false
-  pcall(function()
-    if toggles and toggles.AutoDoorSkip and toggles.AutoDoorSkip.Value then
-      toggles.AutoDoorSkip:SetValue(false)
-    end
-    if toggles and toggles.PhantomNoclip then
-      toggles.PhantomNoclip:SetValue(false)
-      task.wait(0.05)
-      toggles.PhantomNoclip:SetValue(true)
-    end
-    -- Обычный Noclip возвращаем ТОЛЬКО если он был включён до погони (раньше включался всегда)
-    if KnobFarm.NoclipBeforeSeek and toggles and toggles.Noclip and not toggles.Noclip.Value then
-      toggles.Noclip:SetValue(true)
-    end
-    KnobFarm.NoclipBeforeSeek = false
-    local curChar = localPlayer2 and localPlayer2.Character
-    if curChar then
-      for _, p in ipairs(curChar:GetDescendants()) do
-        if p:IsA("BasePart") then
-          p.CanCollide = false
-        end
-      end
-    end
-  end)
+  SetFeature("AutoDoorSkip", false)
   KnobFarm.SetStatus("Seek passed! Knob Farm resumed.")
   task.wait(0.2)
 end
 
--- 3. Погоня Seek: отключаем ноуклип и просто телепортируемся на дверь за дверью
+-- 3. Погоня Seek: просто телепортируемся на дверь за дверью
 local function StepSeek(char, hum, root, room, roomNum)
   local curRoomNum = GetLatestRoomNum() or roomNum
   local curRooms = workspace:FindFirstChild("CurrentRooms")
@@ -16833,35 +16584,16 @@ local function StepSeek(char, hum, root, room, roomNum)
   local inSeek = UpdateSeekState(room, roomNum) or UpdateSeekState(seekRoom, curRoomNum)
 
   if not inSeek then
-    if KnobFarm.DisabledNoclipForSeek then
+    if KnobFarm.SeekMode then
       EndSeek(curRoomNum)
       return true
     end
     return false
   end
 
-  -- Запоминаем, был ли включён обычный Noclip, ДО погони (один раз), чтобы вернуть ровно его
-  if not KnobFarm.DisabledNoclipForSeek then
-    KnobFarm.NoclipBeforeSeek = (toggles and toggles.Noclip and toggles.Noclip.Value) or false
-  end
-
-  -- Ноуклип выкл, коллизии вкл
-  pcall(function()
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(false)
-    end
-    if toggles and toggles.Noclip and toggles.Noclip.Value then
-      toggles.Noclip:SetValue(false)
-    end
-    for _, p in ipairs(char:GetDescendants()) do
-      if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-        p.CanCollide = true
-      end
-    end
-  end)
-  KnobFarm.DisabledNoclipForSeek = true
+  KnobFarm.SeekMode = true
   KnobFarm.InSeekChase = true
-  KnobFarm.Teleporting = true   -- иначе античит-«страж» PhantomNoclip откатит наш телепорт
+  KnobFarm.Teleporting = true   -- фарм сам перемещает персонажа
   root.AssemblyLinearVelocity = Vector3.zero
   hum:Move(Vector3.zero, false)
 
@@ -16946,18 +16678,14 @@ end
 -- Комната 49: самоубийство ради быстрого Play Again (быстрый цикл 1-49)
 local function ResetAtRoom49(char, hum)
   KnobFarm.SetStatus("Room 49 reached! Resetting character for Play Again...")
+  SetFeature("Godmode", false)
   pcall(function()
-    if toggles and toggles.Godmode and toggles.Godmode.Value then
-      toggles.Godmode:SetValue(false)
-    end
-  end)
-  pcall(function()
-    char = char or (localPlayer2 and localPlayer2.Character)
+    char = char or (localPlayer and localPlayer.Character)
     hum = hum or (char and char:FindFirstChildOfClass("Humanoid"))
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if hum then hum.Health = 0 end
     if char then char:BreakJoints() end
-    local underwater = (remotesFolder2 and remotesFolder2:FindFirstChild("Underwater"))
+    local underwater = (remotesFolder and remotesFolder:FindFirstChild("Underwater"))
       or (replicatedStorage and replicatedStorage:FindFirstChild("RemotesFolder")
         and replicatedStorage.RemotesFolder:FindFirstChild("Underwater"))
     if underwater then
@@ -16974,7 +16702,7 @@ end
 -- Скип двери: телепорт к двери текущей комнаты со стороны подхода + обычное открытие/проход.
 -- Используется, когда бот слишком долго торчит в одной комнате или упёрся в угол.
 local function SkipCurrentDoor(room, roomNum, reason)
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not (hum and root and room) then return false end
@@ -16988,7 +16716,7 @@ local function SkipCurrentDoor(room, roomNum, reason)
   local approach = center - passDir * 3
   local floorPos = GetFloorPosition(approach) or approach
 
-  KnobFarm.Teleporting = true   -- иначе «страж» PhantomNoclip откатит телепорт
+  KnobFarm.Teleporting = true   -- фарм сам перемещает персонажа
   root.CFrame = CFrame.new(floorPos + Vector3.new(0, 3, 0))
   root.AssemblyLinearVelocity = Vector3.zero
   task.wait(0.15)
@@ -17020,7 +16748,7 @@ local function StepGoToExit(char, root, room, roomNum)
   -- Упёрлись в угол несколько раз подряд: сначала пробуем прямой маршрут без PathfindNodes,
   -- а если и это не помогло — скипаем дверь
   local stuckBreaks = KnobFarm.StuckBreaks or 0
-  if stuckBreaks >= 4 and roomNum ~= 50 and roomNum ~= 100 then
+  if stuckBreaks >= 4 and roomNum ~= ROOMS.FIGURE and roomNum ~= ROOMS.ELEVATOR then
     if SkipCurrentDoor(room, roomNum, "stuck") then return end
   end
 
@@ -17051,7 +16779,7 @@ end
 
 -- Один тик фарма
 local function Tick()
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   local root = char and char:FindFirstChild("HumanoidRootPart")
   if not char or not hum or not root then
@@ -17089,10 +16817,10 @@ local function Tick()
 
   -- 10 минут в одной комнате → Play Again. Раньше таймер не сбрасывался, и ремоут
   -- долбился каждые 5 секунд; теперь повтор — раз в 30 секунд.
-  if KnobFarm.RoomEntryTime and (tick() - KnobFarm.RoomEntryTime >= 600) then
+  if KnobFarm.RoomEntryTime and (tick() - KnobFarm.RoomEntryTime >= ROOMS.PLAY_AGAIN_AFTER) then
     KnobFarm.SetStatus("10m timeout in Room " .. tostring(roomNum) .. "! Triggering Play Again...")
     RequestPlayAgain()
-    KnobFarm.RoomEntryTime = tick() - 570
+    KnobFarm.RoomEntryTime = tick() - (ROOMS.PLAY_AGAIN_AFTER - 30)
     task.wait(5.0)
     return
   end
@@ -17105,50 +16833,25 @@ local function Tick()
 
   -- Больше 1.5 минут в одной комнате (кроме 50 и 100) — скипаем дверь.
   -- Если скип не удался, повторяем через 30 секунд.
-  if roomNum ~= 50 and roomNum ~= 100 and (GetLatestRoomNum() or 0) ~= 50
-    and KnobFarm.RoomEntryTime and (tick() - KnobFarm.RoomEntryTime >= 90) then
-    KnobFarm.RoomEntryTime = tick() - 60
+  if roomNum ~= ROOMS.FIGURE and roomNum ~= ROOMS.ELEVATOR and (GetLatestRoomNum() or 0) ~= ROOMS.FIGURE
+    and KnobFarm.RoomEntryTime and (tick() - KnobFarm.RoomEntryTime >= ROOMS.SKIP_DOOR_AFTER) then
+    KnobFarm.RoomEntryTime = tick() - (ROOMS.SKIP_DOOR_AFTER - 30)
     if SkipCurrentDoor(room, roomNum, "90s in room") then return end
   end
 
   -- Баланс Knobs на старте (если скрипт запущен посреди забега — тоже запомним)
   CaptureStartKnobs(false)
 
-  -- Комнаты 0/1: Godmode и PhantomNoclip должны быть включены
+  -- Комнаты 0/1: Godmode должен быть включён
   if roomNum <= 1 or not KnobFarm.PassedFirstDoor then
     ConfirmShopIfOpen()
-    pcall(function()
-      if toggles and toggles.Godmode and not toggles.Godmode.Value then
-        toggles.Godmode:SetValue(true)
-      end
-      if options and options.GodmodeMethod then
-        options.GodmodeMethod:SetValue("On entity spawn")
-      end
-      if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-        toggles.PhantomNoclip:SetValue(true)
-      end
-    end)
-  end
-
-  -- Комнаты 51–55 (коридор перед магазином Джеффа и сам магазин): выключаем Phantom Noclip,
-  -- чтобы бот не застревал в одной точке. В комнате 56+ включаем обратно.
-  if roomNum and roomNum >= 51 and roomNum <= 55 then
-    if toggles and toggles.PhantomNoclip and toggles.PhantomNoclip.Value then
-      KnobFarm.NoclipBeforeJeff = true
-      toggles.PhantomNoclip:SetValue(false)
-    end
-  elseif roomNum and roomNum >= 56 and KnobFarm.NoclipBeforeJeff then
-    KnobFarm.NoclipBeforeJeff = nil
-    pcall(function()
-      if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-        toggles.PhantomNoclip:SetValue(true)
-      end
-    end)
+    SetFeature("Godmode", true)
+    SetFeature("GodmodeMethod", "On entity spawn", true)
   end
 
   -- Комнаты 60 и 89–99: полный игнор — ничего не лутаем, ничего не ждём, не тянем рычаги,
   -- просто летим к двери следующей комнаты
-  local isIgnoredRoom = (roomNum == 60) or (roomNum >= 89 and roomNum <= 99)
+  local isIgnoredRoom = (roomNum == ROOMS.SECOND_SEEK) or (roomNum >= ROOMS.IGNORE_FROM and roomNum <= ROOMS.IGNORE_TO)
 
   -- Ворота с рычагом
   local isGateRoom = IsGateRoomWithThingToOpen(room)
@@ -17160,18 +16863,18 @@ local function Tick()
 
   local currentLatest = GetLatestRoomNum() or 0
   local curRooms = workspace:FindFirstChild("CurrentRooms")
-  local runTo100 = not (toggles and toggles.AutoFarmRunTo100 and not toggles.AutoFarmRunTo100.Value)
+  local runTo = not (toggles and toggles.AutoFarmRunTo100 and not toggles.AutoFarmRunTo100.Value)
 
   -- Комната 49: самоубийство ради быстрого Play Again (только если «Farm to Door 100» явно выключен)
-  if not runTo100 and ((roomNum and roomNum >= 49) or currentLatest >= 49) then
+  if not runTo and ((roomNum and roomNum >= ROOMS.LAST_NORMAL) or currentLatest >= ROOMS.LAST_NORMAL) then
     ResetAtRoom49(char, hum)
     return
   end
 
   -- Комната 50 (Фигура + библиотека)
-  if roomNum == 50 or currentLatest == 50 then
-    local room50 = (curRooms and curRooms:FindFirstChild("50")) or room
-    handleRoom50(room50, room50 and room50:FindFirstChild("Door"))
+  if roomNum == ROOMS.FIGURE or currentLatest == ROOMS.FIGURE then
+    local room2 = (curRooms and curRooms:FindFirstChild(tostring(ROOMS.FIGURE))) or room
+    handleRoom(room2, room2 and room2:FindFirstChild("Door"))
     return
   end
 
@@ -17183,15 +16886,15 @@ local function Tick()
   -- Комната 100 (электрощит, лифт)
   -- Только когда бот реально В комнате 100. Раньше хватало LatestRoom >= 100: бот ещё стоял в 99-й,
   -- объекты 100-й не успевали загрузиться, список предохранителей был пуст, и он сразу шёл к рычагу.
-  if roomNum and roomNum >= 100 then
-    local room100 = (curRooms and curRooms:FindFirstChild("100")) or room
-    handleRoom100(room100)
+  if roomNum and roomNum >= ROOMS.ELEVATOR then
+    local room2 = (curRooms and curRooms:FindFirstChild(tostring(ROOMS.ELEVATOR))) or room
+    SolveRoom100(room2)
     return
   end
 
   -- Лут. В 49-й не тратим время — бежим сразу к двери 50.
   local lootOn = not (toggles and toggles.AutoFarmLootDrawers) or toggles.AutoFarmLootDrawers.Value
-  if lootOn and not isIgnoredRoom and (roomNum or 0) > 0 and roomNum ~= 49 and KnobFarm.PassedFirstDoor and not isGateRoom then
+  if lootOn and not isIgnoredRoom and (roomNum or 0) > 0 and roomNum ~= ROOMS.LAST_NORMAL and KnobFarm.PassedFirstDoor and not isGateRoom then
     LootAllInRoom(room)
   end
 
@@ -17205,13 +16908,13 @@ function KnobFarm.RunLoop()
   while KnobFarm.Active and not _Unloading do
     task.wait(0.04)
 
-    local ok, err = pcall(Tick)
-    if ok then
+    local success, result = pcall(Tick)
+    if success then
       consecutiveErrors = 0
     else
       consecutiveErrors = consecutiveErrors + 1
-      warn("[KnobFarm Error]:", err)
-      KnobFarm.SetStatus("Error (retrying): " .. string.sub(tostring(err), 1, 60))
+      warn("[KnobFarm Error]:", result)
+      KnobFarm.SetStatus("Error (retrying): " .. string.sub(tostring(result), 1, 60))
       task.wait(math.min(0.5 * consecutiveErrors, 5))
     end
   end
@@ -17232,7 +16935,7 @@ function KnobFarm.Start()
   KnobFarm.LastMoveTime = tick()
   KnobFarm.Teleporting = false
   KnobFarm.InLobby = false
-  KnobFarm.DisabledNoclipForSeek = false
+  KnobFarm.SeekMode = false
   KnobFarm.IgnoredDoors = setmetatable({}, { __mode = "k" })
   KnobFarm.GatesHandled = setmetatable({}, { __mode = "k" })
   lastDeathHumanoid = nil
@@ -17249,23 +16952,14 @@ function KnobFarm.Start()
   DisableObstacleCollision(nil)
   SetupObstacleListener()
 
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local col = char and char:FindFirstChild("Collision")
   if col and col:IsA("BasePart") and col.Size.X > 2.2 then
     col.Size = Vector3.new(2.0, 3.0, 2.0)
   end
 
-  pcall(function()
-    if toggles and toggles.AutoBuyLockpicks and toggles.AutoBuyLockpicks.Value then
-      toggles.AutoBuyLockpicks:SetValue(false)
-    end
-    if toggles and toggles.InfiniteItemsToggle and not toggles.InfiniteItemsToggle.Value then
-      toggles.InfiniteItemsToggle:SetValue(true)
-    end
-    if toggles and toggles.PhantomNoclip and not toggles.PhantomNoclip.Value then
-      toggles.PhantomNoclip:SetValue(true)
-    end
-  end)
+  SetFeature("AutoBuyLockpicks", false)
+  SetFeature("InfiniteItemsToggle", true)
 
   local _, curRoomNum = GetPlayerCurrentRoom()
   KnobFarm.CurrentRoomNum = curRoomNum or 0
@@ -17282,22 +16976,14 @@ function KnobFarm.Start()
           options.Walkspeed:SetValue(desiredSpeed)
         end
       end
-      if toggles and toggles.Godmode and not toggles.Godmode.Value then
-        toggles.Godmode:SetValue(true)
-      end
-      if options and options.GodmodeMethod then
-        options.GodmodeMethod:SetValue("On entity spawn")
-      end
     end)
+    SetFeature("Godmode", true)
+    SetFeature("GodmodeMethod", "On entity spawn", true)
   end
 
   KnobFarm.SetStatus("Started (Room " .. tostring(KnobFarm.CurrentRoomNum) .. ")")
 
-  pcall(function()
-    if toggles and toggles.InstantInteract and not toggles.InstantInteract.Value then
-      toggles.InstantInteract:SetValue(true)
-    end
-  end)
+  SetFeature("InstantInteract", true)
 
   KnobFarm.Thread = task.spawn(KnobFarm.RunLoop)
 end
@@ -17326,6 +17012,7 @@ function KnobFarm.Stop()
   ResetRecoveryState()
   ResetFarmState()
   KnobFarm.StopFly()   -- task.cancel не снимает BodyVelocity полёта
+  RestoreFeatures()    -- вернуть Godmode / Instant Interact и т.д. в состояние до фарма
 
   pcall(function()
     if options and options.Walkspeed and KnobFarm.PreviousWalkSpeed then
@@ -17334,7 +17021,7 @@ function KnobFarm.Stop()
     end
   end)
 
-  local char = localPlayer2 and localPlayer2.Character
+  local char = localPlayer and localPlayer.Character
   local hum = char and char:FindFirstChildOfClass("Humanoid")
   if hum then hum:Move(Vector3.zero, false) end
   local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -17347,45 +17034,2393 @@ end
 KnobFarm.SetCrouched = SetCrouched
 
 -- Connect UI toggle & slider
-if toggles and toggles.AutoFarmEnabled then
-  toggles.AutoFarmEnabled:OnChanged(function(enabled)
-    if enabled then
-      KnobFarm.Start()
-    else
-      KnobFarm.Stop()
-    end
-  end)
 
-  if toggles.AutoFarmEnabled.Value then
-    KnobFarm.Start()
+
+-- menu of this block: built later, from the MENU section at the end of the file
+Menus.KnobFarm = function()
+  if toggles and toggles.AutoFarmEnabled then
+    toggles.AutoFarmEnabled:OnChanged(function(enabled)
+      if enabled then
+        KnobFarm.Start()
+      else
+        KnobFarm.Stop()
+      end
+    end)
+
+    if toggles.AutoFarmEnabled.Value then
+      KnobFarm.Start()
+    end
+  end
+
+  local farmSpeedOpt = (options and options.AutoFarmSpeed) or (options and options.AutoFarmWalkSpeed)
+
+  if farmSpeedOpt then
+    farmSpeedOpt:OnChanged(function(val)
+      if KnobFarm.Active and options.Walkspeed then
+        options.Walkspeed:SetValue(val)
+      end
+    end)
   end
 end
 
-local farmSpeedOpt = (options and options.AutoFarmSpeed) or (options and options.AutoFarmWalkSpeed)
-if farmSpeedOpt then
-  farmSpeedOpt:OnChanged(function(val)
-    if KnobFarm.Active and options.Walkspeed then
-      options.Walkspeed:SetValue(val)
-    end
-  end)
-end
 
 end)() end
 
-if CurrentFloor == "Lobby" then
-  for index81, value126 in ipairs({
-    "Godmode", "ThirdPerson", "Noclip", "FlyToggle", "Phase", "AnticheatManipulation", "AutoInteract", "ArchiveChairFly", "StairwellChairFly", "AntiElectricPuddle", "AntiRansom", "AntiScribbles", "NoAlmaDamage", "AntiDrone", "DisableDroneStampede", "RoomsAutoWalk", "RoomsAutoWalkIgnoreA60", "RoomsAutoWalkShowPathToggle", "RoomsAutoWalkSpoofFootsteps", "RoomsPickupStardust", "RoomsPickupGold", "NoSurgeDamage", "RemoveSurge", "RemoveMandrake", "BypassKillbricks", "BypassSeekingWall", "BypassBanana", "BypassJeff", "BypassGiggle", "BypassDupe", "BypassEyes", "BypassLookman", "BypassGloombatEggs", "BypassSeekObstructions", "BypassVacuum", "BypassSnare", "RemoveSeekTrigger", "RemoveFigure", "RemoveFigureMines", "RemoveA90", "RemoveDread", "AutoRevive", "FigureGodmode", "AutoSteerMinecart", "AutoSolveAnchors", "MinecartTeleport", "AutoMinecart", "AutoHeartbeatMinigame", "AutoBreakerBox", "AutoLibraryBruteForce", "InfiniteItemsToggle", "InfiniteCrucifix", "ShowSeekPathToggle", }) do
-    local element46 = toggles[value126]
+-- =====================================================================
+--  MODEL SWAP + ROOM COUNTER
+--  Client-side only: replaces how players and entities look with a 3D model or a PNG sprite,
+--  and draws the current room number at the top center of the screen.
+-- =====================================================================
+do
+  -- ------------------------------------------------------------------ categories
+  local CATEGORIES = {
+    { key = "Players", title = "Players", players = true, height = 5.6 },
+    { key = "Figure", title = "Figure", names = { "Figure", "FigureRig", "FigureRagdoll" }, height = 9 },
+    { key = "Seek", title = "Seek", names = { "SeekMoving", "SeekMovingNewClone", "SeekRig" }, height = 9 },
+    { key = "Rush", title = "Rush and clones", names = { "RushMoving", "BackdoorRush", "GlitchRush" }, height = 6 },
+    { key = "Ambush", title = "Ambush and clones", names = { "AmbushMoving", "FrozenAmbush", "GlitchAmbush" }, height = 6 },
+    { key = "A60", title = "A-60 / A-120", names = { "A60", "A120" }, height = 6 },
+    { key = "Eyes", title = "Eyes / Lookman", names = { "Eyes", "Lookman", "BackdoorLookman" }, height = 6 },
+    { key = "Custom", title = "Custom entity", names = {}, height = 6 },
+  }
 
-    if element46 and element46.Value then
-      element46:SetValue(false)
+  local PRESETS = {
+    { "Chubby Dog", 22202531681153, true },
+    { "Alya", { 239, 57285014083965, 131346580241689, 126528728730337, 96994061769130 }, true },
+    { "Shark", 1105996, true },
+    { "TUNG Sahur", 164815366314625, true },
+    { "Withered Golden Freddy", 103872628924571, true },
+  }
+  local presetNames, presetByName = {}, {}
+  for _, p in ipairs(PRESETS) do
+    presetNames[#presetNames + 1] = p[1]
+    presetByName[p[1]] = p
+  end
+
+  local swapFolder = Instance.new("Folder")
+  swapFolder.Name = "MoroModelSwap"
+  swapFolder.Parent = workspace
+
+  local alive = true
+  local settings = {}     -- [categoryKey] = { mode, height, yaw, yoff, anim, bubble, scope, customNames }
+  local templates = {}    -- [categoryKey] = { model, id }
+  local spriteImages = {} -- [categoryKey] = resolved image string
+  local spriteTexts = {}  -- [categoryKey] = text typed by the user
+  local records = {}      -- [instance] = record
+  local generation = 0
+  local statusLabel
+  local options2 = { hideEffects = true }
+
+  for _, cat in ipairs(CATEGORIES) do
+    settings[cat.key] = { mode = "Off", height = cat.height, yaw = 0, yoff = 0, anim = "None", bubble = "", scope = "Everyone", customNames = "" }
+  end
+
+  local function say(title, text, kind)
+    pcall(function() library:Notify({ Title = title, Description = text, Time = kind == "error" and 5 or 3 }) end)
+  end
+  local function setStatus(text)
+    if statusLabel then pcall(function() statusLabel:SetText(text) end) end
+  end
+
+  -- ------------------------------------------------------------------ asset loading (model library)
+  local function sanitizeTemplate(objects, isRig)
+    local model = Instance.new("Model")
+    model.Name = "MoroSwapTemplate"
+    for _, object in ipairs(objects) do
+      if isRig and object:IsA("Model") then
+        for _, child in ipairs(object:GetChildren()) do child.Parent = model end
+        object:Destroy()
+      else
+        object.Parent = model
+      end
+    end
+    if isRig then
+      model.PrimaryPart = model:FindFirstChild("HumanoidRootPart")
+      model:SetAttribute("Rig", true)
+    end
+    local count = 0
+    for _, descendant in ipairs(model:GetDescendants()) do
+      count = count + 1
+      if count % 200 == 0 then task.wait() end
+      if descendant:IsA("Tool") then
+        for _, child in ipairs(descendant:GetChildren()) do
+          if child:IsA("BasePart") or child:IsA("Model") then child.Parent = model end
+        end
+        descendant:Destroy()
+      elseif descendant:IsA("LuaSourceContainer") or descendant:IsA("Sound") or (descendant:IsA("Humanoid") and not isRig)
+        or descendant:IsA("Animator") or (descendant:IsA("JointInstance") and not isRig) or descendant:IsA("WeldConstraint")
+        or descendant:IsA("ProximityPrompt") or descendant:IsA("ClickDetector") or descendant:IsA("BodyMover")
+        or descendant:IsA("ForceField") or descendant:IsA("Seat") or descendant:IsA("VehicleSeat") then
+        pcall(function() descendant:Destroy() end)
+      end
+    end
+    -- a rig keeps its Humanoid only so that Shirt / Pants textures are drawn
+    local humanoid = isRig and model:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+      humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+      humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+      humanoid.AutoRotate = false
+      pcall(function() humanoid.EvaluateStateMachine = false end)
+      pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
+    end
+    for _, descendant in ipairs(model:GetDescendants()) do
+      if descendant:IsA("BasePart") then
+        descendant.Anchored, descendant.CanCollide, descendant.CanQuery, descendant.CanTouch, descendant.Massless = true, false, false, false, true
+      end
+    end
+    return model
+  end
+
+  -- marketplace items: a bundle or a catalog item is dressed onto an R15 rig through a HumanoidDescription
+  local ITEM_FIELDS = {
+    [17] = "Head", [18] = "Face", [27] = "Torso", [28] = "RightArm", [29] = "LeftArm", [30] = "LeftLeg", [31] = "RightLeg",
+    [2] = "GraphicTShirt", [11] = "Shirt", [12] = "Pants", [79] = "Head",
+  }
+  local ITEM_ACCESSORY = {
+    [8] = Enum.AccessoryType.Hat, [41] = Enum.AccessoryType.Hair, [42] = Enum.AccessoryType.Face, [43] = Enum.AccessoryType.Neck,
+    [44] = Enum.AccessoryType.Shoulder, [45] = Enum.AccessoryType.Front, [46] = Enum.AccessoryType.Back, [47] = Enum.AccessoryType.Waist,
+    [64] = Enum.AccessoryType.TShirt, [65] = Enum.AccessoryType.Shirt, [66] = Enum.AccessoryType.Pants, [67] = Enum.AccessoryType.Jacket,
+    [68] = Enum.AccessoryType.Sweater, [69] = Enum.AccessoryType.Shorts, [70] = Enum.AccessoryType.LeftShoe, [71] = Enum.AccessoryType.RightShoe,
+    [72] = Enum.AccessoryType.DressSkirt,
+  }
+
+  local function parseItemId(text)
+    text = tostring(text or "")
+    if text:find("share%?code") or text:find("share%-links") then return nil, "share links need a login: paste the /bundles/... or /catalog/... address instead" end
+    if text:find("/looks/") then return nil, "a look is a set of items: paste its item links one by one" end
+    local id = text:match("/bundles/(%d+)") or text:match("/catalog/(%d+)") or text:match("/library/(%d+)") or text:match("(%d%d%d+)")
+    return tonumber(id), true
+  end
+
+  local function marketModel(id)
+    local function get(url) return httpService:JSONDecode(game:HttpGet(url)) end
+    local ids = type(id) == "table" and id or { id }
+    local description
+    local accessories = {}
+    local function put(assetId, assetType, explicit)
+      if ITEM_FIELDS[assetType] then
+        description[ITEM_FIELDS[assetType]] = assetId
+      elseif ITEM_ACCESSORY[assetType] then
+        if explicit then
+          for i = #accessories, 1, -1 do
+            if accessories[i].AccessoryType == ITEM_ACCESSORY[assetType] then table.remove(accessories, i) end
+          end
+        end
+        accessories[#accessories + 1] = { AssetId = assetId, AccessoryType = ITEM_ACCESSORY[assetType], Order = #accessories + 1 }
+      end
+    end
+    -- a single bundle that ships with an outfit is used as the outfit (keeps its body scale)
+    if #ids == 1 then
+      local okBundle, bundle = pcall(get, "https://catalog.roblox.com/v1/bundles/" .. ids[1] .. "/details")
+      if okBundle and type(bundle) == "table" and bundle.id then
+        for _, item in ipairs(bundle.items or {}) do
+          if item.type == "UserOutfit" then description = players:GetHumanoidDescriptionFromOutfitId(item.id) break end
+        end
+      end
+    end
+    if not description then
+      description = Instance.new("HumanoidDescription")
+      local skin = Color3.fromRGB(255, 224, 204)
+      description.HeadColor, description.TorsoColor, description.LeftArmColor = skin, skin, skin
+      description.RightArmColor, description.LeftLegColor, description.RightLegColor = skin, skin, skin
+      for _, one in ipairs(ids) do
+        local okBundle, bundle = pcall(get, "https://catalog.roblox.com/v1/bundles/" .. one .. "/details")
+        if okBundle and type(bundle) == "table" and bundle.id then
+          for _, item in ipairs(bundle.items or {}) do
+            if item.type == "Asset" then put(item.id, item.assetType) end
+          end
+        else
+          local okDetails, details = pcall(get, "https://economy.roblox.com/v2/assets/" .. one .. "/details")
+          if not (okDetails and type(details) == "table" and details.AssetTypeId) then return nil, "item " .. one .. " not found in the catalog" end
+          if not (ITEM_FIELDS[details.AssetTypeId] or ITEM_ACCESSORY[details.AssetTypeId]) then
+            return nil, "asset type " .. tostring(details.AssetTypeId) .. " is not an avatar item, use Asset ID"
+          end
+          put(one, details.AssetTypeId, true)
+        end
+      end
+      if #accessories > 0 then description:SetAccessories(accessories, true) end
+    end
+    local rig = players:CreateHumanoidModelFromDescription(description, Enum.HumanoidRigType.R15)
+    local root = rig:FindFirstChild("HumanoidRootPart")
+    if root then root.Anchored = true end
+    rig.Parent = workspace.Terrain   -- a rig only assembles itself once it is in the world
+    task.wait(0.4)
+    return { rig }
+  end
+
+  local loading = false
+  local function dropRecords()
+    for instance, record in pairs(records) do
+      if record.destroy then pcall(record.destroy) end
+      records[instance] = nil
+    end
+  end
+
+  local function loadTemplate(catKey, id, isMarket)
+    if loading then return say("Model Swap", "Already loading, wait a moment") end
+    loading = true
+    local label = type(id) == "table" and "look" or tostring(id)
+    setStatus("Loading " .. label .. "...")
+    task.spawn(function()
+      local finished, objects, err = false, nil, nil
+      task.spawn(function()
+        local ok, result, why
+        if isMarket then
+          ok, result, why = pcall(marketModel, id)
+          if ok and not result then ok, result = false, why end
+        else
+          ok, result = pcall(function() return game:GetObjects("rbxassetid://" .. tostring(id)) end)
+        end
+        if ok then objects = result else err = result end
+        finished = true
+      end)
+      local started = os.clock()
+      while not finished and os.clock() - started < 40 do task.wait(0.1) end
+      if not objects or #objects == 0 then
+        loading = false
+        setStatus("Error: " .. (finished and tostring(err or "empty asset") or "timed out"))
+        return say("Model Swap", "Load failed: " .. (finished and tostring(err or "empty asset") or "timed out"), "error")
+      end
+      local ok, template = pcall(sanitizeTemplate, objects, isMarket)
+      loading = false
+      if not ok then
+        setStatus("Error: " .. tostring(template))
+        return say("Model Swap", tostring(template), "error")
+      end
+      local _, size = template:GetBoundingBox()
+      if size.Magnitude < 0.1 then
+        setStatus("Error: asset has no visible parts")
+        return say("Model Swap", "Asset has no visible parts", "error")
+      end
+      if templates[catKey] and templates[catKey].model then templates[catKey].model:Destroy() end
+      templates[catKey] = { model = template, id = id }
+      generation = generation + 1
+      dropRecords()
+      setStatus("Ready: " .. catKey .. " <- " .. label)
+      say("Model Swap", catKey .. ": model ready")
+      -- loading a model for a category is a request to use it
+      if settings[catKey].mode == "Off" then
+        settings[catKey].mode = "Model"
+        pcall(function() options["MS_" .. catKey .. "_Mode"]:SetValue("Model") end)
+      end
+    end)
+  end
+
+  local function searchToolbox(keyword, callback)
+    task.spawn(function()
+      local ok, result = pcall(function()
+        local found = httpService:JSONDecode(game:HttpGet("https://apis.roblox.com/toolbox-service/v1/marketplace/10?keyword=" .. httpService:UrlEncode(keyword) .. "&num=20&sortType=1"))
+        local ids = {}
+        for _, entry in ipairs(found.data or {}) do ids[#ids + 1] = entry.id end
+        if #ids == 0 then return {} end
+        local details = httpService:JSONDecode(game:HttpGet("https://apis.roblox.com/toolbox-service/v1/items/details?assetIds=" .. table.concat(ids, ",")))
+        local list = {}
+        for _, item in ipairs(details.data or {}) do
+          if item.asset then list[#list + 1] = { id = item.asset.id, name = item.asset.name or "?", by = item.creator and item.creator.name or "?" } end
+        end
+        return list
+      end)
+      callback(ok and result or nil, result)
+    end)
+  end
+
+  -- ------------------------------------------------------------------ sprites (PNG)
+  -- accepts an asset id, an rbxassetid:// link, or an http(s) link to a PNG (downloaded through the executor)
+  local function resolveImage(text)
+    text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then return nil end
+    if text:match("^%d+$") then return "rbxassetid://" .. text end
+    if text:match("^rbxasset") then return text end
+    if text:match("^https?://") then
+      local write, custom = writefile, getcustomasset or getsynasset
+      if not (write and custom) then return nil, "this executor has no writefile/getcustomasset, use an asset id" end
+      local ok, data = pcall(function() return game:HttpGet(text) end)
+      if not ok or type(data) ~= "string" or #data < 16 then return nil, "could not download the image" end
+      pcall(function() if makefolder and isfolder and not isfolder("moro") then makefolder("moro") end end)
+      pcall(function() if makefolder and isfolder and not isfolder("moro/Sprites") then makefolder("moro/Sprites") end end)
+      local path = "moro/Sprites/" .. text:gsub("[^%w]", "_"):sub(-40) .. ".png"
+      local okWrite = pcall(write, path, data)
+      if not okWrite then return nil, "could not save the image" end
+      local okAsset, asset = pcall(custom, path)
+      if not okAsset or not asset then return nil, "could not load the saved image" end
+      return asset
+    end
+    return nil, "type an asset id or a link to a PNG"
+  end
+
+  -- ------------------------------------------------------------------ target bookkeeping
+  local function nameLookup()
+    local lookup = {}
+    for _, cat in ipairs(CATEGORIES) do
+      if cat.names then
+        for _, name in ipairs(cat.names) do lookup[name] = cat.key end
+      end
+    end
+    for rawName in string.gmatch(settings.Custom.customNames or "", "[^,;]+") do
+      local name = rawName:gsub("^%s+", ""):gsub("%s+$", "")
+      if name ~= "" then lookup[name] = "Custom" end
+    end
+    return lookup
+  end
+
+  local function boundsOf(instance)
+    if instance:IsA("Model") then
+      local ok, cf, size = pcall(instance.GetBoundingBox, instance)
+      if ok then return cf, size end
+    elseif instance:IsA("BasePart") then
+      return instance.CFrame, instance.Size
+    end
+    return nil
+  end
+
+  -- hides the original look of an entity on this client only (everything is restored on removal)
+  local function hideOriginal(instance, record)
+    for _, descendant in ipairs(instance:GetDescendants()) do
+      if not record.touched[descendant] then
+        if descendant:IsA("BasePart") then
+          record.touched[descendant] = true
+          descendant.LocalTransparencyModifier = 1
+        elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
+          record.touched[descendant] = descendant.Transparency
+          descendant.Transparency = 1
+        elseif descendant:IsA("SurfaceGui") or descendant:IsA("BillboardGui") then
+          record.touched[descendant] = descendant.Enabled
+          descendant.Enabled = false
+        elseif options2.hideEffects and (descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam")) then
+          record.touched[descendant] = descendant.Enabled
+          descendant.Enabled = false
+        end
+      end
+    end
+    if instance:IsA("BasePart") and not record.touched[instance] then
+      record.touched[instance] = true
+      instance.LocalTransparencyModifier = 1
+    end
+  end
+
+  local function restoreOriginal(record)
+    for object, original in pairs(record.touched) do
+      pcall(function()
+        if object:IsA("BasePart") then object.LocalTransparencyModifier = 0
+        elseif object:IsA("Decal") or object:IsA("Texture") then object.Transparency = original
+        else object.Enabled = original end
+      end)
+    end
+    record.touched = {}
+  end
+
+  -- speech bubble above the replacement: phrases separated with ';' rotate every few seconds
+  local function makeBubble(anchor)
+    local gui = Instance.new("BillboardGui")
+    gui.Name = "Bubble"
+    gui.Adornee = anchor
+    gui.AlwaysOnTop = true
+    gui.LightInfluence = 0
+    gui.Size = UDim2.fromOffset(220, 34)
+    gui.StudsOffsetWorldSpace = Vector3.new(0, 4, 0)
+    gui.Enabled = false
+    gui.Parent = anchor
+    local pill = Instance.new("Frame")
+    pill.Size = UDim2.fromScale(1, 1)
+    pill.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
+    pill.BackgroundTransparency = 0.15
+    pill.BorderSizePixel = 0
+    pill.Parent = gui
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = pill
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(255, 150, 200)
+    stroke.Thickness = 1.5
+    stroke.Parent = pill
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.fromScale(1, 1)
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 15
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.Text = ""
+    label.Parent = pill
+    return gui, label
+  end
+
+  -- ------------------------------------------------------------------ records
+  local function makeEntityRecord(instance, cat)
+    local conf = settings[cat.key]
+    local template = templates[cat.key]
+    local record = { cat = cat, mode = conf.mode, gen = generation, height = conf.height, touched = {}, phase = math.random() * 6 }
+
+    local cf, size = boundsOf(instance)
+    if not cf then return nil end
+    record.anchor = Instance.new("Part")
+    record.anchor.Anchored, record.anchor.CanCollide, record.anchor.CanQuery, record.anchor.CanTouch = true, false, false, false
+    record.anchor.Transparency = 1
+    record.anchor.Size = Vector3.new(0.2, 0.2, 0.2)
+    record.anchor.Parent = swapFolder
+
+    if conf.mode == "Model" then
+      if not (template and template.model) then record.anchor:Destroy() return nil end
+      record.model = template.model:Clone()
+      local _, bbSize = record.model:GetBoundingBox()
+      record.model:ScaleTo(conf.height / math.max(bbSize.Y, 0.1))
+      local bbCF = record.model:GetBoundingBox()
+      record.offset = record.model:GetPivot():ToObjectSpace(bbCF)
+      record.model.Parent = swapFolder
+    else
+      local gui = Instance.new("BillboardGui")
+      gui.Name = "Sprite"
+      gui.Adornee = record.anchor
+      gui.AlwaysOnTop = false
+      gui.LightInfluence = 0
+      gui.Size = UDim2.fromScale(conf.height, conf.height)
+      gui.Parent = record.anchor
+      local image = Instance.new("ImageLabel")
+      image.BackgroundTransparency = 1
+      image.Size = UDim2.fromScale(1, 1)
+      image.ScaleType = Enum.ScaleType.Fit
+      image.Image = spriteImages[cat.key] or ""
+      image.Parent = gui
+      if image.Image == "" then
+        -- nothing loaded yet: a placeholder keeps the replacement visible
+        local face = Instance.new("TextLabel")
+        face.BackgroundTransparency = 1
+        face.Size = UDim2.fromScale(1, 1)
+        face.TextScaled = true
+        face.Text = "(=^.^=)"
+        face.TextColor3 = Color3.fromRGB(255, 190, 220)
+        face.Font = Enum.Font.GothamBold
+        face.Parent = gui
+      end
+      record.gui, record.image = gui, image
+      record.face = image.Image == "" and gui:FindFirstChildOfClass("TextLabel") or nil
+      record.spriteId = spriteImages[cat.key]
+    end
+
+    record.bubble, record.bubbleLabel = makeBubble(record.anchor)
+    record.destroy = function()
+      restoreOriginal(record)
+      pcall(function() if record.model then record.model:Destroy() end end)
+      pcall(function() record.anchor:Destroy() end)
+    end
+    record.step = function(now)
+      local currentCF, currentSize = boundsOf(instance)
+      if not currentCF then return end
+      local height = conf.height
+      local centerY = currentCF.Position.Y - currentSize.Y / 2 + height / 2 + conf.yoff
+      local center = Vector3.new(currentCF.Position.X, centerY, currentCF.Position.Z)
+      local look = currentCF.LookVector
+      local yaw = math.atan2(-look.X, -look.Z) + math.rad(conf.yaw)
+      local roll = 0
+      if conf.anim == "Bob" then center = center + Vector3.new(0, math.sin(now * 3 + record.phase) * 0.4, 0)
+      elseif conf.anim == "Spin" then yaw = yaw + now * 2
+      elseif conf.anim == "Wobble" then roll = math.sin(now * 6 + record.phase) * 0.15 end
+      record.anchor.CFrame = CFrame.new(center)
+      if record.model then
+        record.model:PivotTo(CFrame.new(center) * CFrame.Angles(0, yaw, roll) * record.offset:Inverse())
+      elseif record.image then
+        record.image.Rotation = math.deg(roll) * 2
+        record.gui.Size = UDim2.fromScale(conf.height, conf.height)
+        if record.spriteId ~= spriteImages[cat.key] then
+          record.spriteId = spriteImages[cat.key]
+          record.image.Image = record.spriteId or ""
+          if record.face and record.spriteId then
+            record.face:Destroy()
+            record.face = nil
+          end
+        end
+      end
+      -- speech bubble
+      local phrases = conf.bubble
+      if phrases ~= "" then
+        local list = {}
+        for phrase in string.gmatch(phrases, "[^;]+") do list[#list + 1] = phrase end
+        local text = list[(math.floor(now / 3) + math.floor(record.phase * 10)) % #list + 1] or ""
+        record.bubbleLabel.Text = text
+        record.bubble.StudsOffsetWorldSpace = Vector3.new(0, height / 2 + 1.5, 0)
+        record.bubble.Enabled = text ~= ""
+      else
+        record.bubble.Enabled = false
+      end
+    end
+    hideOriginal(instance, record)
+    record.refresh = function() hideOriginal(instance, record) end
+    return record
+  end
+
+  -- player models follow the real skeleton (forward kinematics on the model's own joints)
+  local function makePlayerRecord(character, isSelf)
+    local conf = settings.Players
+    local template = templates.Players
+    if not (template and template.model) then return nil end
+    local instance = template.model:Clone()
+    local _, bbSize = instance:GetBoundingBox()
+    instance:ScaleTo(conf.height / math.max(bbSize.Y, 0.1))
+    local bbCF, size = instance:GetBoundingBox()
+    local offset = instance:GetPivot():ToObjectSpace(bbCF)
+    instance.Parent = swapFolder
+    local record = { model = instance, offset = offset, size = size, phase = math.random() * 6, gen = generation, height = conf.height, isSelf = isSelf, touched = {}, hiddenParts = {} }
+    if instance:GetAttribute("Rig") and instance.PrimaryPart then
+      record.rig = true
+      local root = instance.PrimaryPart
+      record.root = root
+      record.drop = root.Position.Y - (bbCF.Position.Y - size.Y / 2)
+      local realRoot = character:FindFirstChild("HumanoidRootPart")
+      local humanoid = character:FindFirstChildOfClass("Humanoid")
+      record.k = record.drop / math.max((humanoid and humanoid.HipHeight or 2) + (realRoot and realRoot.Size.Y / 2 or 1), 0.1)
+      local function driven(d)
+        if d:IsA("Motor6D") then return d.Part1 end
+        if d:IsA("AnimationConstraint") then return d.Attachment1 and d.Attachment1.Parent end
+      end
+      local real = {}
+      for _, d in ipairs(character:GetDescendants()) do
+        local part = driven(d)
+        if part then real[d.Name .. ":" .. part.Name] = d end
+      end
+      local entries, byChild = {}, {}
+      local function addEntry(parent, child, cf0, cf1, source)
+        if parent and child and not byChild[child] then
+          local entry = { parent = parent, child = child, cf0 = cf0, cf1 = cf1:Inverse(), src = source }
+          byChild[child] = entry
+          entries[#entries + 1] = entry
+        end
+      end
+      for _, d in ipairs(instance:GetDescendants()) do
+        if d:IsA("Motor6D") then
+          addEntry(d.Part0, d.Part1, d.C0, d.C1, real[d.Name .. ":" .. (d.Part1 and d.Part1.Name or "")])
+        elseif d:IsA("AnimationConstraint") and d.Attachment0 and d.Attachment1 then
+          addEntry(d.Attachment0.Parent, d.Attachment1.Parent, d.Attachment0.CFrame, d.Attachment1.CFrame, real[d.Name .. ":" .. d.Attachment1.Parent.Name])
+        end
+      end
+      for _, d in ipairs(instance:GetDescendants()) do
+        if d:IsA("Weld") and d.Part0 and d.Part1 then
+          addEntry(d.Part0, d.Part1, d.C0, d.C1)
+        elseif d:IsA("RigidConstraint") and d.Attachment0 and d.Attachment1 then
+          local partA, partB = d.Attachment0.Parent, d.Attachment1.Parent
+          if partA and partB then
+            if partB:FindFirstChildWhichIsA("Attachment") and (partB.Name == "Handle" or partB:FindFirstAncestorOfClass("Accessory")) then
+              addEntry(partA, partB, d.Attachment0.CFrame, d.Attachment1.CFrame)
+            else
+              addEntry(partB, partA, d.Attachment1.CFrame, d.Attachment0.CFrame)
+            end
+          end
+        end
+      end
+      -- parents before children
+      local order, placed = {}, { [root] = true }
+      local left = #entries
+      while left > 0 do
+        local progressed = false
+        for _, entry in ipairs(entries) do
+          if not entry.done and placed[entry.parent] then
+            entry.done, placed[entry.child] = true, true
+            order[#order + 1] = entry
+            left = left - 1
+            progressed = true
+          end
+        end
+        if not progressed then break end
+      end
+      record.order = order
+      record.parts = {}
+      for _, d in ipairs(instance:GetDescendants()) do
+        if d:IsA("BasePart") then record.parts[#record.parts + 1] = d end
+      end
+    end
+    record.destroy = function()
+      pcall(function() instance:Destroy() end)
+      for _, part in ipairs(record.hiddenParts) do
+        if part.Parent then part.LocalTransparencyModifier = 0 end
+      end
+    end
+    record.refresh = function()
+      local list = {}
+      for _, d in ipairs(character:GetDescendants()) do
+        if d:IsA("BasePart") and not d:FindFirstAncestorOfClass("Tool") then list[#list + 1] = d end
+      end
+      record.hiddenParts = list
+    end
+    record.refresh()
+    record.step = function(now)
+      local root = character.Parent and character:FindFirstChild("HumanoidRootPart")
+      if not root then return end
+      local humanoid = character:FindFirstChildOfClass("Humanoid")
+      local velocity = root.AssemblyLinearVelocity
+      local speed = math.clamp(Vector3.new(velocity.X, 0, velocity.Z).Magnitude / 16, 0, 1.5)
+      local look = root.CFrame.LookVector
+      local yaw = math.atan2(-look.X, -look.Z)
+      local feetY = root.Position.Y - ((humanoid and humanoid.HipHeight or 2) + root.Size.Y / 2)
+      if record.rig then
+        local rootCF = CFrame.new(root.Position.X, feetY + record.drop + conf.yoff, root.Position.Z)
+          * (root.CFrame - root.CFrame.Position) * CFrame.Angles(0, math.rad(conf.yaw), 0)
+        local cframes = { [record.root] = rootCF }
+        local parts, frames = { record.root }, { rootCF }
+        for _, entry in ipairs(record.order) do
+          local parentCF = cframes[entry.parent]
+          if parentCF then
+            local transform = CFrame.identity
+            if entry.src then
+              local s = entry.src.Transform
+              transform = CFrame.new(s.Position * record.k) * (s - s.Position)
+            end
+            local childCF = parentCF * entry.cf0 * transform * entry.cf1
+            cframes[entry.child] = childCF
+            parts[#parts + 1], frames[#frames + 1] = entry.child, childCF
+          end
+        end
+        for _, part in ipairs(record.parts) do part.CanCollide, part.CanTouch, part.CanQuery = false, false, false end
+        workspace:BulkMoveTo(parts, frames, Enum.BulkMoveMode.FireCFrameChanged)
+      else
+        local bob = math.abs(math.sin(now * 9 + record.phase)) * 0.45 * speed
+        local target = CFrame.new(root.Position.X, feetY + record.size.Y / 2 + bob + conf.yoff, root.Position.Z)
+          * CFrame.Angles(0, yaw + math.rad(conf.yaw), 0)
+          * CFrame.Angles(math.rad(-10) * speed, 0, math.sin(now * 9 + record.phase) * math.rad(7) * speed)
+        record.model:PivotTo(target * record.offset:Inverse())
+      end
+      for _, part in ipairs(record.hiddenParts) do
+        if part.Parent then part.LocalTransparencyModifier = 1 end
+      end
+      if record.isSelf then
+        local camera = workspace.CurrentCamera
+        local near = camera and (camera.CFrame.Position - root.Position).Magnitude < 2
+        if near ~= record.nearHidden then
+          record.nearHidden = near
+          for _, d in ipairs(record.model:GetDescendants()) do
+            if d:IsA("BasePart") then d.LocalTransparencyModifier = near and 1 or 0 end
+          end
+        end
+      end
+    end
+    return record
+  end
+
+  -- ------------------------------------------------------------------ sync + render loops
+  local function wantsPlayer(player)
+    local conf = settings.Players
+    if conf.mode ~= "Model" or not (templates.Players and templates.Players.model) then return false end
+    if conf.scope == "Me only" then return player == localPlayer end
+    if conf.scope == "Others only" then return player ~= localPlayer end
+    return true
+  end
+
+  local function syncRecords()
+    local keep = {}
+    -- players
+    for _, player in ipairs(players:GetPlayers()) do
+      local character = player.Character
+      local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+      if character and humanoid and humanoid.Health > 0 and character:FindFirstChild("HumanoidRootPart") and wantsPlayer(player) then
+        keep[character] = true
+        local record = records[character]
+        if record and (record.gen ~= generation or math.abs(record.height - settings.Players.height) > 0.01) then
+          record.destroy()
+          records[character] = nil
+          record = nil
+        end
+        if not record then
+          record = makePlayerRecord(character, player == localPlayer)
+          records[character] = record
+        end
+        if record then record.refresh() end
+      end
+    end
+    -- entities: the script's own registry plus everything directly in workspace
+    local lookup = nameLookup()
+    local candidates = {}
+    for _, entity in ipairs(ESPCategories.Entities or {}) do candidates[#candidates + 1] = entity end
+    for _, child in ipairs(workspace:GetChildren()) do
+      if lookup[child.Name] then candidates[#candidates + 1] = child end
+    end
+    for _, instance in ipairs(candidates) do
+      local key = instance.Parent and lookup[instance.Name]
+      local cat
+      if key then
+        for _, c in ipairs(CATEGORIES) do if c.key == key then cat = c end end
+      end
+      if cat and not keep[instance] then
+        local conf = settings[cat.key]
+        local ready = conf.mode == "Sprite" or (conf.mode == "Model" and templates[cat.key] and templates[cat.key].model)
+        if ready then
+          keep[instance] = true
+          local record = records[instance]
+          if record and (record.mode ~= conf.mode
+            or (record.mode == "Model" and (record.gen ~= generation or math.abs(record.height - conf.height) > 0.01))) then
+            record.destroy()
+            records[instance] = nil
+            record = nil
+          end
+          if not record then
+            record = makeEntityRecord(instance, cat)
+            records[instance] = record
+          end
+          if record and record.refresh then record.refresh() end
+        end
+      end
+    end
+    for instance, record in pairs(records) do
+      if not keep[instance] or not instance.Parent then
+        pcall(record.destroy)
+        records[instance] = nil
+      end
+    end
+  end
+
+  task.spawn(function()
+    while alive do
+      pcall(syncRecords)
+      task.wait(0.4)
+    end
+  end)
+
+  local renderConnection = runService.RenderStepped:Connect(function()
+    local now = os.clock()
+    for _, record in pairs(records) do
+      if record.step then pcall(record.step, now) end
+    end
+  end)
+
+  -- ------------------------------------------------------------------ room counter (top center)
+  local hud = { on = false, showFloor = true, size = 24, color = Color3.fromRGB(255, 150, 90) }
+  local hudGui = Instance.new("ScreenGui")
+  hudGui.Name = "MoroRoomHud"
+  hudGui.ResetOnSpawn = false
+  hudGui.IgnoreGuiInset = true
+  hudGui.DisplayOrder = 30
+  pcall(function() if syn and syn.protect_gui then syn.protect_gui(hudGui) end end)
+  hudGui.Parent = (gethui and gethui()) or coreGui
+
+  local hudPill = Instance.new("Frame")
+  hudPill.AnchorPoint = Vector2.new(0.5, 0)
+  hudPill.Position = UDim2.new(0.5, 0, 0, 16)
+  hudPill.Size = UDim2.fromOffset(160, 40)
+  hudPill.AutomaticSize = Enum.AutomaticSize.X
+  hudPill.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
+  hudPill.BackgroundTransparency = 0.2
+  hudPill.BorderSizePixel = 0
+  hudPill.Visible = false
+  hudPill.Parent = hudGui
+  local hudCorner = Instance.new("UICorner")
+  hudCorner.CornerRadius = UDim.new(0, 12)
+  hudCorner.Parent = hudPill
+  local hudStroke = Instance.new("UIStroke")
+  hudStroke.Thickness = 1.6
+  hudStroke.Color = hud.color
+  hudStroke.Parent = hudPill
+  local hudPadding = Instance.new("UIPadding")
+  hudPadding.PaddingLeft, hudPadding.PaddingRight = UDim.new(0, 18), UDim.new(0, 18)
+  hudPadding.Parent = hudPill
+  local hudText = Instance.new("TextLabel")
+  hudText.BackgroundTransparency = 1
+  hudText.AutomaticSize = Enum.AutomaticSize.X
+  hudText.Size = UDim2.fromOffset(0, 40)
+  hudText.Font = Enum.Font.GothamBold
+  hudText.RichText = true
+  hudText.TextColor3 = Color3.new(1, 1, 1)
+  hudText.TextSize = hud.size
+  hudText.Parent = hudPill
+
+  local function currentRoomNumber()
+    local value = tonumber(localPlayer:GetAttribute("CurrentRoom"))
+    if not value then
+      local gameData = replicatedStorage:FindFirstChild("GameData")
+      local latest = gameData and gameData:FindFirstChild("LatestRoom")
+      value = latest and tonumber(latest.Value)
+    end
+    return value
+  end
+
+  local function refreshRoomHud()
+    if not hud.on then
+      hudPill.Visible = false
+      return
+    end
+    local room = currentRoomNumber()
+    local floorName = detectFloor()
+    if not room or floorName == "Lobby" or floorName == "" then
+      hudPill.Visible = false
+      return
+    end
+    -- the script labels doors with floor offsets (Mines continue after 100, Backdoor counts down from 50)
+    if floorName == "Mines" then room = room + 100 elseif floorName == "Backdoor" then room = room - 50 end
+    local color = string.format("#%02x%02x%02x", math.floor(hud.color.R * 255 + 0.5), math.floor(hud.color.G * 255 + 0.5), math.floor(hud.color.B * 255 + 0.5))
+    local text = 'ROOM  <font color="' .. color .. '">' .. tostring(room) .. "</font>"
+    if hud.showFloor then text = '<font color="#9aa0b4">' .. tostring(floorName) .. "</font>   " .. text end
+    local signature = text .. "|" .. hud.size .. "|" .. color
+    if signature ~= hud.lastSignature then
+      hud.lastSignature = signature
+      hudText.Text = text
+      hudText.TextSize = hud.size
+      hudStroke.Color = hud.color
+      hudPill.Size = UDim2.fromOffset(0, hud.size + 16)
+      hudText.Size = UDim2.fromOffset(0, hud.size + 16)
+    end
+    hudPill.Visible = true
+  end
+
+  local hudConnection = runService.Heartbeat:Connect(function()
+    if hud.on then pcall(refreshRoomHud) end
+  end)
+
+  library:OnUnload(function()
+    alive = false
+    pcall(function() renderConnection:Disconnect() end)
+    pcall(function() hudConnection:Disconnect() end)
+    dropRecords()
+    pcall(function() swapFolder:Destroy() end)
+    pcall(function() hudGui:Destroy() end)
+  end)
+
+  -- ------------------------------------------------------------------ menu (built later from MENU)
+  Menus.ModelSwap = function()
+    -- HUD
+    Groupboxes.Hud = tabs.Visuals:AddLeftGroupbox("HUD")
+    Groupboxes.Hud:AddToggle("RoomCounter", {
+      Text = "Room Counter", Default = false, Tooltip = "Shows the current room at the top center of the screen",
+      Callback = function(value)
+        hud.on = value
+        if not value then hudPill.Visible = false end
+      end,
+    })
+    toggles.RoomCounter:AddColorPicker("RoomCounterColor", {
+      Default = hud.color, Callback = function(color) hud.color = color end,
+    })
+    Groupboxes.Hud:AddToggle("RoomCounterFloor", {
+      Text = "Show Floor Name", Default = true, Callback = function(value) hud.showFloor = value end,
+    })
+    Groupboxes.Hud:AddSlider("RoomCounterSize", {
+      Text = "Text Size", Min = 14, Max = 40, Default = hud.size, Rounding = 0, Callback = function(value) hud.size = value end,
+    })
+
+    -- model library
+    local library2 = tabs.Visuals:AddLeftGroupbox("Model Library")
+    local categoryNames = {}
+    for _, cat in ipairs(CATEGORIES) do categoryNames[#categoryNames + 1] = cat.key end
+    local libraryTarget, libraryPreset, libraryId, libraryItem = "Players", presetNames[1], "", ""
+    local statusRow = library2:AddLabel("Status: nothing loaded. Everything here only changes YOUR screen.")
+    statusLabel = statusRow
+    library2:AddDropdown("MS_LibraryTarget", {
+      Text = "Load Into", Values = categoryNames, Default = "Players", Tooltip = "Which target gets the model you load below",
+      Callback = function(value) libraryTarget = value or libraryTarget end,
+    })
+    library2:AddDropdown("MS_LibraryPreset", {
+      Text = "Preset", Values = presetNames, Default = presetNames[1],
+      Callback = function(value) libraryPreset = value or libraryPreset end,
+    })
+    library2:AddButton({ Text = "Load Preset", Callback = function()
+      local preset = presetByName[libraryPreset]
+      if preset then loadTemplate(libraryTarget, preset[2], preset[3]) end
+    end })
+    library2:AddInput("MS_LibraryId", {
+      Text = "Asset ID", Default = "", Placeholder = "e.g. 138151705692565", Numeric = true,
+      Callback = function(text) libraryId = text end,
+    })
+    library2:AddButton({ Text = "Load Asset ID", Callback = function()
+      local id = tonumber(libraryId)
+      if id then loadTemplate(libraryTarget, id, false) else say("Model Swap", "Enter a numeric asset id") end
+    end })
+    library2:AddInput("MS_LibraryItem", {
+      Text = "Marketplace Item", Default = "", Placeholder = "bundle / item link or id",
+      Callback = function(text) libraryItem = text end,
+    })
+    library2:AddButton({ Text = "Load Marketplace Item", Callback = function()
+      local id, kind = parseItemId(libraryItem)
+      if id then loadTemplate(libraryTarget, id, true) else say("Model Swap", kind or "Paste a /bundles/ or /catalog/ link") end
+    end })
+
+    local search = tabs.Visuals:AddRightGroupbox("Model Search")
+    local keyword, results, chosen = "tung tung sahur", {}, nil
+    search:AddLabel("Searches the Roblox toolbox. Scripts and sounds are stripped.")
+    search:AddInput("MS_SearchKeyword", {
+      Text = "Keyword", Default = keyword, Placeholder = "keyword", Callback = function(text) keyword = text end,
+    })
+    search:AddDropdown("MS_SearchResults", {
+      Text = "Results", Values = { "-" }, Default = "-", Callback = function(value) chosen = value end,
+    })
+    search:AddButton({ Text = "Search", Callback = function()
+      say("Model Swap", "Searching...")
+      searchToolbox(keyword, function(list, err)
+        if not list then return say("Model Swap", "Search failed: " .. tostring(err), "error") end
+        results = {}
+        local names = {}
+        for _, item in ipairs(list) do
+          local label = string.format("%s - %s", item.name:sub(1, 38), item.by)
+          local n = 1
+          while results[label] do
+            n = n + 1
+            label = string.format("%s - %s #%d", item.name:sub(1, 34), item.by, n)
+          end
+          results[label] = item.id
+          names[#names + 1] = label
+        end
+        pcall(function() options.MS_SearchResults._raw.Refresh(names) end)
+        say("Model Swap", #names .. " results")
+      end)
+    end })
+    search:AddButton({ Text = "Load Result", Callback = function()
+      local id = chosen and results[chosen]
+      if id then loadTemplate(libraryTarget, id, false) else say("Model Swap", "Pick a result first") end
+    end })
+
+    -- global options
+    local globalBox = tabs.Visuals:AddRightGroupbox("Swap Options")
+    globalBox:AddToggle("MS_HideEffects", {
+      Text = "Hide Original Particles", Default = true, Tooltip = "Also hides smoke / trails of the replaced entity",
+      Callback = function(value) options2.hideEffects = value end,
+    })
+    globalBox:AddButton({ Text = "Remove All Replacements", Callback = function()
+      for _, cat in ipairs(CATEGORIES) do
+        settings[cat.key].mode = "Off"
+        pcall(function() options["MS_" .. cat.key .. "_Mode"]:SetValue("Off") end)
+        if templates[cat.key] and templates[cat.key].model then templates[cat.key].model:Destroy() end
+        templates[cat.key] = nil
+      end
+      dropRecords()
+      setStatus("Status: cleared")
+    end })
+
+    -- one section per target
+    for index, cat in ipairs(CATEGORIES) do
+      local conf = settings[cat.key]
+      local box = (index % 2 == 1) and tabs.Visuals:AddLeftGroupbox("Swap: " .. cat.title) or tabs.Visuals:AddRightGroupbox("Swap: " .. cat.title)
+      local flag = "MS_" .. cat.key
+      box:AddDropdown(flag .. "_Mode", {
+        Text = "Replace With", Values = cat.players and { "Off", "Model" } or { "Off", "Model", "Sprite" }, Default = "Off",
+        Tooltip = "Model = the 3D model loaded for this target. Sprite = a flat PNG that always faces you",
+        Callback = function(value) conf.mode = value or "Off" end,
+      })
+      if cat.players then
+        box:AddDropdown(flag .. "_Scope", {
+          Text = "Who", Values = { "Everyone", "Me only", "Others only" }, Default = "Everyone",
+          Callback = function(value) conf.scope = value or "Everyone"; dropRecords() end,
+        })
+      end
+      if cat.key == "Custom" then
+        box:AddInput(flag .. "_Names", {
+          Text = "Entity Names", Default = "", Placeholder = "model names in workspace, separated by commas",
+          Callback = function(text) conf.customNames = text end,
+        })
+      end
+      box:AddSlider(flag .. "_Height", {
+        Text = "Height", Min = 1, Max = 30, Default = conf.height, Rounding = 1, Suffix = " st",
+        Callback = function(value) conf.height = value end,
+      })
+      box:AddSlider(flag .. "_Yaw", {
+        Text = "Rotation", Min = 0, Max = 360, Default = 0, Rounding = 0, Suffix = " deg",
+        Callback = function(value) conf.yaw = value end,
+      })
+      box:AddSlider(flag .. "_YOff", {
+        Text = "Vertical Offset", Min = -5, Max = 5, Default = 0, Rounding = 1,
+        Callback = function(value) conf.yoff = value end,
+      })
+      -- animation, speech bubble and sprites exist for entities only (player models follow the real skeleton)
+      if not cat.players then
+        box:AddDropdown(flag .. "_Anim", {
+          Text = "Animation", Values = { "None", "Bob", "Spin", "Wobble" }, Default = "None",
+          Tooltip = "Extra movement on top of the target (Spin is for models, sprites always face you)",
+          Callback = function(value) conf.anim = value or "None" end,
+        })
+        box:AddInput(flag .. "_Bubble", {
+          Text = "Speech Bubble", Default = "", Placeholder = "phrases separated with ;",
+          Callback = function(text) conf.bubble = text or "" end,
+        })
+        box:AddInput(flag .. "_Image", {
+          Text = "Sprite Image", Default = "", Placeholder = "asset id or link to a PNG",
+          Callback = function(text) spriteTexts[cat.key] = text end,
+        })
+        box:AddButton({ Text = "Load Sprite", Callback = function()
+          local image, why = resolveImage(spriteTexts[cat.key])
+          if image then
+            spriteImages[cat.key] = image
+            if conf.mode == "Off" then
+              conf.mode = "Sprite"
+              pcall(function() options[flag .. "_Mode"]:SetValue("Sprite") end)
+            end
+            say("Model Swap", cat.title .. ": sprite ready")
+          else
+            say("Model Swap", why or "Type an asset id or a link to a PNG", "error")
+          end
+        end })
+      end
     end
   end
 end
 
-local val313
+-- =====================================================================
+--  MENU
+--  Everything above only defines logic and handlers. All tabs, sections,
+--  toggles, sliders and buttons are created here, in the order they appear.
+-- =====================================================================
 
-local function safeCall11()
+Groupboxes.SubfloorsFools = tabs.FoolsHotel:AddLeftGroupbox("Fools")
+
+Groupboxes.SubfloorsFools:AddToggle("BypassKillbricks", {
+  Text = "Anti Killbricks", Default = false, Tooltip = "Disables Lava from hurting you", })
+
+Groupboxes.SubfloorsFools:AddToggle("BypassSeekingWall", {
+  Text = "Anti Seeking Wall", Default = false, Tooltip = "Disables ScaryWall from hurting you", })
+
+Groupboxes.SubfloorsFools:AddToggle("BypassBanana", {
+  Text = "Anti Banana", Default = false, Tooltip = "Disables Banana Peel from making you slip", })
+
+Groupboxes.SubfloorsFools:AddToggle("BypassJeff", {
+  Text = "Anti Jeff", Default = false, Tooltip = "Disables Jeff the Killer from stabbing you", })
+
+Groupboxes.SubfloorsFools:AddDivider()
+
+Groupboxes.SubfloorsFools:AddToggle("RemoveSeekTrigger", {
+  Text = "Delete Seek Trigger", Default = false, Tooltip = "Deletes/disables the Seek cutscene trigger", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+Groupboxes.SubfloorsFools:AddToggle("RemoveFigure", {
+  Text = "Delete Figure", Default = false, Tooltip = "Removes Figure, however this is inconsistent", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+Groupboxes.SubfloorsFools:AddToggle("AutoRevive", {
+  Text = "Infinite Revives", Default = false, Tooltip = "Automatically revives after dying without using a revive and having infinite usage", })
+
+Groupboxes.SubfloorsFools:AddToggle("FigureGodmode", {
+  Text = "Figure Godmode", Default = false, Tooltip = "Prevents Figure from hurting you", })
+
+Groupboxes.SubfloorsFools:AddDivider()
+
+Groupboxes.SubfloorsFools:AddToggle("RemoveBasementGate", {
+  Text = "Remove Basement Gate", Default = false, Tooltip = "Removes the gate from basement rooms", })
+
+Groupboxes.SubfloorsFools:AddToggle("RemovePaintingsDoor", {
+  Text = "Remove Paintings Door", Default = false, Tooltip = "Removes the fireplace doors from painting rooms", })
+
+Groupboxes.SubfloorsFools:AddToggle("RemoveSkeletonDoor", {
+  Text = "Remove Skeleton Door", Default = false, Tooltip = "Removes the skeleton door from the infirmary", })
+
+Groupboxes.SubfloorsFools:AddToggle("AutoRoomSkip", {
+  Text = "Auto Room-Skip", Default = false, Tooltip = "Automatically teleports to the next room", })
+
+Groupboxes.SubfloorsFools:AddButton({
+  Text = "Skip Current Room", Tooltip = "Teleports you to the current room's door", Func = Handlers.SkipCurrentRoom, })
+
+Groupboxes.HomeFunctions = tabs.Home:AddLeftGroupbox("Functions & Features")
+
+Groupboxes.Misc = tabs.Miscellaneous:AddLeftGroupbox("Miscellaneous")
+
+Groupboxes.Misc:AddButton({
+  Text = "Play Again", Callback = Handlers.PlayAgain, })
+
+Groupboxes.Misc:AddButton({
+  Text = "Return to Lobby", Callback = Handlers.ReturnToLobby, })
+
+Groupboxes.Misc:AddButton({
+  Text = "Reset Character", Callback = Handlers.ResetCharacter, })
+
+Groupboxes.Misc:AddButton({
+  Text = "Give Star Jug", Tooltip = "Gives a star jug", Callback = Handlers.GiveStarJug, })
+
+Groupboxes.Misc:AddDivider()
+
+Groupboxes.Misc:AddToggle("ShowKeybinds", {
+  Text = "Show Keybinds", Default = false, Tooltip = "Shows all registered keybinds", })
+
+toggles.ShowKeybinds:OnChanged(function(visible) library.KeybindFrame.Visible = visible end)
+
+Groupboxes.Misc:AddToggle("AntiLag", {
+  Text = "Anti-Lag", Default = false, Tooltip = "Reduces lag by setting all parts in the current rooms to Plastic material", })
+
+toggles.AntiLag:OnChanged(Handlers.AntiLagChanged)
+
+Groupboxes.Misc:AddDivider()
+
+Groupboxes.Misc:AddToggle("DisableIdleKick", {
+  Text = "Disable Idle Kick", Default = false, Tooltip = "Disables the kick from being afk for 20 minutes", })
+
+toggles.DisableIdleKick:OnChanged(Handlers.DisableIdleKickChanged)
+
+Groupboxes.Misc:AddToggle("DisplayInfo", {
+  Text = "Display Info", Default = false, Tooltip = "Shows an overlay with FPS, ping, executor, and username", })
+
+toggles.DisplayInfo:OnChanged(Handlers.DisplayInfoChanged)
+
+Groupboxes.MiscFun = tabs.Miscellaneous:AddRightGroupbox("Fun")
+
+Groupboxes.MiscFun:AddToggle("Uhhhh", {
+  Text = "uhhhh", Default = false, Tooltip = "content (this makes a lot of lag btw)", })
+
+toggles.Uhhhh:OnChanged(Handlers.UhhhhChanged)
+
+Groupboxes.MiscFun:AddButton({
+  Text = "uhhhh val", Tooltip = "content", Callback = Handlers.UhhhhVal, })
+
+Groupboxes.MiscFun:AddButton({
+  Text = "Death Farm", Tooltip = "Execute this in the hotel at a start of run, either use it from here or execute the actual script", Callback = function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/doram44/cheesy/refs/heads/main/stuff/deathfarm.lua"))()
+  end, })
+
+Groupboxes.MiscFun:AddToggle("OrbitItems", {
+  Text = "Orbit Items", Default = false, Tooltip = "Items that you have dropped will spin around you on the floor", DisabledTooltip = "This feature doesn't work in this floor", })
+
+Groupboxes.MiscFun:AddSlider("OrbitYOffset", {
+  Text = "Orbit Y Offset", Min = 0, Max = 2, Default = 2, Rounding = 1, Tooltip = "The Y position of the item orbit", })
+
+Groupboxes.MiscFun:AddSlider("OrbitSpeed", {
+  Text = "Orbit Speed", Min = 2, Max = 5, Default = 2, Rounding = 1, Tooltip = "The speed of the item orbit", })
+
+toggles.OrbitItems:OnChanged(Handlers.OrbitItemsChanged)
+
+Groupboxes.MiscFun:AddToggle("BringItems", {
+  Text = "Bring Items", Default = false, Tooltip = "Floats all dropped items in front of your mouse", })
+
+toggles.BringItems:OnChanged(SetupBringItems)
+
+Groupboxes.MiscFun:AddToggle("TwerkDance", {
+  Text = "Twerk", Default = false, Tooltip = "Plays the mspaint twerking animation (i think)", })
+
+toggles.TwerkDance:OnChanged(Handlers.TwerkDanceChanged)
+
+Groupboxes.Character = tabs.Main:AddLeftGroupbox("Character")
+
+Groupboxes.Other = tabs.Main:AddRightGroupbox("Other")
+
+Groupboxes.AutoFarm = tabs.AutoFarm:AddLeftGroupbox("Knob Farm")
+
+Groupboxes.AutoFarm_Settings = tabs.AutoFarm:AddRightGroupbox("Settings")
+
+Groupboxes.AutoFarm:AddToggle("AutoFarmEnabled", {
+  Text = "Enable Knob Farm",
+  Default = false,
+  Tooltip = "Automates traversing rooms, looting gold, solving obstacles, and farming knobs",
+})
+
+Groupboxes.AutoFarm_Status = Groupboxes.AutoFarm:AddLabel("Status: Idle")
+
+Groupboxes.AutoFarm:AddDivider()
+
+Groupboxes.AutoFarm_StatsNet = Groupboxes.AutoFarm:AddLabel("Net Profit: +0 Knobs")
+
+Groupboxes.AutoFarm_StatsEarned = Groupboxes.AutoFarm:AddLabel("Total Earned: 0 Knobs")
+
+Groupboxes.AutoFarm_StatsRuns = Groupboxes.AutoFarm:AddLabel("Runs: 0 (Spent: 0)")
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmShowPath", {
+  Text = "Show Path (Neon Nodes)",
+  Default = true,
+  Tooltip = "Renders green neon pathfinding nodes along the walking path (like in the video)",
+})
+
+Groupboxes.AutoFarm_Settings:AddDropdown("AutoFarmMovementMode", {
+  Text = "Movement Mode",
+  Values = { "Straight", "Orthogonal" },
+  Default = "Straight",
+  Tooltip = "Straight: прямое плавное движение к цели. Orthogonal: движение строго под 90° вдоль осей X и Z.",
+})
+
+Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmSpeed", {
+  Text = "Farm Speed",
+  Min = 16,
+  Max = 80,
+  Default = 35,
+  Rounding = 0,
+  Compact = true,
+  Tooltip = "Movement speed for navigating paths between rooms and loot (default: 35)",
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmLootDrawers", {
+  Text = "Loot Drawers & Tables",
+  Default = true,
+  Tooltip = "Visits nearby drawers, chests, and tables to collect gold",
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmRunTo100", {
+  Text = "Farm to Door 100",
+  Default = true,
+  Tooltip = "OFF: фарм до комнаты 49, затем смерть и Play Again (быстрые заходы, для ночного AFK). ON: проходит Библиотеку (50) и доходит до лифта (100).",
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmPlayAgain", {
+  Text = "Auto Play Again (7s)",
+  Default = true,
+  Tooltip = "Automatically clicks Play Again 7 seconds after dying or beating the game",
+})
+
+Groupboxes.AutoFarm_Settings:AddDivider()
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmMinesMode", {
+  Text = "Mines Mode (Ladder Bypass)",
+  Default = false,
+  Tooltip = "Phase 1: walk to nearest ladder to trigger AC bypass. Phase 2: fly+noclip through all rooms looting everything.",
+})
+
+Groupboxes.AutoFarm_Settings:AddToggle("AutoFarmMinesAutoProtect", {
+  Text = "Auto-enable Mines Protections",
+  Default = true,
+  Tooltip = "Automatically enables Vacuum/Snare/Giggle/Gloombat bypass and DisableAnticheat on start",
+})
+
+Groupboxes.AutoFarm_Settings:AddSlider("AutoFarmMinesFlySpeed", {
+  Text = "Fly Loot Speed",
+  Min = 20,
+  Max = 80,
+  Default = 35,
+  Rounding = 0,
+  Compact = true,
+  Tooltip = "Speed of flight during Phase 2 loot sweep",
+})
+
+Groupboxes.AutoDoorSkip = tabs.AutoFarm:AddLeftGroupbox("Auto Door Skip")
+
+Menus.AutoDoorSkip()
+
+Groupboxes.SpamBuy = tabs.Exploits:AddLeftGroupbox("Pre-Run")
+
+Groupboxes.SpamBuy:AddButton({
+  Text = "Buy Items", DisabledTooltip = "This feature doesn't work in this floor", Callback = Handlers.BuyItems, })
+
+Groupboxes.SpamBuy:AddSlider("SpamBuyCount", {
+  Text = "Purchase Count", Min = 1, Max = 6, Default = 3, Rounding = 0, Compact = true, DisabledTooltip = "This feature doesn't work in this floor", })
+
+Groupboxes.SpamBuy:AddDropdown("SpamBuyItems", {
+  Text = "Items to Buy", Values = { "Lockpick", "Lighter", "Flashlight", "Vitamins", "Crucifix", "Skeleton Key" }, Multi = true, AllowNull = true, DisabledTooltip = "This feature doesn't work in this floor", })
+
+Groupboxes.SpamBuy:AddToggle("ShowCrucifix", {
+  Text = "Show Crucifix", Default = false, Tooltip = "Shows/hides the crucifix in the item shop", DisabledTooltip = "This feature doesn't work in this floor", })
+
+toggles.ShowCrucifix:OnChanged(Handlers.ShowCrucifixChanged)
+
+Groupboxes.SpamBuy:AddToggle("ShowSkeletonKey", {
+  Text = "Show Skeleton Key", Default = false, Tooltip = "Shows/hides the skeleton key in the item shop", DisabledTooltip = "This feature doesn't work in this floor", })
+
+toggles.ShowSkeletonKey:OnChanged(Handlers.ShowSkeletonKeyChanged)
+
+Groupboxes.SpamBuy:AddToggle("AutoBuyLockpicks", {
+  Text = "Auto Buy Lockpicks (1x)",
+  Default = false,
+  Tooltip = "Automatically purchases 1 lockpick in pre-run shop",
+  DisabledTooltip = "This feature doesn't work in this floor",
+})
+
+Groupboxes.SpamBuy:AddToggle("AutoClosePreRunShop", {
+  Text = "Auto Close Shop (Confirm)",
+  Default = true,
+  Tooltip = "Automatically clicks Confirm and closes the pre-run shop",
+  DisabledTooltip = "This feature doesn't work in this floor",
+})
+
+Groupboxes.SpamBuy:AddButton({
+  Text = "Confirm Shop",
+  Tooltip = "Clicks Confirm and closes the pre-run shop",
+  Callback = Handlers.ConfirmShop,
+})
+
+toggles.AutoBuyLockpicks:OnChanged(Handlers.AutoBuyLockpicksChanged)
+
+Groupboxes.Prompts = tabs.Exploits:AddLeftGroupbox("Prompts")
+
+Groupboxes.Prompts:AddToggle("InstantInteract", {
+  Text = "Instant Interact", Default = false, Tooltip = "Removes the wait time for interactions e.g. locks", })
+
+Groupboxes.Prompts:AddToggle("PromptClip", {
+  Text = "Prompt Clip", Default = false, Tooltip = "Allows you to interact through walls", })
+
+Groupboxes.Prompts:AddToggle("PromptReach", {
+  Text = "Prompt Reach", Default = false, Tooltip = "Increases the range of all proximity prompts", })
+
+Groupboxes.Prompts:AddSlider("PromptRange", {
+  Text = "Prompt Range", Min = 1, Max = 2, Default = 1, Rounding = 1, Compact = true, })
+
+options.PromptRange:OnChanged(Handlers.PromptRangeChanged)
+
+Groupboxes.Exploits = tabs.Exploits:AddLeftGroupbox("Exploits")
+
+Groupboxes.Exploits:AddToggle("InfiniteItemsToggle", {
+  Text = "Infinite Items", Default = false, Tooltip = "Allows you to use lockpicks, shears, skeleton keys, and multitools without draining the usage", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+Groupboxes.Exploits:AddToggle("InfiniteCrucifix", {
+  Text = "Infinite Crucifix", Default = false, Tooltip = "Performs a glitch that doesn't use up your crucifix when used on a rushlike entity (rush, ambush, a60, a120, blitz), however, this is inconsistent", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+Groupboxes.Exploits:AddToggle("AutoHeartbeatMinigame", {
+  Text = "Win Heartbeat Minigame", Default = false, Tooltip = "Automatically passes the heartbeat minigame when it starts", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+Groupboxes.Exploits:AddButton({
+  Text = "Fake Revive", Tooltip = "This doesnt always work, and interacting with a bandage will disable it, and will not be able to enable it back. Sometimes you will not be able to fully finish the run, but you can still go through doors/finish", DisabledTooltip = "Your executor doesn't support this feature :(", Callback = Handlers.FakeRevive, })
+
+Groupboxes.CrucifixEverything = tabs.Exploits:AddLeftGroupbox("Crucifix Everything")
+
+Menus.CrucifixEverything()
+
+toggles.InstantInteract:OnChanged(Handlers.InstantInteractChanged)
+
+toggles.PromptClip:OnChanged(Handlers.PromptClipChanged)
+
+toggles.PromptReach:OnChanged(Handlers.PromptReachChanged)
+
+options.PromptRange:OnChanged(Handlers.PromptRangeChanged2)
+
+Groupboxes.Exploits_BypassBox = tabs.Exploits:AddRightTabbox("Bypasses")
+
+Groupboxes.Exploits_Bypasses = Groupboxes.Exploits_BypassBox:AddTab("Bypasses")
+
+Groupboxes.Exploits_Removals = Groupboxes.Exploits_BypassBox:AddTab("Removals")
+
+Groupboxes.Exploits_Damage = Groupboxes.Exploits_BypassBox:AddTab("Damage")
+
+Groupboxes.Exploits_Bypasses:AddToggle("AntiEntityMaster", {
+  Text = "Anti-Entity",
+  Default = false,
+  Tooltip = "Master toggle to protect against selected entities",
+})
+
+Groupboxes.Exploits_Bypasses:AddDropdown("AntiEntityList", {
+  Text = "Entities Selection",
+  Values = { "Giggle", "Dupe", "Eyes", "Lookman", "Gloombat Eggs", "Seek Obstructions", "Vacuum", "Snare" },
+  Default = { "Giggle", "Dupe", "Eyes", "Lookman", "Gloombat Eggs", "Seek Obstructions", "Vacuum", "Snare" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select which entities to protect against",
+})
+
+for _, flag in pairs(AntiEntityMapping) do
+  createProxyToggle(flag)
+end
+
+toggles.AntiEntityMaster:OnChanged(syncAntiEntity)
+
+options.AntiEntityList:OnChanged(syncAntiEntity)
+
+toggles.BypassGiggle:OnChanged(Handlers.BypassGiggleChanged)
+
+toggles.BypassDupe:OnChanged(Handlers.BypassDupeChanged)
+
+toggles.BypassEyes:OnChanged(Handlers.BypassEyesChanged)
+
+toggles.BypassLookman:OnChanged(Handlers.BypassLookmanChanged)
+
+toggles.BypassGloombatEggs:OnChanged(Handlers.BypassGloombatEggsChanged)
+
+toggles.BypassSeekObstructions:OnChanged(Handlers.BypassSeekObstructionsChanged)
+
+toggles.BypassVacuum:OnChanged(Handlers.BypassVacuumChanged)
+
+toggles.BypassSnare:OnChanged(Handlers.BypassSnareChanged)
+
+Groupboxes.Exploits_Removals:AddToggle("RemoveScreech", {
+  Text = "Remove Screech",
+  Default = false,
+  Tooltip = "Prevents 'Screech' from spawning and destroys active Screech.",
+})
+
+Groupboxes.Exploits_Removals:AddToggle("RemoveHalt", {
+  Text = "Remove Halt",
+  Default = false,
+  Tooltip = "Prevents 'Halt' from spawning.",
+})
+
+Groupboxes.Exploits_Removals:AddDivider()
+
+Groupboxes.Exploits_Removals:AddToggle("RemoveMaster", {
+  Text = "Remove Features",
+  Default = false,
+  Tooltip = "Master toggle to remove selected features/sounds/delays",
+})
+
+Groupboxes.Exploits_Removals:AddDropdown("RemoveList", {
+  Text = "Removals Selection",
+  Values = { "A-90", "Dread", "Footstep Sounds", "Jammin Music", "Interacting Sounds", "Haste Sound", "Closet Delay" },
+  Default = { "A-90", "Dread", "Footstep Sounds", "Jammin Music", "Interacting Sounds", "Haste Sound", "Closet Delay" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select which features/sounds to remove",
+})
+
+for _, flag in pairs(RemoveMapping) do
+  createProxyToggle(flag)
+end
+
+toggles.RemoveMaster:OnChanged(syncRemove)
+
+options.RemoveList:OnChanged(syncRemove)
+
+toggles.RemoveScreech:OnChanged(Handlers.RemoveScreechChanged)
+
+toggles.RemoveHalt:OnChanged(Handlers.RemoveHaltChanged)
+
+toggles.RemoveA90:OnChanged(Handlers.RemoveA90Changed)
+
+toggles.RemoveDread:OnChanged(Handlers.RemoveDreadChanged)
+
+toggles.RemoveFootstepSounds:OnChanged(Handlers.RemoveFootstepSoundsChanged)
+
+toggles.RemoveJamminMusic:OnChanged(Handlers.RemoveJamminMusicChanged)
+
+toggles.RemoveInteractingSounds:OnChanged(Handlers.RemoveInteractingSoundsChanged)
+
+Groupboxes.Exploits_Damage:AddToggle("NoDamageMaster", {
+  Text = "No Damage",
+  Default = false,
+  Tooltip = "Master toggle to prevent damage from selected entities",
+})
+
+Groupboxes.Exploits_Damage:AddDropdown("NoDamageList", {
+  Text = "No Damage Selection",
+  Values = { "Screech", "A-90", "Halt" },
+  Default = { "Screech", "A-90", "Halt" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select entities that should not damage you",
+})
+
+for _, flag in pairs(NoDamageMapping) do
+  createProxyToggle(flag)
+end
+
+toggles.NoDamageMaster:OnChanged(syncNoDamage)
+
+options.NoDamageList:OnChanged(syncNoDamage)
+
+toggles.NoScreechDamage:OnChanged(Handlers.NoScreechDamageChanged)
+
+toggles.NoHaltDamage:OnChanged(Handlers.NoHaltDamageChanged)
+
+toggles.NoA90Damage:OnChanged(Handlers.NoA90DamageChanged)
+
+Groupboxes.Exploits_Automation = tabs.Exploits:AddRightGroupbox("Automation")
+
+Groupboxes.Exploits_Automation:AddToggle("AutoUnlockPadlockToggle", {
+  Text = "Auto Unlock Padlock", Default = false, Tooltip = "Instantly unlocks the room 50 padlock when you get close, but you need the books required", DisabledTooltip = "This feature doesn't work in this floor", })
+
+Groupboxes.Exploits_Automation:AddButton({
+  Text = "Show Library Code", Tooltip = "Displays the current library code in a notification", DisabledTooltip = "This feature doesn't work in this floor", Callback = Handlers.ShowLibraryCode, })
+
+Groupboxes.Exploits_Automation:AddToggle("AutoBreakerBox", {
+  Text = "Auto Breaker Box", Default = false, Tooltip = "Automatically solves the breaker box.", DisabledTooltip = "This feature doesn't work in this floor", })
+
+Groupboxes.Exploits_Automation:AddDropdown("BreakerBoxMethod", {
+  Text = "Breaker Box Method", Values = { "Instant", "Legit" }, Default = 1, Multi = false, })
+
+Groupboxes.Exploits_Automation:AddToggle("AutoLibraryBruteForce", {
+  Text = "Auto Brute-Force Padlock", Default = false, Tooltip = "Automatically brute-forces codes in the library code when near the padlock until it finds the correct code", DisabledTooltip = "This feature doesn't work in this floor", })
+
+toggles.InfiniteCrucifix:OnChanged(Handlers.InfiniteCrucifixChanged)
+
+toggles.AutoBreakerBox:OnChanged(Handlers.AutoBreakerBoxChanged)
+
+Groupboxes.Character:AddToggle("EnableWalkspeed", {
+  Text = "Enable Walkspeed", Default = false, Tooltip = "Enables custom walkspeed modification", })
+
+Groupboxes.Character:AddSlider("Walkspeed", {
+  Text = "Walkspeed", Min = 16, Max = 150, Default = 16, Rounding = 0, Compact = true, })
+
+Groupboxes.Character:AddDropdown("SpeedBypassMode", {
+  Text = "Speed Bypass", Values = { "Default", "Boost" }, Default = 1, Multi = false, })
+
+Groupboxes.Character:AddToggle("FlyToggle", { Text = "Fly", Default = false })
+
+toggles.FlyToggle:AddKeyPicker("FlyKeybind", {
+  Text = "Fly", Default = "F", Mode = "Toggle", SyncToggleState = true, })
+
+Groupboxes.Character:AddSlider("FlySpeed", {
+  Text = "Fly Speed", Min = 25, Max = 150, Default = 60, Rounding = 0, Compact = true, })
+
+Groupboxes.Character:AddDivider()
+
+Groupboxes.Character:AddToggle("RemoveAcceleration", {
+  Text = "Remove Acceleration", Default = false, Tooltip = "Removes 'sliding' when moving at high speeds", })
+
+Groupboxes.Character:AddDivider()
+
+Groupboxes.Character:AddToggle("EnableCharacterJump", {
+  Text = "Enable Jumping", Default = false, Tooltip = "Enables the doors jumping feature", })
+
+Groupboxes.Character:AddToggle("InfiniteJumps", {
+  Text = "Infinite Jump", Default = false, Tooltip = "Allows you to jump mid-air", })
+
+Groupboxes.Character:AddDivider()
+
+Groupboxes.Character:AddToggle("EnableCharacterSlide", {
+  Text = "Enable Sliding", Default = false, Tooltip = "Enables the doors sliding feature (only at speeds above 20)", })
+
+Groupboxes.Character:AddToggle("Noclip", {
+  Text = "Noclip", Default = false, Tooltip = "Allows you to go through walls (rubberbands you)", })
+
+toggles.Noclip:AddKeyPicker("NoclipKeybind", {
+  Text = "Noclip", Default = "N", Mode = "Toggle", SyncToggleState = true, })
+
+Groupboxes.Character:AddToggle("Phase", {
+  Text = "Phase", Default = false, Tooltip = "Slowly floats you forward with noclip enabled for no rubberbanding", })
+
+toggles.Phase:AddKeyPicker("PhaseKeybind", {
+  Text = "Phase", Default = "T", Mode = "Toggle", SyncToggleState = true, })
+
+Groupboxes.Other:AddToggle("AnticheatManipulation", {
+  Text = "Anticheat Manipulation", Default = false, Tooltip = "Makes your character fly forwards fast to trick the anticheat to send you through walls", })
+
+toggles.AnticheatManipulation:AddKeyPicker("AnticheatManipulationKeybind", {
+  Text = "Anticheat Manipulation", Default = "B", Mode = "Hold", SyncToggleState = true, })
+
+Groupboxes.Other:AddToggle("AutoInteract", {
+  Text = "Auto Interact", Default = false, Tooltip = "Auto interacts with prompts near you (you can change it to be a hold keybind)", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+toggles.AutoInteract:AddKeyPicker("AutoInteractKeybind", {
+  Text = "Auto Interact", Default = "R", Mode = "Toggle", SyncToggleState = true, })
+
+Groupboxes.Other:AddDropdown("AutoInteractIgnoreList", {
+  Text = "Interact Blacklist", Values = { "Locks", "Glitch Fragments", "Dropped Items", "Mandrake" }, Default = { "Dropped Items" }, Multi = true, AllowNull = true, })
+
+Groupboxes.Other:AddDivider()
+
+Groupboxes.Other:AddToggle("Godmode", {
+  Text = "Godmode", Default = false, Tooltip = "Makes your character appear underground on the server, protecting you from rush-like entities.", })
+
+toggles.Godmode:AddKeyPicker("GodmodeKeybind", {
+  Text = "Godmode", Default = "G", Mode = "Toggle", SyncToggleState = true, })
+
+toggles.Godmode:OnChanged(Handlers.GodmodeChanged)
+
+Groupboxes.Other:AddDropdown("GodmodeMethod", {
+  Text = "Godmode Method", Values = { "Always enabled", "On entity spawn" }, Default = "On entity spawn", Tooltip = "Always enabled keeps godmode active while the toggle is on. On entity spawn only activates it when a listed entity exists.", })
+
+Groupboxes.Other:AddToggle("NotifyVulnerable", {
+  Text = "Notify When Vulnerable", Default = false, Tooltip = "Notifies you when your character moves 3+ studs upward", })
+
+Groupboxes.Other:AddToggle("AutoClosetToggle", {
+  Text = "Auto Closet", Default = false, Tooltip = "Automatically hides in a closet next to you when a rush-like entity is near", })
+
+toggles.AutoClosetToggle:AddKeyPicker("AutoClosetKeybind", {
+  Text = "Auto Closet", Default = "H", Mode = "Toggle", SyncToggleState = true, })
+
+Groupboxes.Other:AddDropdown("AutoClosetEntityList", {
+  Text = "Ignore List", Values = { "Rush", "Ambush", "Blitz", "A-60", "A-120", "Glitch Rush", "Glitch Ambush" }, Multi = true, AllowNull = true, })
+
+Groupboxes.Other:AddDivider()
+
+Groupboxes.Other:AddToggle("DoorReachToggle", {
+  Text = "Door Reach", Default = false, Tooltip = "Increases your door opening reach by your chosen amount", })
+
+Groupboxes.Other:AddSlider("DoorReachDistance", {
+  Text = "Door Reach Distance", Min = 15, Max = 75, Default = 45, Rounding = 0, Compact = true, Suffix = " studs", })
+
+Groupboxes.PhantomNoclip = tabs.Main:AddRightGroupbox("Phantom Noclip")
+
+Menus.PhantomNoclip()
+
+toggles.EnableWalkspeed:OnChanged(refreshWalkspeed)
+
+options.Walkspeed:OnChanged(refreshWalkspeed)
+
+options.SpeedBypassMode:OnChanged(refreshWalkspeed)
+
+toggles.FlyToggle:OnChanged(Handlers.FlyToggleChanged)
+
+toggles.RemoveAcceleration:OnChanged(Handlers.RemoveAccelerationChanged)
+
+toggles.EnableCharacterJump:OnChanged(Handlers.EnableCharacterJumpChanged)
+
+toggles.EnableCharacterSlide:OnChanged(Handlers.EnableCharacterSlideChanged)
+
+toggles.Noclip:OnChanged(refreshNoclip)
+
+toggles.Phase:OnChanged(refreshPhase)
+
+toggles.AnticheatManipulation:OnChanged(Handlers.AnticheatManipulationChanged)
+
+toggles.AutoInteract:OnChanged(Handlers.AutoInteractChanged)
+
+toggles.InfiniteJumps:OnChanged(refreshInfiniteJump)
+
+Groupboxes.Visuals_ESP = tabs.Visuals:AddLeftGroupbox("Targets")
+
+Groupboxes.Visuals_Preset = tabs.Visuals:AddRightGroupbox("ESP Preset")
+
+Groupboxes.Visuals_Style = tabs.Visuals:AddLeftGroupbox("Chams & Boxes")
+
+Groupboxes.Visuals_Labels = tabs.Visuals:AddLeftGroupbox("Labels")
+
+Groupboxes.Visuals_Tracers = tabs.Visuals:AddRightGroupbox("Tracers & Arrows")
+
+Groupboxes.Visuals_Settings = tabs.Visuals:AddRightGroupbox("Colors")
+
+addESPCategoryControls("Entities", "Entities")
+
+Groupboxes.Visuals_ESP:AddDropdown("EntitiesESPAllowed", {
+  Text = "Allowed Entities", Values = {
+    "Rush", "Ambush", "A-60", "A-120", "Eyes", "Lookman", "Figure", "Backdoor Rush", "Backdoor Lookman", "Groundskeeper", "Gloombat Swarm", "Glitch Rush", "Glitch Ambush", "Frozen Ambush", "Monument", "Jeff the Killer", "Sally", "Dupe", "Giggle", "Snare", "Gloombat Eggs", "Grumble", "Bash", "Drones", "Electric Puddle", "Teller", "Scribbles", "Noise", "Creak", }, Multi = true, AllowNull = true, Tooltip = "Only show ESP for selected entities (leave empty to show all)", })
+
+addESPCategoryControls("Doors", "Doors")
+
+addESPCategoryControls("Keys", "Keys")
+
+addESPCategoryControls("Objectives", "Objectives")
+
+addESPCategoryControls("Items", "Items")
+
+addESPCategoryControls("Gold", "Coins")
+
+addESPCategoryControls("Chests", "Chests")
+
+addESPCategoryControls("HidingSpots", "Hiding Spots")
+
+Groupboxes.Visuals_ESP:AddToggle("PlayersESP", { Text = "Players", Default = false })
+
+toggles.PlayersESP:AddColorPicker("PlayersESPColor", {
+  Text = "Players", Default = Color3.fromRGB(255, 255, 255), })
+
+toggles.PlayersESP:OnChanged(Handlers.PlayersESPChanged)
+
+options.PlayersESPColor:OnChanged(Handlers.PlayersESPColorChanged)
+
+refreshPlayersESP()
+
+Groupboxes.Visuals_Style:AddToggle("ESPFade", {
+  Text = "ESP Fade", Default = false, Tooltip = "Enables smooth fading effect on ESP highlights", })
+
+Groupboxes.Visuals_Style:AddSlider("ESPFadeTime", {
+  Text = "Fade Time", Min = 0, Max = 1, Default = 0.25, Rounding = 2, Compact = true, Suffix = "s", })
+
+Groupboxes.Visuals_Tracers:AddToggle("ESPArrowsToggle", {
+  Text = "Enable Arrows", Default = true, Tooltip = "Shows arrows that point to off-screen objects", })
+
+Groupboxes.Visuals_Tracers:AddSlider("ESPArrowsRadius", {
+  Text = "Arrow Radius", Min = 100, Max = 500, Default = 250, Rounding = 0, Compact = true, Suffix = " px", })
+
+Groupboxes.ArchivesMain = tabs.Archives:AddLeftGroupbox("Archives")
+
+Groupboxes.ArchivesMain:AddToggle("BypassDrones", {
+  Text = "Bypass Drones",
+  Default = false,
+  Tooltip = "Prevents 'Drones' from attacking you by disabling walk triggers.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("AntiDrone", {
+  Text = "Anti Drone",
+  Default = false,
+  Tooltip = "Prevents you from bumping/falling over when walking into (singular) drones",
+})
+
+Groupboxes.ArchivesMain:AddToggle("BypassDronesStampede", {
+  Text = "Stop Time/Anti Stampede",
+  Default = false,
+  Tooltip = "Prevents 'The Drones Stampede' from attacking you by looking at the clock.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("DisableDroneStampede", {
+  Text = "Disable Drone Stampede (FE)",
+  Default = false,
+  Tooltip = "Disables the drone stampede from spawning FE",
+})
+
+Groupboxes.ArchivesMain:AddToggle("TimeShower", {
+  Text = "Time Shower",
+  Default = false,
+  Tooltip = "Shows the Archives clock time on your screen.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("DroneTimer", {
+  Text = "Drone Stampede Timer",
+  Default = false,
+  Tooltip = "Notifies you 60s and 30s before the 05:00 and 09:00 drone stampede",
+})
+
+Groupboxes.ArchivesMain:AddDivider()
+
+Groupboxes.ArchivesMain:AddToggle("BypassWater", {
+  Text = "Bypass Electric Water",
+  Default = false,
+  Tooltip = "Creates a safe collision platform above electric water to walk freely.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("AntiElectricPuddle", {
+  Text = "Anti Electric Puddle",
+  Default = false,
+  Tooltip = "Moves your character above to not step on electric puddles",
+})
+
+Groupboxes.ArchivesMain:AddToggle("BypassAlma", {
+  Text = "Bypass Alma",
+  Default = false,
+  Tooltip = "Prevents 'Alma' from spawning by destroying it.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("NoAlmaDamage", {
+  Text = "Anti Alma",
+  Default = false,
+  Tooltip = "Prevents alma from ever interacting with you/you can look at her freely",
+})
+
+Groupboxes.ArchivesMain:AddDivider()
+
+Groupboxes.ArchivesMain:AddToggle("AntiClosetTrash", {
+  Text = "Anti Closet Trash",
+  Default = false,
+  Tooltip = "Prevents closet trash (binders, shoes, shelves) from spawning.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("ForgetMeNotSolver", {
+  Text = "Forget Me Not Skipper",
+  Default = false,
+  Tooltip = "Automatically solves and skips Forget Me Not doors.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("HonchoCorrectBoxESP", {
+  Text = "Honcho Correct Box ESP",
+  Default = false,
+  Tooltip = "ESPs the Archives Correct Boxes for Honcho minigame.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("AntiRansom", {
+  Text = "Anti Ransom",
+  Default = false,
+  Tooltip = "Prevents 'Ransom' from attacking you.",
+})
+
+Groupboxes.ArchivesMain:AddToggle("AntiScribbles", {
+  Text = "Bypass Scribbles",
+  Default = false,
+  Tooltip = "Prevents 'Scribbles' from attacking you.",
+})
+
+toggles.BypassDrones:OnChanged(Handlers.BypassDronesChanged)
+
+toggles.BypassDronesStampede:OnChanged(Handlers.BypassDronesStampedeChanged)
+
+toggles.DisableDroneStampede:OnChanged(Handlers.DisableDroneStampedeChanged)
+
+toggles.TimeShower:OnChanged(Handlers.TimeShowerChanged)
+
+toggles.DroneTimer:OnChanged(Handlers.DroneTimerChanged)
+
+toggles.BypassWater:OnChanged(Handlers.BypassWaterChanged)
+
+toggles.AntiElectricPuddle:OnChanged(Handlers.AntiElectricPuddleChanged)
+
+toggles.BypassAlma:OnChanged(Handlers.BypassAlmaChanged)
+
+toggles.NoAlmaDamage:OnChanged(Handlers.NoAlmaDamageChanged)
+
+toggles.AntiClosetTrash:OnChanged(Handlers.AntiClosetTrashChanged)
+
+toggles.ForgetMeNotSolver:OnChanged(Handlers.ForgetMeNotSolverChanged)
+
+toggles.HonchoCorrectBoxESP:OnChanged(Handlers.HonchoCorrectBoxESPChanged)
+
+toggles.AntiRansom:OnChanged(Handlers.AntiRansomChanged)
+
+toggles.AntiScribbles:OnChanged(Handlers.AntiScribblesChanged)
+
+Groupboxes.ArchivesBypass = tabs.Archives:AddRightGroupbox("Anticheat Bypass")
+
+Groupboxes.ArchivesBypass:AddToggle("ArchiveChairFly", {
+  Text = "Chair Anticheat Bypass", Default = false, Tooltip = "Allows you to bypass the anticheat by flying on a chair, allowing you to noclip and fly freely, drag an office chair, then sit in it and press the 'Start Bypass' button", })
+
+Groupboxes.ArchivesBypass:AddSlider("ArchiveChairFlySpeed", {
+  Text = "Chair Speed", Min = 15, Max = 150, Default = 55, Rounding = 0, })
+
+Groupboxes.ArchivesBypass:AddButton({
+  Text = "Start Bypass", Tooltip = "Press this AFTER you have dragged the chair and sat in it, shift to go down and ctrl and then space to exit (or just turn off the toggle)", Callback = Handlers.StartBypass, })
+
+toggles.ArchiveChairFly:OnChanged(Handlers.ArchiveChairFlyChanged)
+
+Groupboxes.ArchivesAddons = tabs.Archives:AddRightGroupbox("Archives Addons")
+
+Menus.ArchivesLocker()
+
+Menus.ArchivesWaterCooler()
+
+Groupboxes.StairwellMain = tabs.Stairwell:AddLeftGroupbox("Stairwell")
+
+Groupboxes.StairwellMain:AddToggle("StairwellChairFly", {
+  Text = "Chair Anticheat Bypass", Default = false, Tooltip = "Allows you to bypass the anticheat by flying on a chair, allowing you to noclip and fly freely, drag an office chair, then sit in it and press the 'Start Bypass' button", })
+
+Groupboxes.StairwellMain:AddSlider("StairwellChairFlySpeed", {
+  Text = "Chair Speed", Min = 15, Max = 150, Default = 55, Rounding = 0, })
+
+Groupboxes.StairwellMain:AddButton({
+  Text = "Start Bypass", Tooltip = "Press this AFTER you have dragged the chair and sat in it, shift to go down and ctrl and then space to exit (or just turn off the toggle)", Callback = Handlers.StartBypass2, })
+
+toggles.StairwellChairFly:OnChanged(Handlers.StairwellChairFlyChanged)
+
+Groupboxes.StairwellExperimental = tabs.Stairwell:AddRightGroupbox("Experimental")
+
+Groupboxes.StairwellExperimental:AddButton({
+  Text = "Bring Dropped Items",
+  Func = function() BringDroppedItems() end,
+  DoubleClick = false,
+  Tooltip = "Brings all dropped items to your character.",
+})
+
+Groupboxes.StairwellExperimental:AddToggle("EnableDroppedItemsInterval", {
+  Text = "Enable Interval",
+  Default = false,
+  Tooltip = "Automatically brings dropped items at the selected interval.",
+})
+
+Groupboxes.StairwellExperimental:AddSlider("DroppedItemsInterval", {
+  Text = "Interval",
+  Default = 1,
+  Min = 0,
+  Max = 60,
+  Rounding = 1,
+  Compact = false,
+  Tooltip = "How often dropped items are brought (seconds).",
+})
+
+toggles.EnableDroppedItemsInterval:OnChanged(Handlers.EnableDroppedItemsIntervalChanged)
+
+Groupboxes.StairwellExperimental:AddDivider()
+
+Groupboxes.StairwellExperimental:AddToggle("AntiNoise", {
+  Text = "Anti Noise",
+  Default = false,
+  Tooltip = "Prevents the game from making noise when moving.",
+})
+
+Groupboxes.StairwellExperimental:AddToggle("BypassNoise", {
+  Text = "Noise Tv Breaker",
+  Default = false,
+  Tooltip = "Breaks the tv of noise while holding it.",
+})
+
+toggles.AntiNoise:OnChanged(Handlers.AntiNoiseChanged)
+
+toggles.BypassNoise:OnChanged(Handlers.BypassNoiseChanged)
+
+Groupboxes.SubfloorsRooms = tabs.Rooms:AddLeftGroupbox("Rooms")
+
+Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalk", {
+  Text = "Auto Rooms", Default = false, Tooltip = "Automatically moves and hides from entities in The Rooms (stops at A-1000)", })
+
+Groupboxes.SubfloorsRooms:AddSlider("RoomsAutoWalkPathfindTimeout", {
+  Text = "Pathfind Timeout", Min = 0.5, Max = 3, Default = 1, Rounding = 1, })
+
+Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalkIgnoreA60", {
+  Text = "Ignore A-60", Default = false, Tooltip = "Continues to walk if A-60 spawns, enables godmode", })
+
+Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalkShowPathToggle", {
+  Text = "Show Path", Default = false, Tooltip = "Shows the current path of rooms auto-walk", })
+
+toggles.RoomsAutoWalkShowPathToggle:AddColorPicker("RoomsAutoWalkShowPathColor", {
+  Text = "Path", Default = Color3.fromRGB(0, 255, 0), Transparency = 0, })
+
+Groupboxes.SubfloorsRooms:AddToggle("RoomsAutoWalkSpoofFootsteps", {
+  Text = "Spoof Footsteps", Default = false, Tooltip = "Makes it appear as if your character is walking normally", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+Groupboxes.SubfloorsRooms:AddDivider()
+
+Groupboxes.SubfloorsRooms:AddToggle("RoomsPickupStardust", {
+  Text = "Pickup Stardust", Default = false, Tooltip = "Automatically pathfinds to stardust in the current room", })
+
+Groupboxes.SubfloorsRooms:AddToggle("RoomsPickupGold", {
+  Text = "Pickup Gold", Default = false, Tooltip = "Automatically pathfinds to gold piles in the current room", })
+
+Groupboxes.SubfloorsOutdoors = tabs.Garden:AddLeftGroupbox("Outdoors")
+
+Groupboxes.SubfloorsOutdoors:AddToggle("NoSurgeDamage", {
+  Text = "No Surge Damage", Default = false, Tooltip = "Prevents Surge from hurting you", })
+
+toggles.NoSurgeDamage:OnChanged(Handlers.NoSurgeDamageChanged)
+
+Groupboxes.SubfloorsOutdoors:AddToggle("RemoveSurge", {
+  Text = "Remove Surge", Default = false, Tooltip = "Prevents Surge from spawning", })
+
+toggles.RemoveSurge:OnChanged(Handlers.RemoveSurgeChanged)
+
+Groupboxes.SubfloorsOutdoors:AddToggle("RemoveMandrake", {
+  Text = "Disable Mandrake (FE)", Default = false, Tooltip = "Prevents mandrakes from attacking you, but this is inconsistent", })
+
+toggles.RemoveMandrake:OnChanged(Handlers.RemoveMandrakeChanged)
+
+Groupboxes.SubfloorsOutdoors:AddToggle("ShowEyestalkPathToggle", {
+  Text = "Show Eyestalk Path", Default = false, Tooltip = "Shows you the correct path in the eyestalk chase", })
+
+toggles.ShowEyestalkPathToggle:AddColorPicker("ShowEyestalkPathColor", {
+  Text = "Eyestalk Path", Default = Color3.fromRGB(0, 255, 0), Transparency = 0, })
+
+toggles.ShowEyestalkPathToggle:OnChanged(function(value)
+  setPathTransparency(worldObjects.EyestalkHighlights, "ShowEyestalkPathColor", value)
+end)
+
+options.ShowEyestalkPathColor:OnChanged(function(value) setPathColor(worldObjects.EyestalkHighlights, value) end)
+
+tabs.Garden:SetVisible(false)
+
+toggles.BypassKillbricks:OnChanged(Handlers.BypassKillbricksChanged)
+
+toggles.BypassSeekingWall:OnChanged(Handlers.BypassSeekingWallChanged)
+
+toggles.BypassBanana:OnChanged(Handlers.BypassBananaChanged)
+
+toggles.BypassJeff:OnChanged(Handlers.BypassJeffChanged)
+
+toggles.RemoveSeekTrigger:OnChanged(Handlers.RemoveSeekTriggerChanged)
+
+toggles.AutoRoomSkip:OnChanged(Handlers.AutoRoomSkipChanged)
+
+toggles.RemoveFigure:OnChanged(Handlers.RemoveFigureChanged)
+
+toggles.FigureGodmode:OnChanged(function(_) end)
+
+for key, ObstructionName in pairs(ObstructionNames) do
+  local flag = key
+
+  toggles[ObstructionName]:OnChanged(function(value)
+    for _, descendant in workspace:GetDescendants() do
+      if descendant.Name == flag and descendant:IsA("Model") then
+        if value then
+          descendant:PivotTo(CFrame.new(-10000, -10000, -10000))
+        else
+          local originalPosition = descendant:GetAttribute("OriginalPosition")
+
+          if originalPosition then
+            if typeof(originalPosition) == "string" then
+              local success, result = pcall(function()
+                return httpService:JSONDecode(originalPosition)
+              end)
+
+              if success and typeof(result) == "table" then
+                descendant:PivotTo(CFrame.new(unpack(result)))
+              end
+            elseif typeof(originalPosition) == "table" and #originalPosition >= 12 then
+              descendant:PivotTo(CFrame.new(unpack(originalPosition)))
+            end
+          end
+        end
+      end
+    end
+  end)
+end
+
+toggles.RoomsAutoWalkShowPathToggle:OnChanged(Handlers.RoomsAutoWalkShowPathToggleChanged)
+
+options.RoomsAutoWalkShowPathColor:OnChanged(Handlers.RoomsAutoWalkShowPathColorChanged)
+
+toggles.RoomsAutoWalk:OnChanged(Handlers.RoomsAutoWalkChanged)
+
+watchFloorValue()
+
+Groupboxes.MinesLadder = tabs.Mines:AddLeftGroupbox("Ladders")
+
+Groupboxes.MinesLadder:AddToggle("LaddersESP", { Text = "Ladders", Default = false })
+
+toggles.LaddersESP:AddColorPicker("LaddersESPColor", {
+  Text = "Ladders", Default = Color3.fromRGB(255, 255, 0), })
+
+Groupboxes.MinesLadder:AddToggle("LaddersTracers", { Text = "Ladders Tracers", Default = false })
+
+toggles.LaddersTracers:OnChanged(Handlers.LaddersTracersChanged)
+
+toggles.LaddersESP:OnChanged(Handlers.LaddersESPChanged)
+
+options.LaddersESPColor:OnChanged(Handlers.LaddersESPColorChanged)
+
+Groupboxes.MinesAnticheat = tabs.Mines:AddLeftGroupbox("Anticheat")
+
+Groupboxes.MinesAnticheat:AddToggle("DisableAnticheat", {
+  Text = "Anticheat Bypass", Default = false, Tooltip = "Completely disables the anticheat, after interacting with a ladder.", })
+
+toggles.DisableAnticheat:OnChanged(Handlers.DisableAnticheatChanged)
+
+Groupboxes.MinesAnticheat:AddDivider()
+
+Groupboxes.MinesAnticheat:AddToggle("RemoveFigureMines", {
+  Text = "Delete Figure", Default = false, Tooltip = "Removes Figure, however this is inconsistent", DisabledTooltip = "Your executor doesn't support this feature :(", })
+
+toggles.RemoveFigureMines:OnChanged(Handlers.RemoveFigureMinesChanged)
+
+Groupboxes.MinesAutomation = tabs.Mines:AddRightGroupbox("Automation")
+
+Groupboxes.MinesAutomation:AddToggle("AutoSteerMinecart", {
+  Text = "Auto Minecart", Default = false, Tooltip = "Automatically completes the minecart section of the seek chase", })
+
+Groupboxes.MinesAutomation:AddSlider("AutoSteerMinecartTurnDistance", {
+  Text = "Turn Distance", Min = 20, Max = 40, Default = 30, Rounding = 0, })
+
+Groupboxes.MinesAutomation:AddSlider("AutoSteerMinecartDuckDistance", {
+  Text = "Crouch Distance", Min = 20, Max = 40, Default = 30, Rounding = 0, })
+
+Groupboxes.MinesAutomation:AddToggle("AutoSolveAnchors", {
+  Text = "Auto Solve Anchors", Default = false, Tooltip = "Automatically enters the correct code into anchors when you are near them.", })
+
+Groupboxes.MinesAutomation:AddToggle("MinecartTeleport", {
+  Text = "Minecart Teleport", Default = false, Tooltip = "Teleports your minecart to complete the seek chase", })
+
+toggles.MinecartTeleport:OnChanged(Handlers.MinecartTeleportChanged)
+
+Groupboxes.MinesAutomation:AddButton({
+  Text = "Complete Door 200", Tooltip = "Automatically teleports to and interacts with each water pump to complete the Dam Seek", Callback = Handlers.CompleteDoor200, })
+
+toggles.AutoSolveAnchors:OnChanged(Handlers.AutoSolveAnchorsChanged)
+
+Groupboxes.MinesVisuals = tabs.Mines:AddRightGroupbox("Visuals")
+
+Groupboxes.MinesVisuals:AddToggle("ShowSeekPathToggle", {
+  Text = "Show Seek Path", Default = false, Tooltip = "Shows you the correct path in the seek chase", })
+
+toggles.ShowSeekPathToggle:AddColorPicker("ShowSeekPathColor", {
+  Text = "Seek Path", Default = Color3.fromRGB(0, 255, 0), Transparency = 0, })
+
+toggles.ShowSeekPathToggle:OnChanged(function(value)
+  setPathTransparency(worldObjects.SeekHighlights, "ShowSeekPathColor", value)
+end)
+
+options.ShowSeekPathColor:OnChanged(function(value) setPathColor(worldObjects.SeekHighlights, value) end)
+
+toggles.AutoSteerMinecart:OnChanged(Handlers.AutoSteerMinecartChanged)
+
+Groupboxes.Visuals_Camera = tabs.Visuals:AddRightGroupbox("Camera")
+
+Groupboxes.Visuals_Camera:AddToggle("Fullbright", {
+  Text = "Fullbright", Default = false, Tooltip = "Makes your game very bright, and removes shadows", })
+
+Groupboxes.Visuals_Camera:AddSlider("FullbrightBrightness", {
+  Text = "Brightness Level", Default = 3, Min = 1, Max = 10, Rounding = 1, Compact = true, })
+
+toggles.Fullbright:OnChanged(Handlers.FullbrightChanged)
+
+Groupboxes.Visuals_Camera:AddToggle("AmbientToggle", {
+  Text = "Ambient", Default = false, Tooltip = "Changes the lighting color to the specified value", })
+
+toggles.AmbientToggle:AddColorPicker("AmbientColor", {
+  Text = "Ambient", Default = Color3.fromRGB(255, 255, 255), Transparency = 0, })
+
+toggles.AmbientToggle:OnChanged(Handlers.AmbientToggleChanged)
+
+options.AmbientColor:OnChanged(Handlers.AmbientColorChanged)
+
+Groupboxes.Visuals_Camera:AddDivider()
+
+Groupboxes.Visuals_Camera:AddSlider("FieldOfView", {
+  Text = "Field of View", Min = 70, Max = 120, Default = 70, Rounding = 0, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddToggle("ThirdPerson", {
+  Text = "Third Person", Default = false, Tooltip = "Puts your camera in a third person view", })
+
+toggles.ThirdPerson:AddKeyPicker("ThirdPersonKeybind", {
+  Text = "Third Person", Default = "V", Mode = "Toggle", SyncToggleState = true, })
+
+Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetX", {
+  Text = "X Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetY", {
+  Text = "Y Offset", Min = -10, Max = 10, Default = 0.5, Rounding = 1, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetZ", {
+  Text = "Z Offset", Min = -10, Max = 10, Default = 7.5, Rounding = 1, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddToggle("ThirdPersonWallCheck", {
+  Text = "Wall Check", Default = false, Tooltip = "Prevents third person camera from going through walls", })
+
+toggles.ThirdPerson:OnChanged(refreshThirdPerson)
+
+Groupboxes.Visuals_Camera:AddDivider()
+
+Groupboxes.Visuals_Camera:AddToggle("ViewmodelOffsetToggle", {
+  Text = "Viewmodel Offset", Default = false, Tooltip = "Changes the offset of your viewmodel while holding an item.", })
+
+Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetX", {
+  Text = "X Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetY", {
+  Text = "Y Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetZ", {
+  Text = "Z Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddToggle("FreecamToggle", {
+  Text = "Freecam", Default = false, Tooltip = "Enables freecam with WASD movement and mouse look", })
+
+toggles.FreecamToggle:AddKeyPicker("FreecamKeybind", {
+  Text = "Freecam", Default = "Q", Mode = "Toggle", SyncToggleState = true, })
+
+Groupboxes.Visuals_Camera:AddSlider("FreecamSpeed", {
+  Text = "Freecam Speed", Min = 10, Max = 300, Default = 75, Rounding = 0, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddDivider()
+
+Groupboxes.Visuals_Camera:AddToggle("RemoveCameraBobbing", {
+  Text = "Remove Camera Bobbing", Default = false, Tooltip = "Removes camera 'bobbing'", })
+
+Groupboxes.Visuals_Camera:AddToggle("RemoveCameraShake", {
+  Text = "Remove Camera Shake", Default = false, Tooltip = "Removes camera shake", })
+
+Groupboxes.Visuals_Camera:AddToggle("RemoveCameraFog", {
+  Text = "Remove Fog", Default = false, Tooltip = "Removes camera fog", })
+
+Groupboxes.Visuals_Camera:AddToggle("DisableFiredampEffect", {
+  Text = "Remove Firedamp Effect", Default = false, Tooltip = "Removes the firedamp fog/effect when inside a room", })
+
+toggles.FreecamToggle:OnChanged(Handlers.FreecamToggleChanged)
+
+Groupboxes.Visuals_Camera:AddDivider()
+
+Groupboxes.Visuals_Camera:AddToggle("NotifyOxygen", {
+  Text = "Oxygen Notifications", Default = false, Tooltip = "Shows a notification when your oxygen level changes", })
+
+Groupboxes.Visuals_Camera:AddToggle("NotifyHasteTime", {
+  Text = "Haste/Time Notifications", Default = false, Tooltip = "Shows a notification of the remaining time before Haste spawns", })
+
+Groupboxes.Visuals_Camera:AddDivider()
+
+Groupboxes.Visuals_Camera:AddToggle("TransparentHidingSpotsToggle", {
+  Text = "Transparent Hiding Spots", Default = false, Tooltip = "Makes a hiding spot transparent when you enter it", })
+
+Groupboxes.Visuals_Camera:AddSlider("TransparentHidingSpotsSlider", {
+  Text = "Transparency", Min = 0, Max = 1, Default = 0.5, Rounding = 2, Compact = true, })
+
+Groupboxes.Visuals_Camera:AddDivider()
+
+Groupboxes.Visuals_Camera:AddToggle("DisableJumpscares", {
+  Text = "Disable Jumpscares", Default = false, Tooltip = "Removes jumpscares from the chosen entities", })
+
+Groupboxes.Visuals_Camera:AddDropdown("JumpscaresList", {
+  Text = "Jumpscares To Disable", Values = { "Glitch", "Timothy", "Void", "Rush", "Ambush", "Screech", "Figure", "Seek" }, Multi = true, AllowNull = true, })
+
+Groupboxes.Visuals_Camera:AddDivider()
+
+Groupboxes.Visuals_Camera:AddToggle("RemoveCutscenes", {
+  Text = "Remove Cutscenes", Default = false, Tooltip = "Removes cutscenes that aren't needed for progression", })
+
+toggles.RemoveCutscenes:OnChanged(Handlers.RemoveCutscenesChanged)
+
+Groupboxes.Visuals_Style:AddToggle("ESPRainbow", { Text = "Rainbow ESP", Default = false })
+
+Groupboxes.Visuals_Settings:AddDivider()
+
+Groupboxes.Visuals_Tracers:AddToggle("TracersMaster", {
+  Text = "Tracers",
+  Default = true,
+  Tooltip = "Master toggle for tracers",
+})
+
+Groupboxes.Visuals_Tracers:AddDropdown("TracersList", {
+  Text = "Tracers Selection",
+  Values = { "Entities", "Doors", "Keys", "Objectives", "Items", "Coins", "Chests", "Hiding Spots" },
+  Default = { "Entities", "Doors", "Keys", "Objectives" },
+  Multi = true,
+  AllowNull = true,
+  Tooltip = "Select which categories to show tracers for",
+})
+
+for _, TracerCategory in ipairs(TracerCategories) do
+  local category = TracerCategory
+  local text = category .. "Tracers"
+  local _ = ESPToggleKeys[category]
+  createProxyToggle(text)
+
+  toggles[text]:OnChanged(function(value)
+    for _, object in ipairs(ESPCategories[category]) do
+      local target = GetESPTarget(object, category)
+
+      if target then
+        loader:SetTracersEnabled(target, value)
+      end
+    end
+  end)
+end
+
+toggles.TracersMaster:OnChanged(syncTracers)
+
+options.TracersList:OnChanged(syncTracers)
+
+syncTracers()
+
+Groupboxes.Visuals_Tracers:AddDropdown("ESPTracerOrigin", {
+  Text = "Tracer Origin", Values = { "Top", "Middle", "Bottom" }, Default = 3, })
+
+Groupboxes.Visuals_Labels:AddToggle("ESPShowText", { Text = "Show ESP Text", Default = true })
+
+Groupboxes.Visuals_Labels:AddToggle("ESPShowDistance", {
+  Text = "Show Distance", Default = true, })
+
+Groupboxes.Visuals_Labels:AddSlider("ESPTextSize", {
+  Text = "Text Size", Min = 8, Max = 24, Default = 14, Rounding = 0, Compact = true, })
+
+Groupboxes.Visuals_Labels:AddDropdown("ESPTextFont", {
+  Text = "Text Font", Values = {
+    "Legacy", "Arial", "ArialBold", "SourceSans", "SourceSansBold", "SourceSansLight", "SourceSansItalic", "Bodoni", "Garamond", "Cartoon", "Code", "Highway", "SciFi", "Arcade", "Fantasy", "Antique", "SourceSansSemibold", "Gotham", "GothamMedium", "GothamBold", "GothamBlack", "AmaticSC", "Bangers", "Creepster", "DenkOne", "Fondamento", "FredokaOne", "GrenzeGotisch", "IndieFlower", "JosefinSans", "Jura", "Kalam", "LuckiestGuy", "Merriweather", "Michroma", "Nunito", "Oswald", "PatrickHand", "PermanentMarker", "Roboto", "RobotoCondensed", "RobotoMono", "Sarpanch", "SpecialElite", "TitilliumWeb", "Ubuntu", }, Default = 20, })
+
+Groupboxes.Visuals_Style:AddSlider("ESPRenderLimit", {
+  Text = "Chams Limit", Min = 5, Max = 31, Default = 31, Tooltip = "Roblox draws at most ~31 highlights: only the nearest objects get chams, the rest keep boxes and labels", Rounding = 0, Compact = true, })
+
+Groupboxes.Visuals_Style:AddSlider("ESPMaxDistance", {
+  Text = "ESP Distance", Min = 50, Max = 500, Default = 250, Rounding = 0, Compact = true, Suffix = " studs", })
+
+Groupboxes.Visuals_Settings:AddDivider()
+
+Groupboxes.Visuals_Settings:AddToggle("UseESPOutlineColour", {
+  Text = "Match Outline To ESP Colour", Default = true, Tooltip = "Makes the outline of all ESP the same colour as the ESP itself", })
+
+toggles.UseESPOutlineColour:AddColorPicker("ESPOutline", {
+  Text = "ESP Outline", Default = Color3.fromRGB(255, 255, 255), })
+
+Groupboxes.Visuals_Settings:AddSlider("ESPFillTransparency", {
+  Text = "Fill Transparency", Min = 0, Max = 1, Default = 0.6, Rounding = 2, Compact = true, })
+
+Groupboxes.Visuals_Settings:AddSlider("ESPOutlineTransparency", {
+  Text = "Outline Transparency", Min = 0, Max = 1, Default = 0, Rounding = 2, Compact = true, })
+
+Groupboxes.Visuals_Settings:AddSlider("ESPTextTransparency", {
+  Text = "Text Transparency", Min = 0, Max = 1, Default = 0, Rounding = 2, Compact = true, })
+
+Groupboxes.Visuals_Settings:AddSlider("ESPTextOutlineTransparency", {
+  Text = "Text Outline Transparency", Min = 0, Max = 1, Default = 0.4, Rounding = 2, Compact = true, })
+
+Groupboxes.Visuals_Tracers:AddSlider("ESPTracerThickness", {
+  Text = "Tracer Thickness", Min = 0.5, Max = 2, Default = 0.75, Rounding = 2, Compact = true, })
+
+Menus.ESPLook()
+Menus.ModelSwap()
+
+Groupboxes.Visuals_Notifs = tabs.Visuals:AddLeftGroupbox("Entity Notifications")
+
+Groupboxes.Visuals_Notifs:AddToggle("NotifyEntities", {
+  Text = "Entity Notifications", Default = false, Tooltip = "Receive notifications/popups when entities spawn", })
+
+Groupboxes.Visuals_Notifs:AddDropdown("EntityList", {
+  Text = "Entity List", Values = {
+    "Rush", "Ambush", "A-60", "A-120", "Blitz", "Eyes", "Lookman", "Monument", "Sally", "Gloombat Swarm", "Glitch Rush", "Glitch Ambush", "Drones", "Bash", "Electric Puddle", "Scribbles", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected entities (leave empty to notify all)", })
+
+Groupboxes.Visuals_Notifs:AddDropdown("NotifyStyle", {
+  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
+
+Groupboxes.Visuals_Notifs:AddDropdown("NotifySound", {
+  Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 5, })
+
+Groupboxes.Visuals_Notifs:AddDivider()
+
+Groupboxes.Visuals_Notifs:AddToggle("EntityChatToggle", {
+  Text = "Notify Chat", Default = false, Tooltip = "Sends a message in the chat when an entity spawns", })
+
+Groupboxes.Visuals_Notifs:AddInput("EntityChatMessage", {
+  Text = "Message", Default = "spawned!", Numeric = false, Placeholder = "Message", })
+
+Groupboxes.Visuals_ItemNotifs = tabs.Visuals:AddLeftGroupbox("Item Notifications")
+
+Groupboxes.Visuals_ItemNotifs:AddToggle("NotifyItems", {
+  Text = "Item Notifications", Default = false, Tooltip = "Receive notifications/popups when items spawn (shows distance)", })
+
+Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemList", {
+  Text = "Item List", Values = {
+    "Alarm Clock", "Aloe Vera", "Bandage", "Bandage Pack", "Battery", "Battery Pack", "Big Bomb", "Big Shield Potion", "Bomb", "Boxing Gloves", "Briefcase", "Bread", "Candle", "Candy", "Cheese", "Compass", "Crucifix", "Donut", "Flashlight", "FihFlakes", "Glitch Fragment", "Glowstick", "Golden Gun", "Gummy Flashlight", "Gween Soda", "Hiding Box", "Holy Hand Grenade", "Iron Key", "Knockbomb", "Lantern", "Laser Pointer", "Lighter", "Lockpicks", "Lotus", "Lotus Petal", "Mini Shield Potion", "Moonlight Candle", "Moonlight Smoothie", "Multitool", "Nanner", "Paper Plane", "Pizza", "Leftovers", "Rift Jar", "Shears", "Skeleton Key", "Smoothie", "Spotlight", "Starlight Barrel", "Starlight Bottle", "Starlight Vial", "Stop Sign", "Straplight", "Tablet", "Tip Jar", "Vitamins", }, Multi = true, AllowNull = true, Tooltip = "Only notify for selected items (leave empty to notify all)", })
+
+Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifyStyle", {
+  Text = "Notification Style", Values = { "Obsidian", "Achievement" }, Default = 1, })
+
+Groupboxes.Visuals_ItemNotifs:AddDropdown("ItemNotifySound", {
+  Text = "Notification Sound", Values = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" }, Default = 4, })
+
+Groupboxes.Visuals_ItemNotifs:AddDivider()
+
+Groupboxes.Visuals_ItemNotifs:AddToggle("ItemChatToggle", {
+  Text = "Notify Chat", Default = false, Tooltip = "Sends a message in the chat when an item spawns", })
+
+Groupboxes.Visuals_ItemNotifs:AddInput("ItemChatMessage", {
+  Text = "Message", Default = "spawned!", Numeric = false, Placeholder = "Message", })
+
+toggles.ESPRainbow:OnChanged(function(value) loader:SetRainbow(value) end)
+
+options.ESPTracerOrigin:OnChanged(function(value)
+  local originMap = { Top = "Top", Middle = "Center", Bottom = "Bottom" }
+  loader:SetTracerOrigin(originMap[value] or "Bottom")
+end)
+
+toggles.ESPShowText:OnChanged(function(showESPText) loader.ShowESPText = showESPText end)
+
+toggles.ESPShowDistance:OnChanged(function(value) loader:SetShowDistance(value) end)
+
+options.ESPTextSize:OnChanged(function(value) loader:SetTextSize(value) end)
+
+options.ESPTextFont:OnChanged(function(value) loader:SetFont(Enum.Font[value]) end)
+
+options.ESPRenderLimit:OnChanged(function(value) loader:SetRenderLimit(value) end)
+
+options.ESPMaxDistance:OnChanged(function(maxDistance) loader.MaxDistance = maxDistance end)
+
+options.ESPFillTransparency:OnChanged(function(value) loader:SetFillTransparency(value) end)
+
+options.ESPOutlineTransparency:OnChanged(function(value) loader:SetOutlineTransparency(value) end)
+
+options.ESPTextTransparency:OnChanged(function(value) loader:SetTextTransparency(value) end)
+
+options.ESPTextOutlineTransparency:OnChanged(function(value)
+  loader:SetTextOutlineTransparency(value)
+end)
+
+options.ESPFadeTime:OnChanged(Handlers.ESPFadeTimeChanged)
+
+toggles.ESPFade:OnChanged(function(value)
+  loader:SetFadeTime(value and options.ESPFadeTime.Value or 0)
+end)
+
+toggles.ESPArrowsToggle:OnChanged(function(value) loader:SetArrows(value) end)
+
+options.ESPArrowsRadius:OnChanged(function(value) loader:SetArrowRadius(value) end)
+
+options.ESPTracerThickness:OnChanged(function(value) loader:SetTracerSize(value) end)
+
+toggles.UseESPOutlineColour:OnChanged(function(value) loader:SetMatchColors(value) end)
+
+options.ESPOutline:OnChanged(function(value) loader:SetOutlineColor(value) end)
+
+loader:SetMatchColors(toggles.UseESPOutlineColour.Value)
+
+loader:SetOutlineColor(options.ESPOutline.Value)
+
+loader:SetShowDistance(true)
+
+loader:SetFont(Enum.Font.GothamBold)
+
+loader:SetTextSize(14)
+
+loader:SetRenderLimit(31)
+
+loader:SetFillTransparency(0.6)
+
+loader:SetOutlineTransparency(0)
+
+loader:SetTextTransparency(0)
+
+loader:SetTextOutlineTransparency(0.4)
+
+loader:SetFadeTime(toggles.ESPFade and toggles.ESPFade.Value and options.ESPFadeTime.Value or 0)
+
+loader:SetArrows(true)
+
+loader:SetArrowRadius(250)
+
+loader:SetTracerSize(0.75)
+
+toggles.RemoveCameraBobbing:OnChanged(Handlers.RemoveCameraBobbingChanged)
+
+toggles.RemoveCameraFog:OnChanged(Handlers.RemoveCameraFogChanged)
+
+toggles.DisableFiredampEffect:OnChanged(Handlers.DisableFiredampEffectChanged)
+
+toggles.TransparentHidingSpotsToggle:OnChanged(function(value)
+  updateHidingSpotTransparency(value, options.TransparentHidingSpotsSlider.Value)
+end)
+
+options.TransparentHidingSpotsSlider:OnChanged(function(value)
+  updateHidingSpotTransparency(toggles.TransparentHidingSpotsToggle.Value, value)
+end)
+
+toggles.DisableJumpscares:OnChanged(setupMainGameHooks)
+
+options.JumpscaresList:OnChanged(Handlers.JumpscaresListChanged)
+
+toggles.AutoClosetToggle:OnChanged(Handlers.AutoClosetToggleChanged)
+
+Menus.KnobFarm()
+
+tabs.FoolsHotel:SetVisible(false)
+
+-- end of MENU
+
+if CurrentFloor == "Lobby" then
+  for _, flag in ipairs({
+    "Godmode", "ThirdPerson", "Noclip", "FlyToggle", "Phase", "AnticheatManipulation", "AutoInteract", "ArchiveChairFly", "StairwellChairFly", "AntiElectricPuddle", "AntiRansom", "AntiScribbles", "NoAlmaDamage", "AntiDrone", "DisableDroneStampede", "RoomsAutoWalk", "RoomsAutoWalkIgnoreA60", "RoomsAutoWalkShowPathToggle", "RoomsAutoWalkSpoofFootsteps", "RoomsPickupStardust", "RoomsPickupGold", "NoSurgeDamage", "RemoveSurge", "RemoveMandrake", "BypassKillbricks", "BypassSeekingWall", "BypassBanana", "BypassJeff", "BypassGiggle", "BypassDupe", "BypassEyes", "BypassLookman", "BypassGloombatEggs", "BypassSeekObstructions", "BypassVacuum", "BypassSnare", "RemoveSeekTrigger", "RemoveFigure", "RemoveFigureMines", "RemoveA90", "RemoveDread", "AutoRevive", "FigureGodmode", "AutoSteerMinecart", "AutoSolveAnchors", "MinecartTeleport", "AutoMinecart", "AutoHeartbeatMinigame", "AutoBreakerBox", "AutoLibraryBruteForce", "InfiniteItemsToggle", "InfiniteCrucifix", "ShowSeekPathToggle", }) do
+    local toggle = toggles[flag]
+
+    if toggle and toggle.Value then
+      toggle:SetValue(false)
+    end
+  end
+end
+
+local messageConnection
+
+local function unloadScript()
   _Unloading = true
 
   if KnobFarm and KnobFarm.Stop then
@@ -17395,30 +19430,30 @@ local function safeCall11()
     pcall(task.cancel, KnobFarm.Thread)
   end
 
-  pcall(onEvent2)
-  pcall(helper40)
-  pcall(helper39)
-  pcall(helper46)
+  pcall(stopFly)
+  pcall(stopSpeedLoop)
+  pcall(stopSpeedBypass)
+  pcall(releaseChair)
 
   if FreecamConnection then
     FreecamConnection:Disconnect()
     FreecamConnection = nil
   end
 
-  local freecamPart4 = workspace:FindFirstChild("FreecamPart")
+  local freecamPart = workspace:FindFirstChild("FreecamPart")
 
-  if freecamPart4 then
-    freecamPart4:Destroy()
+  if freecamPart then
+    freecamPart:Destroy()
 
-    local humanoidRootPart10 = localPlayer2.Character
-      and localPlayer2.Character:FindFirstChild("HumanoidRootPart")
+    local humanoidRootPart2 = localPlayer.Character
+      and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 
-    if humanoidRootPart10 then
-      humanoidRootPart10.Anchored = false
+    if humanoidRootPart2 then
+      humanoidRootPart2.Anchored = false
     end
 
-    localPlayer2.CameraMinZoomDistance = localPlayer2:GetAttribute("fc_om") or 0.5
-    localPlayer2.CameraMaxZoomDistance = localPlayer2:GetAttribute("fc_ox") or 128
+    localPlayer.CameraMinZoomDistance = localPlayer:GetAttribute("fc_om") or 0.5
+    localPlayer.CameraMaxZoomDistance = localPlayer:GetAttribute("fc_ox") or 128
   end
 
   if CameraConnection then
@@ -17438,12 +19473,12 @@ local function safeCall11()
   if NoclipConnection then
     NoclipConnection:Disconnect()
     NoclipConnection = nil
-    pcall(iterate3, true)
+    pcall(setNoclipCollision, true)
   end
 
-  if connect18 then
-    connect18:Disconnect()
-    connect18 = nil
+  if connection2 then
+    connection2:Disconnect()
+    connection2 = nil
   end
 
   if _AutoHideConnection then
@@ -17491,11 +19526,11 @@ local function safeCall11()
     OrbitConn = nil
   end
 
-  pcall(helper23)
+  pcall(stopBringItems)
 
-  if val313 then
-    val313:Disconnect()
-    val313 = nil
+  if messageConnection then
+    messageConnection:Disconnect()
+    messageConnection = nil
   end
 
   if _FloorConnection then
@@ -17503,9 +19538,9 @@ local function safeCall11()
     _FloorConnection = nil
   end
 
-  if val85 and val85.LobbyGuardConnection then
-    val85.LobbyGuardConnection:Disconnect()
-    val85.LobbyGuardConnection = nil
+  if featureState and featureState.LobbyGuardConnection then
+    featureState.LobbyGuardConnection:Disconnect()
+    featureState.LobbyGuardConnection = nil
   end
 
   if Phase then
@@ -17525,11 +19560,11 @@ local function safeCall11()
     end
   end
 
-  helper62()
+  stopLobbyFly()
 
-  if val202 and val202.NoclipConn then
-    val202.NoclipConn:Disconnect()
-    val202.NoclipConn = nil
+  if lobbyState and lobbyState.NoclipConn then
+    lobbyState.NoclipConn:Disconnect()
+    lobbyState.NoclipConn = nil
   end
 
   if Connections then
@@ -17554,50 +19589,50 @@ local function safeCall11()
     _FullbrightRoomConn = nil
   end
 
-  pcall(helper72)
+  pcall(disableFullbright)
 
   if promptContainer then
     promptContainer:Destroy()
   end
 
   pcall(function()
-    for key17, value127 in pairs(FakePrompts or {}) do
+    for key, FakePrompt in pairs(FakePrompts or {}) do
       pcall(function()
-        value127.Parent = key17.Parent
-        key17:Destroy()
+        FakePrompt.Parent = key.Parent
+        key:Destroy()
 
-        if value127.Parent then
-          value127.HoldDuration = value127:GetAttribute("HoldDuration_Old")
-            or value127.HoldDuration
+        if FakePrompt.Parent then
+          FakePrompt.HoldDuration = FakePrompt:GetAttribute("HoldDuration_Old")
+            or FakePrompt.HoldDuration
 
-          value127.RequiresLineOfSight = value127:GetAttribute("RequiresLineOfSight_Old")
-            or value127.RequiresLineOfSight
+          FakePrompt.RequiresLineOfSight = FakePrompt:GetAttribute("RequiresLineOfSight_Old")
+            or FakePrompt.RequiresLineOfSight
 
-          value127.MaxActivationDistance = value127:GetAttribute("MaxActivationDistance_Old")
-            or value127.MaxActivationDistance
+          FakePrompt.MaxActivationDistance = FakePrompt:GetAttribute("MaxActivationDistance_Old")
+            or FakePrompt.MaxActivationDistance
         end
       end)
     end
   end)
 
   if _TrackedPrompts then
-    for index82, value128 in ipairs(_TrackedPrompts) do
+    for _, _TrackedPrompt in ipairs(_TrackedPrompts) do
       pcall(function()
-        if value128.Parent then
-          value128.HoldDuration = value128:GetAttribute("HoldDuration_Old")
-            or value128.HoldDuration
+        if _TrackedPrompt.Parent then
+          _TrackedPrompt.HoldDuration = _TrackedPrompt:GetAttribute("HoldDuration_Old")
+            or _TrackedPrompt.HoldDuration
 
-          value128.RequiresLineOfSight = value128:GetAttribute("RequiresLineOfSight_Old")
-            or value128.RequiresLineOfSight
+          _TrackedPrompt.RequiresLineOfSight = _TrackedPrompt:GetAttribute("RequiresLineOfSight_Old")
+            or _TrackedPrompt.RequiresLineOfSight
 
-          value128.MaxActivationDistance = value128:GetAttribute("MaxActivationDistance_Old")
-            or value128.MaxActivationDistance
+          _TrackedPrompt.MaxActivationDistance = _TrackedPrompt:GetAttribute("MaxActivationDistance_Old")
+            or _TrackedPrompt.MaxActivationDistance
         end
       end)
     end
   end
 
-  for v533, v534 in workspace:GetDescendants() do
+  for _, _ in workspace:GetDescendants() do
     task.spawn(function() end)
   end
 
@@ -17616,26 +19651,26 @@ local function safeCall11()
   end)
 
   pcall(function()
-    local element47 = helper74()
+    local module = getMainGameModule()
 
-    if element47 then
-      element47.tooloffset = Vector3.zero
-      element47.spring.Speed = 8
-      element47.fovtarget = 70
-      element47.csgo = CFrame.new()
+    if module then
+      module.tooloffset = Vector3.zero
+      module.spring.Speed = 8
+      module.fovtarget = 70
+      module.csgo = CFrame.new()
     end
   end)
 
   pcall(function() workspace.CurrentCamera.FieldOfView = 70 end)
   pcall(function() workspace.Gravity = 196.2 end)
-  pcall(function() Lighting.FogEnd = val85 and val85.OldFog or Lighting.FogEnd end)
+  pcall(function() Lighting.FogEnd = featureState and featureState.OldFog or Lighting.FogEnd end)
 
   pcall(function()
-    for index83, value129 in ipairs(val85.FogInstances or {}) do
-      local densityOld = value129:GetAttribute("Density_Old")
+    for _, fogInstance in ipairs(featureState.FogInstances or {}) do
+      local densityOld = fogInstance:GetAttribute("Density_Old")
 
       if densityOld then
-        value129.Density = densityOld
+        fogInstance.Density = densityOld
       end
     end
   end)
@@ -17655,42 +19690,42 @@ local function safeCall11()
   end)
 
   pcall(function()
-    local playerGui12 = localPlayer2:FindFirstChildOfClass("PlayerGui")
+    local playerGui2 = localPlayer:FindFirstChildOfClass("PlayerGui")
 
-    if playerGui12 then
-      local findFirstChild17 = playerGui12:FindFirstChild("DisplayInfoLabel", true)
+    if playerGui2 then
+      local findFirstChild = playerGui2:FindFirstChild("DisplayInfoLabel", true)
 
-      if findFirstChild17 then
-        findFirstChild17:Destroy()
+      if findFirstChild then
+        findFirstChild:Destroy()
       end
     end
   end)
 
-  if val85 then
-    if val85.SeekNodesFolder then
-      val85.SeekNodesFolder:Destroy()
+  if featureState then
+    if featureState.SeekNodesFolder then
+      featureState.SeekNodesFolder:Destroy()
     end
 
-    if val85.RoomsNodesFolder then
-      val85.RoomsNodesFolder:Destroy()
+    if featureState.RoomsNodesFolder then
+      featureState.RoomsNodesFolder:Destroy()
     end
 
-    if val85.OriginalGetMoveVector then
+    if featureState.OriginalGetMoveVector then
       pcall(function()
-        local getControls2 = require(localPlayer2.PlayerScripts.PlayerModule):GetControls()
-        getControls2.GetMoveVector = val85.OriginalGetMoveVector
+        local getControls = require(localPlayer.PlayerScripts.PlayerModule):GetControls()
+        getControls.GetMoveVector = featureState.OriginalGetMoveVector
       end)
 
-      val85.OriginalGetMoveVector = nil
+      featureState.OriginalGetMoveVector = nil
     end
 
-    val85.AnticheatDisabled = false
-    val85.RoomsAutoWalkActive = false
+    featureState.AnticheatDisabled = false
+    featureState.RoomsAutoWalkActive = false
   end
 
   pcall(function()
-    if val85.ClearAddonGroupboxes then
-      val85.ClearAddonGroupboxes()
+    if featureState.ClearAddonGroupboxes then
+      featureState.ClearAddonGroupboxes()
     end
   end)
 
@@ -17725,29 +19760,29 @@ local function safeCall11()
     humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
   end
 
-  for key18, value130 in pairs(val114 or {}) do
-    if type(value130) == "table" then
-      for index84, value131 in ipairs(value130) do
+  for _, list in pairs(worldObjects or {}) do
+    if type(list) == "table" then
+      for _, _ in ipairs(list) do
       end
 
-      TableClear(value130)
+      TableClear(list)
     end
   end
 
-  for key19, value132 in pairs(PartProperties or {}) do
-    pcall(function() value132.CustomPhysicalProperties = PartProperties[value132] end)
+  for _, PartProperty in pairs(PartProperties or {}) do
+    pcall(function() PartProperty.CustomPhysicalProperties = PartProperties[PartProperty] end)
   end
 
   pcall(function()
-    local object12 = helper19()
+    local remoteModules = getRemoteModules()
 
-    if object12 then
-      for index85, value133 in ipairs({
+    if remoteModules then
+      for _, name in ipairs({
         "Screech", "GlitchScreech", "A90", "Dread", "SurgeVignette", "Shade", }) do
-        local findFirstChild18 = object12:FindFirstChild(value133 .. "_Disabled")
+        local findFirstChild = remoteModules:FindFirstChild(name .. "_Disabled")
 
-        if findFirstChild18 then
-          findFirstChild18.Name = value133
+        if findFirstChild then
+          findFirstChild.Name = name
         end
       end
     end
@@ -17768,7 +19803,7 @@ local function safeCall11()
 
   if FakeEvents then
     if FakeEvents.Screech_Real then
-      FakeEvents.Screech_Real.Parent = remotesFolder2
+      FakeEvents.Screech_Real.Parent = remotesFolder
       pcall(function()
         local getconns = Executor.getconnections or RootEnv.getconnections
         if getconns then
@@ -17780,15 +19815,15 @@ local function safeCall11()
     end
 
     if FakeEvents.Shade_Real then
-      FakeEvents.Shade_Real.Parent = remotesFolder2
+      FakeEvents.Shade_Real.Parent = remotesFolder
     end
 
     if FakeEvents.A90_Real then
-      FakeEvents.A90_Real.Parent = remotesFolder2
+      FakeEvents.A90_Real.Parent = remotesFolder
     end
 
     if FakeEvents.Surge_Real then
-      FakeEvents.Surge_Real.Parent = remotesFolder2
+      FakeEvents.Surge_Real.Parent = remotesFolder
     end
 
     for _, fakeName in ipairs({"Screech", "Shade", "A90", "Surge"}) do
@@ -17800,10 +19835,10 @@ local function safeCall11()
   end
 
   if character then
-    local collisionClone8 = character:FindFirstChild("CollisionClone")
+    local collisionClone = character:FindFirstChild("CollisionClone")
 
-    if collisionClone8 then
-      collisionClone8:Destroy()
+    if collisionClone then
+      collisionClone:Destroy()
     end
 
     local collisionPartClone = character:FindFirstChild("CollisionPartClone")
@@ -17813,35 +19848,35 @@ local function safeCall11()
     end
   end
 
-  if localPlayer2 then
-    localPlayer2.CameraMinZoomDistance = 0.5
-    localPlayer2.CameraMaxZoomDistance = 128
-    localPlayer2:SetAttribute("fc_om", nil)
-    localPlayer2:SetAttribute("fc_ox", nil)
-    localPlayer2:SetAttribute("fc_p", nil)
-    localPlayer2:SetAttribute("fc_y", nil)
+  if localPlayer then
+    localPlayer.CameraMinZoomDistance = 0.5
+    localPlayer.CameraMaxZoomDistance = 128
+    localPlayer:SetAttribute("fc_om", nil)
+    localPlayer:SetAttribute("fc_ox", nil)
+    localPlayer:SetAttribute("fc_p", nil)
+    localPlayer:SetAttribute("fc_y", nil)
   end
 
-  if element3.Stairwell then
-    element3.Stairwell:SetVisible(false)
+  if tabs.Stairwell then
+    tabs.Stairwell:SetVisible(false)
   end
 
-  if element3.FoolsHotel then
-    element3.FoolsHotel:SetVisible(false)
+  if tabs.FoolsHotel then
+    tabs.FoolsHotel:SetVisible(false)
   end
 
-  if element3.Rooms then
-    element3.Rooms:SetVisible(false)
+  if tabs.Rooms then
+    tabs.Rooms:SetVisible(false)
   end
 
 end
 
-getgenv().MoroUnload = safeCall11
-getgenv().CheesyUnload = safeCall11
+getgenv().MoroUnload = unloadScript
+getgenv().CheesyUnload = unloadScript
 
 library:OnUnload(function()
   _Unloading = true
-  safeCall11()
+  unloadScript()
   getgenv().MoroUnload = nil
   getgenv().CheesyUnload = nil
 end)
@@ -17849,14 +19884,14 @@ end)
 if library.ScreenGui then
   library.ScreenGui.Destroying:Once(function()
     _Unloading = true
-    safeCall11()
+    unloadScript()
   end)
 end
 do
-  local connect29 = logService.MessageOut:Connect(function(p209)
-    if p209 == "client teleporting" then
-      if val85.AnticheatDisabled then
-        val85.AnticheatDisabled = false
+  local connection = logService.MessageOut:Connect(function(message)
+    if message == "client teleporting" then
+      if featureState.AnticheatDisabled then
+        featureState.AnticheatDisabled = false
 
         library:Notify({
           Title = "Anticheat re-enabled", Description = "Interact with a ladder for re-disabling", Time = 5, })
@@ -17867,7 +19902,6 @@ do
   end)
 end
 
-element3.FoolsHotel:SetVisible(false)
 
 library:Toggle(true)
 
@@ -17929,9 +19963,9 @@ else
 end
 
 pcall(function()
-  local strVal7 = string.lower(tostring(execName))
+  local text = string.lower(tostring(execName))
 
-  if strVal7:find("xeno", 1, true) or strVal7:find("solara", 1, true) then
+  if text:find("xeno", 1, true) or text:find("solara", 1, true) then
     library:Notify({
       Title = "Executor not supported", Description = "Xeno and Solara are both very unstable and may/most likely will not work with the script, I advise using a better executor", Time = 10, })
   end
