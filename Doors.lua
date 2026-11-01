@@ -17074,7 +17074,7 @@ end)() end
 --  Client-side only: replaces how players and entities look with a 3D model or a PNG sprite,
 --  and draws the current room number at the top center of the screen.
 -- =====================================================================
-do
+do (function()
   -- ------------------------------------------------------------------ categories
   local CATEGORIES = {
     { key = "Players", title = "Players", players = true, height = 5.6 },
@@ -18077,13 +18077,13 @@ do
       end
     end
   end
-end
+end)() end
 
 -- =====================================================================
 --  FUN: screen filters, character aura, entity disco and entity size
 --  Everything here is client-side only and is undone when the toggle goes off or the script unloads.
 -- =====================================================================
-do
+do (function()
   local alive = true
 
   -- ------------------------------------------------------------------ screen filter
@@ -18302,13 +18302,13 @@ do
       Callback = function(value) size.percent = value end,
     })
   end
-end
+end)() end
 
 -- =====================================================================
 --  POST FX (ported from the MM2 script): presets, color grading, bloom / rays / blur,
 --  depth of field and fog, weather and a vignette. Client-side only.
 -- =====================================================================
-do
+do (function()
   local PF = { on = false, fx = {}, backup = nil, ui = {} }
   local PF_DEFAULT = {
     b = 0, c = 0, s = 0, tint = Color3.new(1, 1, 1),
@@ -18652,7 +18652,7 @@ do
       Callback = function(color) setVignette(vignette.strength, color) end,
     })
   end
-end
+end)() end
 
 -- =====================================================================
 --  MENU
