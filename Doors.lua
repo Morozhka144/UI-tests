@@ -16457,9 +16457,9 @@ local function SolveRoom100(room)
     or room
 
   -- 0. Ожидание угроз перед входом
-  if HasEntityThreat() and threatState.IsClose(1) then
+  if HasEntityThreat() then
     KnobFarm.SetStatus("Room 100: Threat detected! Waiting...")
-    while HasEntityThreat() and threatState.IsClose(1.2) and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
+    while HasEntityThreat() and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
       task.wait(0.3)
     end
     task.wait(0.5)
