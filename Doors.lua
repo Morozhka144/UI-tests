@@ -568,7 +568,7 @@ local SECTION_ICONS = {
     ["Visuals"] = "eye", ["Archives"] = "archive", ["Anticheat Bypass"] = "shield", ["Archives Addons"] = "puzzle",
     ["Chams & Boxes"] = "box-select", ["Labels"] = "tag", ["Tracers & Arrows"] = "locate", ["Colors"] = "palette",
     ["Targets"] = "crosshair", ["ESP Preset"] = "wand-sparkles",
-    ["HUD"] = "layout-dashboard", ["Model Library"] = "box", ["Model Search"] = "search", ["Swap Options"] = "sliders-horizontal",
+    ["Screen Filter"] = "sparkles", ["Aura"] = "wand-sparkles", ["Entity Fun"] = "party-popper", ["HUD"] = "layout-dashboard", ["Model Library"] = "box", ["Model Search"] = "search", ["Swap Options"] = "sliders-horizontal",
 }
 
 -- subDefs = { { "Sub name", "icon", { "Groupbox name", ... } }, ... }: every groupbox / tabbox page of the
@@ -2147,7 +2147,8 @@ tabs = {
     { "Notifications", "bell", { "Entity Notifications", "Item Notifications" } },
     { "Camera", "camera", { "Camera" } },
     { "Models", "box", { "Model Library", "Model Search", "Swap Options", "Swap: Players", "Swap: Figure", "Swap: Seek",
-      "Swap: Rush and clones", "Swap: Ambush and clones", "Swap: A-60 / A-120", "Swap: Eyes / Lookman", "Swap: Custom entity" } },
+      "Swap: Rush and clones", "Swap: Ambush and clones", "Swap: A-60 / A-120", "Swap: Eyes / Lookman", "Swap: Companion", "Swap: Custom entity" } },
+    { "Fun", "party-popper", { "Screen Filter", "Aura", "Entity Fun" } },
     { "HUD", "layout-dashboard", { "HUD" } },
   }),
   Exploits = moroWindow:AddTab("Exploits", "sparkle", {
@@ -17081,6 +17082,7 @@ do
     { key = "Ambush", title = "Ambush and clones", names = { "AmbushMoving", "FrozenAmbush", "GlitchAmbush" }, height = 6 },
     { key = "A60", title = "A-60 / A-120", names = { "A60", "A120" }, height = 6 },
     { key = "Eyes", title = "Eyes / Lookman", names = { "Eyes", "Lookman", "BackdoorLookman" }, height = 6 },
+    { key = "Companion", title = "Companion", names = { "MoroCompanion" }, height = 3 },
     { key = "Custom", title = "Custom entity", names = {}, height = 6 },
   }
 
@@ -17110,10 +17112,12 @@ do
   local generation = 0
   local statusLabel
   local options2 = { hideEffects = true }
+  local companionPart
 
   for _, cat in ipairs(CATEGORIES) do
     settings[cat.key] = { mode = "Off", height = cat.height, yaw = 0, yoff = 0, anim = "None", bubble = "", scope = "Everyone", customNames = "" }
   end
+  settings.Companion.anim = "Bob"
 
   local function say(title, text, kind)
     pcall(function() library:Notify({ Title = title, Description = text, Time = kind == "error" and 5 or 3 }) end)
@@ -17730,6 +17734,9 @@ do
     for _, child in ipairs(workspace:GetChildren()) do
       if lookup[child.Name] then candidates[#candidates + 1] = child end
     end
+    if settings.Companion.mode ~= "Off" and companionPart and companionPart.Parent then
+      candidates[#candidates + 1] = companionPart
+    end
     for _, instance in ipairs(candidates) do
       local key = instance.Parent and lookup[instance.Name]
       local cat
@@ -17771,8 +17778,34 @@ do
     end
   end)
 
+  -- the companion is an invisible part that glides next to you; the normal replacement pipeline dresses it
+  local function updateCompanion()
+    if settings.Companion.mode == "Off" then
+      if companionPart then
+        companionPart:Destroy()
+        companionPart = nil
+      end
+      return
+    end
+    local character = localPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    if not (companionPart and companionPart.Parent) then
+      companionPart = Instance.new("Part")
+      companionPart.Name = "MoroCompanion"
+      companionPart.Anchored, companionPart.CanCollide, companionPart.CanQuery, companionPart.CanTouch = true, false, false, false
+      companionPart.Transparency = 1
+      companionPart.Size = Vector3.new(1, 1, 1)
+      companionPart.CFrame = root.CFrame * CFrame.new(3.2, -2.5, 1.5)
+      companionPart.Parent = swapFolder
+    end
+    local goal = root.CFrame * CFrame.new(3.2, -2.5, 1.5)
+    companionPart.CFrame = companionPart.CFrame:Lerp(goal, 0.15)
+  end
+
   local renderConnection = runService.RenderStepped:Connect(function()
     local now = os.clock()
+    pcall(updateCompanion)
     for _, record in pairs(records) do
       if record.step then pcall(record.step, now) end
     end
@@ -18014,7 +18047,7 @@ do
       -- animation, speech bubble and sprites exist for entities only (player models follow the real skeleton)
       if not cat.players then
         box:AddDropdown(flag .. "_Anim", {
-          Text = "Animation", Values = { "None", "Bob", "Spin", "Wobble" }, Default = "None",
+          Text = "Animation", Values = { "None", "Bob", "Spin", "Wobble" }, Default = conf.anim,
           Tooltip = "Extra movement on top of the target (Spin is for models, sprites always face you)",
           Callback = function(value) conf.anim = value or "None" end,
         })
@@ -18041,6 +18074,231 @@ do
         end })
       end
     end
+  end
+end
+
+-- =====================================================================
+--  FUN: screen filters, character aura, entity disco and entity size
+--  Everything here is client-side only and is undone when the toggle goes off or the script unloads.
+-- =====================================================================
+do
+  local alive = true
+
+  -- ------------------------------------------------------------------ screen filter
+  local FILTERS = {
+    Vaporwave = { tint = Color3.fromRGB(255, 190, 255), saturation = 0.45, contrast = 0.15, brightness = 0.02, bloom = 0.9 },
+    Noir = { tint = Color3.new(1, 1, 1), saturation = -1, contrast = 0.35, brightness = -0.03, bloom = 0.1 },
+    Sepia = { tint = Color3.fromRGB(255, 226, 180), saturation = -0.3, contrast = 0.1, brightness = 0, bloom = 0.2 },
+    Nightmare = { tint = Color3.fromRGB(255, 160, 160), saturation = -0.25, contrast = 0.45, brightness = -0.08, bloom = 0.4 },
+    Neon = { tint = Color3.fromRGB(190, 255, 255), saturation = 0.9, contrast = 0.25, brightness = 0, bloom = 1.3 },
+  }
+  local filter = { preset = "Off", strength = 70 }
+
+  local function removeFilter()
+    for _, name in ipairs({ "MoroFilterColor", "MoroFilterBloom" }) do
+      local effect = lighting:FindFirstChild(name)
+      if effect then effect:Destroy() end
+    end
+  end
+
+  local function applyFilter()
+    local preset = FILTERS[filter.preset]
+    if not preset then
+      removeFilter()
+      return
+    end
+    local color = lighting:FindFirstChild("MoroFilterColor")
+    if not color then
+      color = Instance.new("ColorCorrectionEffect")
+      color.Name = "MoroFilterColor"
+      color.Parent = lighting
+    end
+    local bloom = lighting:FindFirstChild("MoroFilterBloom")
+    if not bloom then
+      bloom = Instance.new("BloomEffect")
+      bloom.Name = "MoroFilterBloom"
+      bloom.Size = 24
+      bloom.Threshold = 0.9
+      bloom.Parent = lighting
+    end
+    local k = filter.strength / 100
+    color.TintColor = Color3.new(1, 1, 1):Lerp(preset.tint, k)
+    color.Saturation = preset.saturation * k
+    color.Contrast = preset.contrast * k
+    color.Brightness = preset.brightness * k
+    bloom.Intensity = preset.bloom * k
+  end
+
+  -- ------------------------------------------------------------------ aura on your character
+  local AURAS = {
+    Sparkles = { texture = "rbxasset://textures/particles/sparkles_main.dds", from = Color3.fromRGB(255, 240, 160), to = Color3.fromRGB(255, 170, 255), rate = 18, speed = 1.5, life = 1.8, size = 0.7, accel = Vector3.new(0, 1, 0), light = 1 },
+    Embers = { texture = "rbxasset://textures/particles/fire_main.dds", from = Color3.fromRGB(255, 190, 70), to = Color3.fromRGB(255, 70, 30), rate = 22, speed = 2, life = 1.4, size = 0.6, accel = Vector3.new(0, 3, 0), light = 0.8 },
+    Smoke = { texture = "rbxasset://textures/particles/smoke_main.dds", from = Color3.fromRGB(120, 120, 130), to = Color3.fromRGB(40, 40, 50), rate = 12, speed = 1, life = 2.2, size = 2, accel = Vector3.new(0, 1.5, 0), light = 0 },
+    Hearts = { texture = "rbxasset://textures/particles/sparkles_main.dds", from = Color3.fromRGB(255, 120, 170), to = Color3.fromRGB(255, 60, 120), rate = 14, speed = 2, life = 2, size = 0.9, accel = Vector3.new(0, 2, 0), light = 1 },
+  }
+  local aura = { preset = "Off" }
+  local auraEmitter, auraRoot
+
+  local function clearAura()
+    if auraEmitter then
+      pcall(function() auraEmitter:Destroy() end)
+      auraEmitter, auraRoot = nil, nil
+    end
+  end
+
+  local function ensureAura()
+    local preset = AURAS[aura.preset]
+    if not preset then
+      clearAura()
+      return
+    end
+    local character = localPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    if auraEmitter and auraRoot == root and auraEmitter.Parent == root and auraEmitter:GetAttribute("Preset") == aura.preset then return end
+    clearAura()
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Name = "MoroAura"
+    emitter:SetAttribute("Preset", aura.preset)
+    emitter.Texture = preset.texture
+    emitter.Color = ColorSequence.new(preset.from, preset.to)
+    emitter.Rate = preset.rate
+    emitter.Lifetime = NumberRange.new(preset.life * 0.7, preset.life)
+    emitter.Speed = NumberRange.new(preset.speed * 0.5, preset.speed)
+    emitter.SpreadAngle = Vector2.new(180, 180)
+    emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, preset.size), NumberSequenceKeypoint.new(1, 0) })
+    emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1) })
+    emitter.LightEmission = preset.light
+    emitter.Acceleration = preset.accel
+    emitter.Parent = root
+    auraEmitter, auraRoot = emitter, root
+  end
+
+  -- ------------------------------------------------------------------ entity disco + size
+  local disco = { on = false, speed = 1 }
+  local size = { percent = 100 }
+  local savedLook = setmetatable({}, { __mode = "k" })    -- part -> { Color, Material }
+  local savedScale = setmetatable({}, { __mode = "k" })   -- model -> { base, applied }
+
+  local function restoreDisco()
+    for part, look in pairs(savedLook) do
+      pcall(function()
+        part.Color = look.Color
+        part.Material = look.Material
+      end)
+      savedLook[part] = nil
+    end
+  end
+
+  local function restoreSizes()
+    for model, scale in pairs(savedScale) do
+      pcall(function() model:ScaleTo(scale.base) end)
+      savedScale[model] = nil
+    end
+  end
+
+  local lastFunStep = 0
+  local funConnection = runService.Heartbeat:Connect(function()
+    local now = os.clock()
+    if now - lastFunStep < 0.1 then return end
+    lastFunStep = now
+    local entities = ESPCategories.Entities or {}
+
+    if disco.on then
+      for index, entity in ipairs(entities) do
+        if entity.Parent then
+          local hue = (now * disco.speed * 0.2 + index * 0.07) % 1
+          local counted = 0
+          for _, part in ipairs(entity:GetDescendants()) do
+            if part:IsA("BasePart") then
+              counted = counted + 1
+              if counted > 80 then break end
+              if not savedLook[part] then savedLook[part] = { Color = part.Color, Material = part.Material } end
+              part.Color = Color3.fromHSV(hue, 0.9, 1)
+              part.Material = Enum.Material.Neon
+            end
+          end
+        end
+      end
+    end
+
+    local factor = size.percent / 100
+    for _, entity in ipairs(entities) do
+      if entity.Parent and entity:IsA("Model") then
+        local record = savedScale[entity]
+        if factor ~= 1 or record then
+          if not record then
+            record = { base = entity:GetScale(), applied = 1 }
+            savedScale[entity] = record
+          end
+          if record.applied ~= factor then
+            record.applied = factor
+            pcall(function() entity:ScaleTo(record.base * factor) end)
+          end
+        end
+      end
+    end
+  end)
+
+  local auraConnection = runService.Heartbeat:Connect(function()
+    if aura.preset ~= "Off" and alive then pcall(ensureAura) end
+  end)
+
+  library:OnUnload(function()
+    alive = false
+    pcall(function() funConnection:Disconnect() end)
+    pcall(function() auraConnection:Disconnect() end)
+    removeFilter()
+    clearAura()
+    restoreDisco()
+    restoreSizes()
+  end)
+
+  -- ------------------------------------------------------------------ menu (built later from MENU)
+  Menus.Fun = function()
+    Groupboxes.FunFilter = tabs.Visuals:AddLeftGroupbox("Screen Filter")
+    Groupboxes.FunFilter:AddDropdown("FunFilterPreset", {
+      Text = "Filter", Values = { "Off", "Vaporwave", "Noir", "Sepia", "Nightmare", "Neon" }, Default = "Off",
+      Tooltip = "Color grading over the whole screen",
+      Callback = function(value)
+        filter.preset = value or "Off"
+        applyFilter()
+      end,
+    })
+    Groupboxes.FunFilter:AddSlider("FunFilterStrength", {
+      Text = "Strength", Min = 10, Max = 100, Default = filter.strength, Rounding = 0, Suffix = " %",
+      Callback = function(value)
+        filter.strength = value
+        applyFilter()
+      end,
+    })
+
+    Groupboxes.FunAura = tabs.Visuals:AddRightGroupbox("Aura")
+    Groupboxes.FunAura:AddDropdown("FunAuraPreset", {
+      Text = "Aura", Values = { "Off", "Sparkles", "Embers", "Smoke", "Hearts" }, Default = "Off",
+      Tooltip = "Particles around your character (only you see them)",
+      Callback = function(value)
+        aura.preset = value or "Off"
+        if aura.preset == "Off" then clearAura() else pcall(ensureAura) end
+      end,
+    })
+
+    Groupboxes.FunEntities = tabs.Visuals:AddLeftGroupbox("Entity Fun")
+    Groupboxes.FunEntities:AddToggle("FunDisco", {
+      Text = "Entity Disco", Default = false, Tooltip = "Entities cycle through neon colors",
+      Callback = function(value)
+        disco.on = value
+        if not value then restoreDisco() end
+      end,
+    })
+    Groupboxes.FunEntities:AddSlider("FunDiscoSpeed", {
+      Text = "Disco Speed", Min = 1, Max = 10, Default = 1, Rounding = 1, Callback = function(value) disco.speed = value end,
+    })
+    Groupboxes.FunEntities:AddSlider("FunEntitySize", {
+      Text = "Entity Size", Min = 20, Max = 300, Default = 100, Rounding = 0, Suffix = " %",
+      Tooltip = "Visual size of every entity (the real hitbox does not change). 100% = untouched",
+      Callback = function(value) size.percent = value end,
+    })
   end
 end
 
@@ -19261,6 +19519,7 @@ Groupboxes.Visuals_Tracers:AddSlider("ESPTracerThickness", {
 
 Menus.ESPLook()
 Menus.ModelSwap()
+Menus.Fun()
 
 Groupboxes.Visuals_Notifs = tabs.Visuals:AddLeftGroupbox("Entity Notifications")
 
