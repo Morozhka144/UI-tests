@@ -188,7 +188,7 @@ local S = {
     -- movement
     speed = false, speedVal = 24, jump = false, jumpVal = 60, infJump = false, noclip = false,
     fly = false, flySpeed = 60, antiVoid = true,
-    bhop = false, bhopMode = "Hold Space", bhopMax = 45, bhopStep = 3, hopCur = 16, hopT = 0, bhopJump = 50,
+    bhop = false, bhopMode = "Hold Space", bhopMax = 45, bhopStep = 3, hopCur = 16, hopT = 0, bhopJump = 50, hip = false, hipVal = 4, grav = false, gravVal = 196,
     -- visuals
     fullbright = false, fovOn = false, fovVal = 90, xray = false, crosshair = false, noFog = false,
 }
@@ -208,7 +208,7 @@ local function newProfile(extra)
     return p
 end
 P = {
-    Murderer = newProfile({ aimMode = "Anyone", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, throwWall = true, holster = true, holsterDelay = 0.3, stabHolster = true, stabHolsterDelay = 0.3, killAura = false, killRange = 14, killDelay = 0.9, killAll = false, throwAura = false, throwRange = 70, throwDelay = 1.2 }),
+    Murderer = newProfile({ aimMode = "Anyone", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, throwWall = true, holster = true, holsterDelay = 0.3, stabHolster = true, stabHolsterDelay = 0.3, killAura = false, killRange = 14, killDelay = 0.9, killAll = false, throwAura = false, throwRange = 70, throwDelay = 1.2, throwSpeed = 100 }),
     Sheriff = newProfile({ aimMode = "Murderer", wallbang = false, wbMode = "Close Range", wbOffset = 4, wbManual = false, autoShoot = false, shootDelay = 1.3, shootRange = 250, shootWall = true, autoGun = false, grabMode = "Remote", holster = true, holsterDelay = 0.3 }),
 }
 local SHARED_KEYS = { "aimbot", "aimKey", "aimMode", "aimPart", "aimFov", "aimSmooth", "aimWall", "predict", "showFov", "silent", "silentFov", "silentWall" }
@@ -1052,6 +1052,7 @@ local function checkRoles()
         if S.roleNotify then
             notify("Round roles", "Murderer: " .. (m and m.DisplayName or "?") .. "  |  Sheriff: " .. (s and s.DisplayName or "?"), "info", 6)
         end
+        if F.sndPlay then F.sndPlay("role") end
     elseif not m and not s then
         lastSig = ""
     end
@@ -1252,8 +1253,19 @@ task.spawn(function()
                     task.wait(0.05)
                     local handle = knife:FindFirstChild("Handle")
                     if handle then
-                        local aimAt = predicted(part)
                         local originCF = handle.CFrame
+                        -- the knife needs time to fly: lead the target by (distance / knife speed + one-way ping), solved a few times
+                        -- because the flight time depends on where the target will be
+                        local v = part.AssemblyLinearVelocity
+                        if v.Magnitude > 120 then v = Vector3.zero end
+                        v = Vector3.new(v.X, v.Y * 0.4, v.Z)
+                        local ping = safe(function() return lp:GetNetworkPing() end) or 0.05
+                        local speed = math.max(P.Murderer.throwSpeed or 100, 20)
+                        local flight = 0
+                        for _ = 1, 4 do
+                            flight = ((part.Position + v * flight) - originCF.Position).Magnitude / speed + ping
+                        end
+                        local aimAt = part.Position + v * flight
                         if S.wallbang then originCF = spoofOrigin(aimAt) end
                         knife.Events.KnifeThrown:FireServer(originCF, CFrame.new(aimAt))
                         dbg("AutoThrow -> " .. p.Name .. (S.wallbang and " (wallbang)" or ""))
@@ -1337,6 +1349,8 @@ track(RunService.Heartbeat:Connect(function()
     if not (h and r) then return end
     if S.speed then h.WalkSpeed = S.speedVal end
     if S.jump then h.UseJumpPower = true h.JumpPower = S.jumpVal end
+    if S.hip then h.HipHeight = S.hipVal end
+    if S.grav then workspace.Gravity = S.gravVal end
     if S.bhop then
         local moving = h.MoveDirection.Magnitude > 0.1
         local want = S.bhopMode == "Always" or UIS:IsKeyDown(Enum.KeyCode.Space)
@@ -2300,7 +2314,7 @@ end
 
 local lastOwnTracer = 0
 _G.__MM2OnShot = function(origin, target)
-    dlog("OwnShot tracers=" .. tostring(F.tracers) .. " mine=" .. tostring(F.trMine))
+    if F.sndPlay then F.sndPlay("shot") end
     if not (F.tracers and F.trMine) then return end
     lastOwnTracer = os.clock()
     local ok, err = pcall(function()
@@ -3157,7 +3171,11 @@ local function hookDeath(p)
         local h = c:WaitForChild("Humanoid", 10)
         if not h then return end
         h.Died:Connect(function()
-            dlog("Died " .. p.Name .. " killFx=" .. tostring(F.killFx))
+            if F.sndPlay and alive then
+                local role = getRole(p)
+                local killer = (role == "Murderer") and (findByRole("Sheriff") or findByRole("Hero")) or findByRole("Murderer")
+                F.sndPlay("kill", killer == lp)
+            end
             if not (F.killFx and alive) then return end
             if os.clock() - (diedAt[p] or 0) < 1 then return end
             diedAt[p] = os.clock()
@@ -4380,6 +4398,7 @@ do
     local th = ML:CreateSection({ Name = "Auto Throw", Icon = "send", Collapsible = true })
     th:AddToggle({ Name = "Auto Throw", Icon = "send", Description = "Throws the knife at the nearest player", Callback = function(v) P.Murderer.throwAura = v end })
     th:AddSlider({ Name = "Range", Min = 20, Max = 200, Default = P.Murderer.throwRange, Suffix = " st", Callback = function(v) P.Murderer.throwRange = v end })
+    th:AddSlider({ Name = "Knife Speed", Min = 30, Max = 300, Default = P.Murderer.throwSpeed, Suffix = " st/s", Description = "Used to lead moving targets: lower = leads more", Callback = function(v) P.Murderer.throwSpeed = v end })
     th:AddSlider({ Name = "Delay", Min = 0.5, Max = 4, Default = P.Murderer.throwDelay, Decimals = 1, Suffix = " s", Callback = function(v) P.Murderer.throwDelay = v end })
     th:AddToggle({ Name = "Wall Check", Default = true, Callback = function(v) P.Murderer.throwWall = v end })
     holsterRows(th, P.Murderer, "knife")
@@ -4577,6 +4596,22 @@ do
     bh:AddSlider({ Name = "Speed Gain", Min = 1, Max = 10, Default = S.bhopStep, Decimals = 1, Callback = function(v) S.bhopStep = v end })
     bh:AddSlider({ Name = "Jump Height", Min = 20, Max = 200, Default = S.bhopJump, Description = "How high each hop goes", Callback = function(v) S.bhopJump = v end })
 
+    local bd = L:CreateSection({ Name = "Body", Icon = "ruler", Collapsible = true })
+    local hipOrig
+    bd:AddToggle({ Name = "Hip Height", Description = "Lifts or lowers your body above the floor", Callback = function(v)
+        S.hip = v
+        local h = humOf(lp)
+        if v and h then hipOrig = h.HipHeight end
+        if not v and h and hipOrig then h.HipHeight = hipOrig end
+    end })
+    bd:AddSlider({ Name = "Hip Height Value", Min = 0, Max = 30, Default = S.hipVal, Decimals = 1, Callback = function(v) S.hipVal = v end })
+    bd:AddToggle({ Name = "Gravity", Callback = function(v)
+        S.grav = v
+        if not v then workspace.Gravity = 196.2 end
+    end })
+    bd:AddSlider({ Name = "Gravity Value", Min = 5, Max = 400, Default = S.gravVal, Callback = function(v) S.gravVal = v end })
+    onCleanup(function() S.grav = false workspace.Gravity = 196.2 end)
+
     local tp = R:CreateSection({ Name = "Teleports", Icon = "map-pin", Collapsible = true })
     local function playerNames()
         local t = {}
@@ -4591,6 +4626,22 @@ do
         local p = selected and Players:FindFirstChild(selected)
         local r = p and hrpOf(p)
         if r then tpTo(r.CFrame * CFrame.new(0, 0, 3)) else notify("Teleport", "Select a player", "warning") end
+    end })
+    tp:AddToggle({ Name = "Spectate Player", Description = "Camera follows the selected player", Callback = function(on)
+        S.spectating = on and true or nil
+        if not on then
+            local h = humOf(lp)
+            if h then cam.CameraSubject = h end
+            return
+        end
+        task.spawn(function()
+            while alive and S.spectating do
+                local p = selected and Players:FindFirstChild(selected)
+                local th = p and humOf(p)
+                if th then cam.CameraSubject = th end
+                task.wait(0.3)
+            end
+        end)
     end })
     tp:AddButton({ Name = "To Murderer", Callback = function()
         local p = findByRole("Murderer")
@@ -4759,6 +4810,8 @@ do
     -- avatar -------------------------------------------------------------
     local av = R:CreateSection({ Name = "Avatar Changer", Icon = "user", Collapsible = true })
     av:AddLabel("Copies another user's look. Only you see it.")
+    av:AddToggle({ Name = "Hide Accessories", Description = "Hats and hair vanish (only on your screen)", Callback = function(v) F.hideHats = v end })
+    av:AddToggle({ Name = "Headless", Description = "Your head and face vanish (only on your screen)", Callback = function(v) F.headless = v end })
     local who = ""
     av:AddTextbox({ Name = "Username / UserId", Placeholder = "Roblox username or id", Callback = function(t) who = t end })
     av:AddButton({ Name = "Apply", Primary = true, Callback = function()
@@ -4965,7 +5018,8 @@ end
 
 -- HALLOWEEN ---------------------------------------------------------
 do
-    local HW = { collect = false, range = 400, speed = 60, avoid = true, got = 0, bad = {} }
+    local HW = { collect = false, range = 400, speed = 60, avoid = true, got = 0, bad = {}, what = "Candies", resetFull = false, bag = 40,
+        boxId = "Halloween2026Box", cur = "Candies2026", delay = 1.5, opened = 0, crateOn = false, crateBusy = false, lastDrop = "-" }
     local L, R = HalloweenTab:Column("left"), HalloweenTab:Column("right")
 
     local function candies()
@@ -4978,6 +5032,29 @@ do
             end
         end
         return out
+    end
+    -- what the farm goes for: candies, ordinary coins or both; coins already taken carry a Collected attribute
+    local function targets()
+        local map = mapModel()
+        local cc = map and map:FindFirstChild("CoinContainer")
+        local out = {}
+        if cc then
+            for _, c in ipairs(cc:GetChildren()) do
+                if c:IsA("BasePart") and not c:GetAttribute("Collected") then
+                    local isCandy = tostring(c:GetAttribute("CoinID")) == "Candy"
+                    if HW.what == "Both" or (HW.what == "Candies" and isCandy) or (HW.what == "Coins" and not isCandy) then out[#out + 1] = c end
+                end
+            end
+        end
+        return out
+    end
+    local function bagFull()
+        local n = tonumber(lp:GetAttribute("Coins"))
+        if not n then
+            local d = pdata(lp)
+            n = d and tonumber(d.Coins)
+        end
+        return n ~= nil and n >= HW.bag
     end
     local function murdererPos()
         for _, p in ipairs(Players:GetPlayers()) do
@@ -4997,13 +5074,16 @@ do
     ce:AddStat({ Name = "Collected", Interval = 1, Get = function() return tostring(HW.got) end })
 
     -- Candy collector ---------------------------------------------------
-    local co = R:CreateSection({ Name = "Candy Collector", Icon = "candy", Collapsible = true })
+    local co = R:CreateSection({ Name = "Auto Farm", Icon = "candy", Collapsible = true })
     co:AddToggle({ Name = "Auto Collect", Icon = "candy", Description = "Flies to the nearest candy by itself", Callback = function(v)
         HW.collect = v
         HW.bad = {}
         if not v then HW.flying = false end
     end })
+    co:AddDropdown({ Name = "Collect", Options = { "Candies", "Coins", "Both" }, Default = HW.what, Callback = function(v) HW.what = v or "Candies" end })
     co:AddSlider({ Name = "Fly Speed", Min = 10, Max = 150, Default = HW.speed, Suffix = " st/s", Callback = function(v) HW.speed = v end })
+    co:AddToggle({ Name = "Reset On Full Bag", Description = "Resets your character when the bag is full, otherwise waits", Callback = function(v) HW.resetFull = v end })
+    co:AddSlider({ Name = "Bag Size", Min = 10, Max = 100, Default = HW.bag, Description = "Counts as full from this many", Callback = function(v) HW.bag = v end })
     co:AddSlider({ Name = "Range", Min = 50, Max = 800, Default = HW.range, Suffix = " st", Callback = function(v) HW.range = v end })
     co:AddToggle({ Name = "Avoid Murderer", Default = true, Description = "Skips candies close to the murderer", Callback = function(v) HW.avoid = v end })
     co:AddLabel("Flies to each candy in a straight line, through walls (noclip).")
@@ -5023,9 +5103,13 @@ do
                 pcall(function()
                     local r, h = hrpOf(lp), humOf(lp)
                     if not (r and h and h.Health > 0 and visAlive(lp)) then return end
+                    if bagFull() then
+                        if HW.resetFull then h.Health = 0 task.wait(4) end
+                        return
+                    end
                     local murd = (HW.avoid and getRole(lp) ~= "Murderer") and murdererPos() or nil
                     local best, bd = nil, HW.range
-                    for _, c in ipairs(candies()) do
+                    for _, c in ipairs(targets()) do
                         local d = (c.Position - r.Position).Magnitude
                         if d < bd and not (HW.bad[c] and os.clock() < HW.bad[c]) and not (murd and (c.Position - murd).Magnitude < 22) then
                             best, bd = c, d
@@ -5051,7 +5135,411 @@ do
             task.wait(0.12)
         end
     end)
-    onCleanup(function() HW.collect, HW.flying = false, false end)
+    onCleanup(function() HW.collect, HW.flying, HW.crateOn = false, false, false end)
+
+    -- Mystery boxes: pays for a box with the chosen currency and opens it, once or on a loop
+    local cr = L:CreateSection({ Name = "Mystery Boxes", Icon = "gift", Collapsible = true })
+    cr:AddTextbox({ Name = "Box ID", Default = HW.boxId, Placeholder = "e.g. Halloween2026Box", Callback = function(t) if t ~= "" then HW.boxId = t end end })
+    cr:AddDropdown({ Name = "Pay With", Options = { "Candies2026", "HalloweenKey2026", "Coins", "Key", "Gems" }, Default = HW.cur, Callback = function(v) HW.cur = v or HW.cur end })
+    cr:AddSlider({ Name = "Open Delay", Min = 0.5, Max = 5, Default = HW.delay, Decimals = 1, Suffix = " s", Callback = function(v) HW.delay = v end })
+    local function openBox()
+        if HW.crateBusy then return false end
+        local shop = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("Shop")
+        local rem = shop and shop:FindFirstChild("OpenCrate")
+        if not (rem and rem:IsA("RemoteFunction")) then notify("Boxes", "Box system not found", "warning") return false end
+        HW.crateBusy = true
+        local ok, reward = pcall(function() return rem:InvokeServer(HW.boxId, "MysteryBox", HW.cur) end)
+        HW.crateBusy = false
+        if ok and reward then
+            HW.opened += 1
+            HW.lastDrop = tostring(reward)
+            return true
+        end
+        return false
+    end
+    cr:AddButton({ Name = "Open Once", Primary = true, Callback = function()
+        task.spawn(function()
+            if openBox() then notify("Boxes", "Got: " .. HW.lastDrop, "success", 4) else notify("Boxes", "Could not open (not enough " .. HW.cur .. "?)", "warning") end
+        end)
+    end })
+    cr:AddToggle({ Name = "Auto Open", Description = "Keeps opening until you run out", Callback = function(v) HW.crateOn = v end })
+    cr:AddStat({ Name = "Opened", Interval = 1, Get = function() return tostring(HW.opened) end })
+    cr:AddStat({ Name = "Last Drop", Interval = 1, Get = function() return HW.lastDrop end })
+    task.spawn(function()
+        while alive do
+            if HW.crateOn then
+                local ok = openBox()
+                if not ok then HW.crateOn = false notify("Boxes", "Auto Open stopped: nothing left to pay with", "warning") end
+                task.wait(HW.delay)
+            else
+                task.wait(0.3)
+            end
+        end
+    end)
+end
+
+-- EXTRAS: defense, sounds, music, emotes, HUD, trade guard -------------------------------------
+do
+    local R = MiscTab:Column("right")
+    local SoundService = game:GetService("SoundService")
+    local Stats = game:GetService("Stats")
+
+    -- Defense ---------------------------------------------------------
+    local df = R:CreateSection({ Name = "Defense", Icon = "shield", Collapsible = true })
+    local AA = { on = false, strength = 20 }
+    df:AddToggle({ Name = "Anti Aim", Icon = "shield", Description = "Experimental: gives aimbots that predict your movement a jittering velocity", Callback = function(v) AA.on = v end })
+    df:AddSlider({ Name = "Anti Aim Strength", Min = 5, Max = 80, Default = AA.strength, Suffix = " st/s", Callback = function(v) AA.strength = v end })
+    task.spawn(function()
+        while alive do
+            local r = AA.on and hrpOf(lp)
+            if r and visAlive(lp) then
+                local real = r.AssemblyLinearVelocity
+                local j = AA.strength
+                r.AssemblyLinearVelocity = real + Vector3.new(math.random(-j, j), 0, math.random(-j, j))
+                RunService.RenderStepped:Wait()
+                if r.Parent then r.AssemblyLinearVelocity = real end
+            end
+            RunService.Heartbeat:Wait()
+        end
+    end)
+
+    -- a thrown knife flying at you: sidestep and hop instead of standing still
+    local DK = { on = false, last = {}, cool = 0 }
+    df:AddToggle({ Name = "Dodge Thrown Knife", Description = "Sidesteps a knife that is flying straight at you", Callback = function(v) DK.on = v end })
+    track(RunService.Heartbeat:Connect(function(dt)
+        if not DK.on or getRole(lp) == "Murderer" then return end
+        local r = hrpOf(lp)
+        if not (r and visAlive(lp)) then return end
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj.Name == "ThrowingKnife" then
+                local part = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+                if part then
+                    local prev = DK.last[obj]
+                    DK.last[obj] = part.Position
+                    if prev and dt > 0 then
+                        local vel = (part.Position - prev) / dt
+                        local toMe = r.Position - part.Position
+                        if vel.Magnitude > 12 and toMe.Magnitude < 24 and vel.Unit:Dot(toMe.Unit) > 0.85 and os.clock() > DK.cool then
+                            DK.cool = os.clock() + 0.5
+                            local side = vel.Unit:Cross(Vector3.yAxis)
+                            if side.Magnitude > 0.01 then
+                                r.AssemblyLinearVelocity = side.Unit * (math.random() < 0.5 and 55 or -55) + Vector3.new(0, 28, 0)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        for obj in pairs(DK.last) do if not obj.Parent then DK.last[obj] = nil end end
+    end))
+
+    -- trades: warn when a trade changes (a script can add items behind your back) and optionally refuse
+    local TG = { on = false, decline = false }
+    local tradeFolder = RS:FindFirstChild("Trade")
+    local updateTrade = tradeFolder and tradeFolder:FindFirstChild("UpdateTrade")
+    local declineTrade = tradeFolder and tradeFolder:FindFirstChild("DeclineTrade")
+    df:AddToggle({ Name = "Trade Guard", Description = "Warns whenever your trade offer changes", Callback = function(v) TG.on = v end })
+    df:AddToggle({ Name = "Trade Guard: Decline", Description = "Also declines the trade right away", Callback = function(v) TG.decline = v end })
+    if updateTrade and updateTrade:IsA("RemoteEvent") then
+        track(updateTrade.OnClientEvent:Connect(function()
+            if not TG.on then return end
+            notify("Trade Guard", "Your trade just changed - check what is in it", "warning", 6)
+            if TG.decline and declineTrade then pcall(function() declineTrade:FireServer() end) end
+        end))
+    end
+
+    -- Sounds ----------------------------------------------------------
+    local SOUNDS = {
+        Ping = "rbxasset://sounds/electronicpingshort.wav", Oof = "rbxasset://sounds/uuhhh.mp3", Slash = "rbxasset://sounds/swordslash.wav",
+        Snap = "rbxasset://sounds/snap.mp3", Bass = "rbxasset://sounds/bass.wav", Click = "rbxasset://sounds/clickfast.wav", Glass = "rbxasset://sounds/glassbreak.wav",
+    }
+    local SOUND_NAMES = { "Ping", "Oof", "Slash", "Snap", "Bass", "Click", "Glass" }
+    local SND = {
+        kill = { on = false, name = "Oof", vol = 60, mineOnly = true, custom = "" },
+        shot = { on = false, name = "Click", vol = 50, custom = "" },
+        role = { on = false, name = "Ping", vol = 60, custom = "" },
+    }
+    F.sndPlay = function(kind, mine)
+        local c = SND[kind]
+        if not (c and c.on) then return end
+        if kind == "kill" and c.mineOnly and not mine then return end
+        local id = (c.custom ~= "" and (tonumber(c.custom) and ("rbxassetid://" .. c.custom) or c.custom)) or SOUNDS[c.name]
+        local s = Instance.new("Sound")
+        s.SoundId, s.Volume = id, c.vol / 100 * 2
+        s.Parent = SoundService
+        s:Play()
+        Debris:AddItem(s, 6)
+    end
+    local sd = R:CreateSection({ Name = "Sounds", Icon = "volume-2", Collapsible = true })
+    local function soundGroup(kind, title, extra)
+        local c = SND[kind]
+        sd:AddToggle({ Name = title, Callback = function(v) c.on = v end })
+        sd:AddDropdown({ Name = title .. " Sound", Options = SOUND_NAMES, Default = c.name, Callback = function(v) c.name = v or c.name end })
+        sd:AddTextbox({ Name = title .. " Custom ID", Placeholder = "audio asset id (optional)", Callback = function(t) c.custom = t end })
+        sd:AddSlider({ Name = title .. " Volume", Min = 0, Max = 100, Default = c.vol, Suffix = " %", Callback = function(v) c.vol = v end })
+        if extra then extra() end
+    end
+    soundGroup("kill", "Kill", function()
+        sd:AddToggle({ Name = "Only My Kills", Default = true, Callback = function(v) SND.kill.mineOnly = v end })
+    end)
+    soundGroup("shot", "Shot")
+    soundGroup("role", "Role Reveal")
+    sd:AddButton({ Name = "Test Kill Sound", Callback = function()
+        local was = SND.kill.on SND.kill.on = true
+        F.sndPlay("kill", true)
+        SND.kill.on = was
+    end })
+
+    -- Round music -----------------------------------------------------
+    local MU = { auto = false, id = "", vol = 40, loop = true, snd = nil }
+    local function stopMusic() if MU.snd then pcall(function() MU.snd:Destroy() end) MU.snd = nil end end
+    local function playMusic()
+        if MU.id == "" then return notify("Music", "Enter an audio asset id first", "warning") end
+        stopMusic()
+        local s = Instance.new("Sound")
+        s.SoundId = tonumber(MU.id) and ("rbxassetid://" .. MU.id) or MU.id
+        s.Volume, s.Looped = MU.vol / 100 * 2, MU.loop
+        s.Parent = SoundService
+        s:Play()
+        MU.snd = s
+    end
+    local mu = R:CreateSection({ Name = "Round Music", Icon = "music", Collapsible = true })
+    mu:AddTextbox({ Name = "Music ID", Placeholder = "audio asset id", Callback = function(t) MU.id = t end })
+    mu:AddSlider({ Name = "Music Volume", Min = 0, Max = 100, Default = MU.vol, Suffix = " %", Callback = function(v) MU.vol = v if MU.snd then MU.snd.Volume = v / 100 * 2 end end })
+    mu:AddToggle({ Name = "Loop", Default = true, Callback = function(v) MU.loop = v if MU.snd then MU.snd.Looped = v end end })
+    mu:AddToggle({ Name = "Play On Round Start", Description = "Starts when a round begins, stops when it ends", Callback = function(v) MU.auto = v end })
+    mu:AddButton({ Name = "Play", Primary = true, Callback = playMusic })
+    mu:AddButton({ Name = "Stop", Callback = stopMusic })
+    local gpr = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("Gameplay")
+    local rs = gpr and gpr:FindFirstChild("RoundStart")
+    local go = gpr and gpr:FindFirstChild("GameOver")
+    if rs and rs:IsA("RemoteEvent") then track(rs.OnClientEvent:Connect(function() if MU.auto then playMusic() end end)) end
+    if go and go:IsA("RemoteEvent") then track(go.OnClientEvent:Connect(function() if MU.auto then stopMusic() end end)) end
+    onCleanup(stopMusic)
+
+    -- Emotes ----------------------------------------------------------
+    local EM = { name = "ninja", auto = false }
+    local em = R:CreateSection({ Name = "Emotes", Icon = "smile", Collapsible = true })
+    em:AddDropdown({ Name = "Emote", Options = { "ninja", "dab", "floss", "headless", "zen", "zombie", "sit" }, Default = EM.name, Callback = function(v) EM.name = v or EM.name end })
+    local function fireEmote()
+        local misc = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("Misc")
+        local ev = misc and misc:FindFirstChild("PlayEmote")
+        if ev and ev:IsA("BindableEvent") then ev:Fire(EM.name) else notify("Emotes", "Emote system not found", "warning") end
+    end
+    em:AddButton({ Name = "Play Emote", Primary = true, Callback = fireEmote })
+    em:AddToggle({ Name = "Auto Emote", Description = "Keeps the emote going", Callback = function(v) EM.auto = v end })
+    task.spawn(function()
+        while alive do
+            if EM.auto and visAlive(lp) then pcall(function()
+                local misc = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("Misc")
+                local ev = misc and misc:FindFirstChild("PlayEmote")
+                if ev and ev:IsA("BindableEvent") then ev:Fire(EM.name) end
+            end) end
+            task.wait(1.5)
+        end
+    end)
+
+    -- HUD / performance ----------------------------------------------
+    local hu = R:CreateSection({ Name = "HUD", Icon = "gauge", Collapsible = true })
+    local label = Instance.new("TextLabel")
+    label.Name = "MM2Hud"
+    label.AnchorPoint = Vector2.new(0, 0)
+    label.Position = UDim2.fromOffset(12, 12)
+    label.AutomaticSize = Enum.AutomaticSize.XY
+    label.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
+    label.BackgroundTransparency = 0.25
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 14
+    label.Visible = false
+    label.ZIndex = 5
+    local pad = Instance.new("UIPadding") pad.PaddingLeft, pad.PaddingRight, pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 8), UDim.new(0, 8), UDim.new(0, 4), UDim.new(0, 4) pad.Parent = label
+    local corner = Instance.new("UICorner") corner.CornerRadius = UDim.new(0, 6) corner.Parent = label
+    label.Parent = overlay
+    local frames, fps = 0, 60
+    track(RunService.RenderStepped:Connect(function() frames += 1 end))
+    task.spawn(function()
+        while alive do
+            local t0 = os.clock()
+            local f0 = frames
+            task.wait(0.5)
+            fps = (frames - f0) / math.max(os.clock() - t0, 0.01)
+            if label.Visible then
+                local ping = safe(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end) or 0
+                label.Text = string.format("Moro MM2   %d fps   %d ms   %s", math.floor(fps + 0.5), math.floor(ping + 0.5), os.date("%H:%M"))
+            end
+        end
+    end)
+    hu:AddToggle({ Name = "Watermark", Description = "FPS, ping and time in the corner", Callback = function(v) label.Visible = v end })
+    hu:AddToggle({ Name = "FPS Unlocker", Description = "Removes the 60 fps cap", Callback = function(v)
+        if setfpscap then pcall(setfpscap, v and 9999 or 60) else notify("HUD", "Your executor has no setfpscap", "warning") end
+    end })
+    hu:AddToggle({ Name = "Disable 3D Rendering", Description = "Black screen, almost no GPU use", Callback = function(v)
+        pcall(function() RunService:Set3dRenderingEnabled(not v) end)
+    end })
+    onCleanup(function()
+        label:Destroy()
+        pcall(function() RunService:Set3dRenderingEnabled(true) end)
+    end)
+
+    -- Map vote duplication --------------------------------------------
+    -- Standing on a vote pad counts a vote; dying and standing on it again counts another one
+    local VT = { busy = false, stop = false, done = 0, want = 0, status = "Idle", pad = 1, count = 10 }
+    local function votePads()
+        local lobby = workspace:FindFirstChild("RegularLobby")
+        local folder = lobby and lobby:FindFirstChild("VotePads")
+        if folder and lobby:FindFirstChild("VotePad1") then return lobby, folder end
+        for _, m in ipairs(workspace:GetChildren()) do
+            if m:IsA("Model") then
+                local f = m:FindFirstChild("VotePads")
+                if f then
+                    if m:FindFirstChild("VotePad1") then return m, f end
+                    if f:FindFirstChild("VotePad1") then return f, f end
+                end
+            end
+        end
+    end
+    local function readPad(i)
+        local parent, det = votePads()
+        if not parent then return nil end
+        local pad = parent:FindFirstChild("VotePad" .. i)
+        local d = (det and det:FindFirstChild("Detector" .. i)) or (pad and pad:FindFirstChild("Pad"))
+        if not (pad and d) then return nil end
+        local res = { detector = d, name = "", votes = 0, active = false }
+        pcall(function()
+            local c = pad.VoteInfoGui.Container
+            res.name = c.MapName.Text
+            res.votes = tonumber(c.Votes.Text:match("%d+")) or 0
+        end)
+        pcall(function() res.active = pad.MapInfoGui.MapIcon.Image ~= "" end)
+        return res
+    end
+    local function waitNewCharacter(old, timeout)
+        local t0 = os.clock()
+        while os.clock() - t0 < timeout and not VT.stop do
+            local c = lp.Character
+            if c and c ~= old and humOf(lp) and hrpOf(lp) and humOf(lp).Health > 0 then return c end
+            RunService.Heartbeat:Wait()
+        end
+    end
+    local function runVotes(index, count)
+        VT.busy, VT.stop, VT.done, VT.want, VT.status = true, false, 0, count, "Voting"
+        local ok, err = pcall(function()
+            local failures = 0
+            while VT.done < count and not VT.stop do
+                local pad = readPad(index)
+                if not (pad and pad.active) then VT.status = "Voting ended" return end
+                local before, t0, counted = pad.votes, os.clock(), false
+                while os.clock() - t0 < 1.2 and not VT.stop do
+                    local cur = readPad(index)
+                    if not (cur and cur.active) then break end
+                    if cur.votes > before and os.clock() - t0 >= 0.18 then counted = true break end
+                    local r = hrpOf(lp)
+                    if r then
+                        local d = r.Position - cur.detector.Position
+                        if Vector3.new(d.X, 0, d.Z).Magnitude > 1.5 or math.abs(d.Y) > 3.5 then
+                            r.CFrame = CFrame.new(cur.detector.Position - Vector3.new(0, 1.2, 0)) * (r.CFrame - r.CFrame.Position)
+                            r.AssemblyLinearVelocity = Vector3.zero
+                        end
+                    end
+                    RunService.Heartbeat:Wait()
+                end
+                if counted then VT.done += 1 failures = 0 else failures += 1 if failures >= 2 then VT.status = "Vote not counted" return end end
+                if VT.done >= count or VT.stop then break end
+                VT.status = "Respawning"
+                local old = lp.Character
+                local h = humOf(lp)
+                if h then h.Health = 0 end
+                if not waitNewCharacter(old, 15) then VT.status = VT.stop and "Stopped" or "No character" return end
+            end
+            VT.status = VT.stop and "Stopped" or "Done"
+        end)
+        if not ok then VT.status = "Error" end
+        VT.busy = false
+    end
+    local vt = R:CreateSection({ Name = "Map Votes", Icon = "vote", Collapsible = true })
+    local padDd
+    padDd = vt:AddDropdown({ Name = "Pad", Options = { "1", "2", "3" }, Default = "1", Callback = function(v) VT.pad = tonumber((tostring(v or "1"):match("^%d"))) or 1 end })
+    vt:AddButton({ Name = "Show Map Names", Callback = function()
+        local names = {}
+        for i = 1, 3 do
+            local p = readPad(i)
+            names[#names + 1] = i .. (p and p.name ~= "" and (" - " .. p.name) or "")
+        end
+        pcall(padDd.Refresh, names, true)
+    end })
+    vt:AddSlider({ Name = "Votes To Add", Min = 1, Max = 100, Default = VT.count, Callback = function(v) VT.count = math.floor(v) end })
+    vt:AddButton({ Name = "Dupe Votes", Primary = true, Callback = function()
+        if VT.busy then return end
+        local p = readPad(VT.pad)
+        if not (p and p.active) then VT.status = "Waiting for vote" return notify("Map Votes", "Voting is not open right now", "warning") end
+        task.spawn(runVotes, VT.pad, VT.count)
+    end })
+    vt:AddButton({ Name = "Stop", Callback = function() VT.stop = true end })
+    vt:AddStat({ Name = "Status", Interval = 0.3, Get = function()
+        return VT.busy and (VT.status .. "  " .. VT.done .. "/" .. VT.want) or VT.status
+    end })
+    onCleanup(function() VT.stop = true end)
+
+    -- Auto Prestige ----------------------------------------------------
+    local PR = { on = false, last = 0, level = "-", pres = "-" }
+    local acct = R:CreateSection({ Name = "Account", Icon = "crown", Collapsible = true })
+    acct:AddToggle({ Name = "Auto Prestige", Description = "Prestiges as soon as level 100 is reached", Callback = function(v) PR.on = v end })
+    acct:AddStat({ Name = "Level / Prestige", Interval = 2, Get = function() return tostring(PR.level) .. " / " .. tostring(PR.pres) end })
+    task.spawn(function()
+        while alive do
+            task.wait(2)
+            pcall(function()
+                local mods = RS:FindFirstChild("Modules")
+                local lmObj, pdObj = mods and mods:FindFirstChild("LevelModule"), mods and mods:FindFirstChild("ProfileData")
+                if not (lmObj and pdObj) then return end
+                local lm, pd = require(lmObj), require(pdObj)
+                local level = tonumber(lm.GetLevel(pd.NewXP))
+                local pres = tonumber(pd.Prestige) or 0
+                PR.level, PR.pres = level or "-", pres
+                if PR.on and level and level >= 100 and pres < 10 and os.clock() - PR.last > 15 then
+                    local inv = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("Inventory")
+                    local rem = inv and inv:FindFirstChild("Prestige")
+                    if rem and rem:IsA("RemoteEvent") then
+                        PR.last = os.clock()
+                        rem:FireServer()
+                        notify("Prestige", "Prestige requested", "success", 4)
+                    end
+                end
+            end)
+        end
+    end)
+
+    -- hide accessories / headless (client only) ------------------------
+    local hidden = setmetatable({}, { __mode = "k" })
+    task.spawn(function()
+        while alive do
+            local c = lp.Character
+            if c then
+                for _, d in ipairs(c:GetDescendants()) do
+                    local hide
+                    if d:IsA("Accessory") and F.hideHats then
+                        local h = d:FindFirstChild("Handle")
+                        if h then h.LocalTransparencyModifier = 1 hidden[h] = true end
+                    elseif d.Name == "Head" and d:IsA("BasePart") and F.headless then
+                        d.LocalTransparencyModifier = 1 hidden[d] = true
+                        for _, f in ipairs(d:GetChildren()) do if f:IsA("Decal") then f.Transparency = 1 end end
+                    end
+                end
+                if not F.hideHats or not F.headless then
+                    for p in pairs(hidden) do
+                        if p.Parent and ((p.Name == "Handle" and not F.hideHats) or (p.Name == "Head" and not F.headless)) then
+                            p.LocalTransparencyModifier = 0
+                            if p.Name == "Head" then for _, f in ipairs(p:GetChildren()) do if f:IsA("Decal") then f.Transparency = 0 end end end
+                            hidden[p] = nil
+                        end
+                    end
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+    onCleanup(function() F.sndPlay = nil F.hideHats, F.headless = false, false end)
 end
 
 -- MISC --------------------------------------------------------------
@@ -5125,6 +5613,166 @@ do
         end
     end))
     onCleanup(function() FL.touch, FL.anti = false, false end)
+
+    -- Fling Stick: a hand on a stick. The swing that touches a player throws them (your body does the throwing, as in Touch Fling)
+    local FS = { on = false, power = 100000, tool = nil, swinging = 0, busy = false, flinging = false }
+    local function flingPlayer(p)
+        if FS.flinging then return end
+        local r, vr = hrpOf(lp), hrpOf(p)
+        if not (r and vr) then return end
+        FS.flinging = true
+        task.spawn(function()
+            local home = r.CFrame
+            local dir = (vr.Position - home.Position)
+            dir = dir.Magnitude > 0.1 and dir.Unit or home.LookVector
+            local t0 = os.clock()
+            while os.clock() - t0 < 0.4 and vr.Parent and r.Parent do
+                r.CFrame = vr.CFrame
+                r.AssemblyLinearVelocity = dir * FS.power + Vector3.new(0, FS.power * 0.35, 0)
+                r.AssemblyAngularVelocity = Vector3.new(0, FS.power, 0)
+                RunService.Heartbeat:Wait()
+            end
+            if r.Parent then
+                r.AssemblyLinearVelocity = Vector3.zero
+                r.AssemblyAngularVelocity = Vector3.zero
+                r.CFrame = home
+            end
+            FS.flinging = false
+        end)
+    end
+    local function makeStick()
+        local tool = Instance.new("Tool")
+        tool.Name = "Fling Stick"
+        tool.ToolTip = "Swing at a player to throw them"
+        tool.CanBeDropped = false
+        tool.RequiresHandle = true
+        tool.GripPos = Vector3.new(0, 0, 1.7)
+        local function part(name, size, color, mat, parent)
+            local p = Instance.new("Part")
+            p.Name, p.Size, p.Color, p.Material = name, size, color, mat
+            p.CanCollide, p.Massless, p.TopSurface, p.BottomSurface = false, true, Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+            p.Parent = parent
+            return p
+        end
+        local handle = part("Handle", Vector3.new(0.35, 0.35, 5), Color3.fromRGB(125, 85, 50), Enum.Material.Wood, tool)
+        local skin = Color3.fromRGB(255, 205, 160)
+        local function weldAt(p, cf)
+            p.CFrame = handle.CFrame * cf
+            local w = Instance.new("Weld")
+            w.Part0, w.Part1 = handle, p
+            w.C0 = cf
+            w.Parent = p
+        end
+        local palm = part("Palm", Vector3.new(1.1, 0.5, 0.9), skin, Enum.Material.SmoothPlastic, tool)
+        weldAt(palm, CFrame.new(0, 0, -2.9))
+        for i, x in ipairs({ -0.4, -0.13, 0.13, 0.4 }) do
+            local f = part("Finger" .. i, Vector3.new(0.22, 0.4, 0.6), skin, Enum.Material.SmoothPlastic, tool)
+            weldAt(f, CFrame.new(x, 0, -3.65))
+        end
+        local thumb = part("Thumb", Vector3.new(0.25, 0.4, 0.55), skin, Enum.Material.SmoothPlastic, tool)
+        weldAt(thumb, CFrame.new(0.72, 0, -3.1) * CFrame.Angles(0, math.rad(-35), 0))
+
+        local function onHit(hit)
+            if FS.swinging < os.clock() or FS.flinging then return end
+            local model = hit:FindFirstAncestorOfClass("Model")
+            local p = model and Players:GetPlayerFromCharacter(model)
+            if p and p ~= lp then flingPlayer(p) end
+        end
+        handle.Touched:Connect(onHit)
+        palm.Touched:Connect(onHit)
+        local baseGrip = tool.Grip
+        tool.Activated:Connect(function()
+            if FS.busy then return end
+            FS.busy = true
+            FS.swinging = os.clock() + 0.45
+            task.spawn(function()
+                local t0 = os.clock()
+                local fell = false
+                while os.clock() - t0 < 0.4 do
+                    local k = (os.clock() - t0) / 0.4
+                    tool.Grip = baseGrip * CFrame.Angles(math.rad(-25 * math.sin(k * math.pi)), math.rad(-55 + 110 * k), 0)
+                    -- touch events can miss a fast swing: also look for a player right at the tip
+                    if not fell and k > 0.25 and not FS.flinging and palm.Parent then
+                        for _, p in ipairs(Players:GetPlayers()) do
+                            local vr = p ~= lp and hrpOf(p)
+                            if vr and (vr.Position - palm.Position).Magnitude < 5 then fell = true flingPlayer(p) break end
+                        end
+                    end
+                    RunService.Heartbeat:Wait()
+                end
+                tool.Grip = baseGrip
+                task.wait(0.25)
+                FS.busy = false
+            end)
+        end)
+        return tool
+    end
+    fl:AddToggle({ Name = "Fling Stick", Icon = "wand", Description = "A hand on a stick appears in your hotbar; swing it at someone", Callback = function(v)
+        FS.on = v
+        if not v and FS.tool then FS.tool:Destroy() FS.tool = nil end
+    end })
+    fl:AddSlider({ Name = "Fling Power", Min = 10000, Max = 500000, Default = FS.power, Callback = function(v) FS.power = v end })
+    -- role targets, click-to-fling and the two automatic modes all go through the same throw as the stick
+    fl:AddButton({ Name = "Fling Sheriff", Callback = function()
+        local p = findByRole("Sheriff") or findByRole("Hero")
+        if p and p ~= lp then flingPlayer(p) else notify("Fling", "No sheriff to fling", "warning") end
+    end })
+    fl:AddButton({ Name = "Fling Murderer", Callback = function()
+        local p = findByRole("Murderer")
+        if p and p ~= lp then flingPlayer(p) else notify("Fling", "No murderer to fling", "warning") end
+    end })
+    fl:AddToggle({ Name = "Auto Fling Sheriff", Description = "Throws each new sheriff once", Callback = function(v) FS.autoSheriff = v FS.lastSheriff = nil end })
+    fl:AddToggle({ Name = "Auto End Round", Description = "While you are dead, keeps throwing the murderer", Callback = function(v) FS.autoEnd = v end })
+    fl:AddToggle({ Name = "Click Fling", Description = "Click or tap a player to throw them", Callback = function(v) FS.click = v end })
+    task.spawn(function()
+        while alive do
+            if FS.autoSheriff then
+                local p = findByRole("Sheriff") or findByRole("Hero")
+                if p and p ~= lp and p ~= FS.lastSheriff and visAlive(lp) then
+                    FS.lastSheriff = p
+                    flingPlayer(p)
+                    task.wait(3)
+                end
+            end
+            if FS.autoEnd and not isAlive(lp) then
+                local p = findByRole("Murderer")
+                if p and p ~= lp and hrpOf(p) then
+                    flingPlayer(p)
+                    task.wait(3)
+                end
+            end
+            task.wait(0.4)
+        end
+    end)
+    track(UIS.InputBegan:Connect(function(input, processed)
+        if not FS.click or processed then return end
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then return end
+        local pos = ut == Enum.UserInputType.Touch and Vector2.new(input.Position.X, input.Position.Y) or UIS:GetMouseLocation()
+        local ray = cam:ViewportPointToRay(pos.X, pos.Y)
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = { lp.Character, fxFolder }
+        local res = workspace:Raycast(ray.Origin, ray.Direction * 500, rp)
+        local model = res and res.Instance:FindFirstAncestorOfClass("Model")
+        local p = model and Players:GetPlayerFromCharacter(model)
+        if p and p ~= lp then flingPlayer(p) end
+    end))
+    task.spawn(function()
+        while alive do
+            if FS.on then
+                local bp = lp:FindFirstChild("Backpack")
+                local c = lp.Character
+                if bp and c and not (FS.tool and FS.tool.Parent and (FS.tool.Parent == bp or FS.tool.Parent == c)) then
+                    if FS.tool then pcall(function() FS.tool:Destroy() end) end
+                    FS.tool = makeStick()
+                    FS.tool.Parent = bp
+                end
+            end
+            task.wait(0.8)
+        end
+    end)
+    onCleanup(function() FS.on = false if FS.tool then pcall(function() FS.tool:Destroy() end) end end)
 end
 
 -- preload the default model in the background so "Replace Models" works the moment it is switched on
