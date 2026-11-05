@@ -5987,7 +5987,10 @@ local function installNamecallHook()
     end
 
     if self.Name == "MotorReplication" and executor == "FireServer" then
-      if toggles.BypassEyes.Value and featureState.IsEyes
+      local monumentAngle = featureState.MonumentAngle and featureState.MonumentAngle()
+      if monumentAngle then
+        args[1] = monumentAngle
+      elseif toggles.BypassEyes.Value and featureState.IsEyes
         or toggles.BypassLookman.Value and featureState.IsLookman then
         local currentFloor = CurrentFloor
 
@@ -6003,7 +6006,7 @@ local function installNamecallHook()
     end
 
     if self.Name == "Crouch" and executor == "FireServer" then
-      if toggles.Godmode and toggles.Godmode.Value then
+      if (toggles.CrouchSpoof and toggles.CrouchSpoof.Value) or (toggles.Godmode and toggles.Godmode.Value) then
         args[1] = true
       end
 
@@ -19013,6 +19016,462 @@ do (function()
 end)() end
 
 -- =====================================================================
+--  FLOOR EXTRAS: Stairwell crushers / Noise TV / scrapper / Creak meter, Garden monuments,
+--  entity path nodes and crouch spoof.
+--  Every feature keeps its own watchers and is undone when the toggle goes off or the script unloads.
+-- =====================================================================
+do (function()
+  local alive = true
+  local ownUserId = localPlayer.UserId
+
+  local function roomsFolder() return workspace:FindFirstChild("CurrentRooms") end
+  local function isOn(flag)
+    local toggle = toggles[flag]
+    return toggle ~= nil and toggle.Value == true
+  end
+
+  -- Run `step` every `period` seconds for as long as the toggle stays on.
+  local function pollWhile(flag, period, step)
+    task.spawn(function()
+      while alive and not _Unloading and isOn(flag) do
+        pcall(step)
+        task.wait(period)
+      end
+    end)
+  end
+
+  -- Connections owned by one feature; dropped together.
+  local owned = {}
+  local function own(flag, connection)
+    owned[flag] = owned[flag] or {}
+    table.insert(owned[flag], connection)
+    return connection
+  end
+  local function release(flag)
+    for _, connection in ipairs(owned[flag] or {}) do
+      pcall(function() connection:Disconnect() end)
+    end
+    owned[flag] = nil
+  end
+
+  local function eachRoom(callback)
+    local folder = roomsFolder()
+    if not folder then return end
+    for _, room in ipairs(folder:GetChildren()) do callback(room) end
+  end
+
+  local function pivotOf(inst)
+    if inst:IsA("Model") then return inst:GetPivot() end
+    if inst:IsA("BasePart") then return inst.CFrame end
+    return nil
+  end
+
+  -- ------------------------------------------------------------------ Anti Crusher
+  local watchedCrushers = setmetatable({}, { __mode = "k" })
+
+  local function underBasicWall(part, container)
+    local node = part.Parent
+    while node and node ~= container do
+      if node.Name == "BasicWall" then return true end
+      node = node.Parent
+    end
+    return false
+  end
+
+  local function disarmPart(part, container)
+    if part:IsA("BasePart") and not underBasicWall(part, container) then
+      part.CanCollide = false
+      part.CanTouch = false
+    end
+  end
+
+  local function disarmCrusher(container)
+    for _, descendant in ipairs(container:GetDescendants()) do
+      disarmPart(descendant, container)
+      if descendant.Name == "StairwellCrusher" then
+        for _, triggerName in ipairs({ "OuterTrigger", "CoreTrigger" }) do
+          local trigger = descendant:FindFirstChild(triggerName)
+          if trigger then pcall(function() trigger:Destroy() end) end
+        end
+      end
+    end
+    if not watchedCrushers[container] then
+      watchedCrushers[container] = own("AntiCrusher", container.DescendantAdded:Connect(function(added)
+        disarmPart(added, container)
+      end))
+    end
+  end
+
+  local function sweepCrushers()
+    eachRoom(function(room)
+      local assets = room:FindFirstChild("Assets")
+      if not assets then return end
+      for _, child in ipairs(assets:GetChildren()) do
+        if string.match(child.Name, "^StairwellCrusherContainer%d+$") then disarmCrusher(child) end
+      end
+    end)
+  end
+
+  function Handlers.AntiCrusherChanged(enabled)
+    release("AntiCrusher")
+    table.clear(watchedCrushers)
+    if not enabled then return end
+    sweepCrushers()
+    own("AntiCrusher", workspace.DescendantAdded:Connect(function(added)
+      if string.match(added.Name, "^StairwellCrusherContainer%d+$") then
+        task.wait(0.1)
+        if alive and not _Unloading then disarmCrusher(added) end
+      end
+    end))
+    pollWhile("AntiCrusher", 1, sweepCrushers)
+  end
+
+  -- ------------------------------------------------------------------ Noise's TV
+  local sunkTvs = setmetatable({}, { __mode = "k" })
+
+  local function sinkTv(inst)
+    if sunkTvs[inst] or not inst:IsA("Model") or inst.Name ~= "TV_Stand" then return end
+    if inst:GetAttribute("LastPusherId") ~= ownUserId then return end
+    sunkTvs[inst] = true
+    local cf = inst:GetPivot()
+    inst:PivotTo(CFrame.new(cf.X, cf.Y - 250, cf.Z))
+  end
+
+  local function sweepTvs()
+    eachRoom(function(room)
+      local assets = room:FindFirstChild("Assets")
+      local stand = assets and assets:FindFirstChild("TV_Stand")
+      if stand then sinkTv(stand) end
+    end)
+    local misc = workspace:FindFirstChild("Misc")
+    if misc then
+      for _, child in ipairs(misc:GetChildren()) do sinkTv(child) end
+    end
+  end
+
+  function Handlers.BreakNoiseTvChanged(enabled)
+    release("BreakNoiseTv")
+    if not enabled then return end
+    sweepTvs()
+    local folder = roomsFolder()
+    if folder then
+      own("BreakNoiseTv", folder.ChildAdded:Connect(function()
+        task.wait(0.2)
+        if alive and not _Unloading then sweepTvs() end
+      end))
+    end
+    pollWhile("BreakNoiseTv", 1, sweepTvs)
+  end
+
+  -- ------------------------------------------------------------------ Creak aggression in the ESP label
+  local lastCreakLabel
+
+  local function findCreak()
+    local live = workspace:FindFirstChild("LiveEntities")
+    local creak = live and live:FindFirstChild("Creak")
+    if creak and creak.Parent then return creak end
+    for _, entity in ipairs(ESPCategories.Entities or {}) do
+      if entity and entity.Parent and entity.Name == "Creak" then return entity end
+    end
+    return nil
+  end
+
+  local function creakAggression(creak)
+    local controller = creak:FindFirstChild("AnimationController")
+    local animator = creak:FindFirstChildOfClass("Animator")
+      or (controller and controller:FindFirstChildOfClass("Animator"))
+    if not animator then return nil end
+    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+      if track.Name == "CreakGraph" or (track.Animation and track.Animation.Name == "CreakGraph") then
+        local ok, value = pcall(track.GetParameter, track, "Aggression")
+        if ok and typeof(value) == "number" then return math.clamp(value, 0, 1) end
+      end
+    end
+    return nil
+  end
+
+  local function refreshCreakLabel()
+    if not (isOn("EntitiesESP") and isOn("ESPShowText") and isOn("CreakAggressionMeter")) then return end
+    local creak = findCreak()
+    if not creak then
+      lastCreakLabel = nil
+      return
+    end
+    local aggression = creakAggression(creak)
+    local label = "Creak [" .. (aggression and tostring(math.floor(aggression * 100 + 0.5)) or "--") .. "% Aggression]"
+    if label == lastCreakLabel then return end
+    lastCreakLabel = label
+    pcall(function() Functions.RemoveESP(creak) end)
+    pcall(function()
+      Functions.AddESP({
+        Object = creak, Text = label,
+        Color = options.EntitiesESPColor and options.EntitiesESPColor.Value or Color3.fromRGB(255, 80, 80),
+      }, false)
+    end)
+  end
+
+  task.spawn(function()
+    while alive and not _Unloading do
+      task.wait(0.5)
+      pcall(refreshCreakLabel)
+    end
+  end)
+
+  function Handlers.CreakAggressionMeterChanged() lastCreakLabel = nil end
+
+  -- ------------------------------------------------------------------ Stairwell scrapper
+  local function nearestGrinder()
+    local character = localPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local best, bestDistance = nil, math.huge
+    eachRoom(function(room)
+      local scrapper = room:FindFirstChild("StairwellScrapper", true)
+      if not scrapper then return end
+      for _, descendant in ipairs(scrapper:GetDescendants()) do
+        if descendant.Name == "Grinder1" then
+          local cf = pivotOf(descendant)
+          if cf then
+            local distance = root and (cf.Position - root.Position).Magnitude or 0
+            if distance < bestDistance then best, bestDistance = cf, distance end
+          end
+        end
+      end
+    end)
+    return best
+  end
+
+  local function scrapDrops()
+    local drops = workspace:FindFirstChild("Drops")
+    if not drops then
+      library:Notify({ Title = "Scrap Dropped Items", Description = "No Drops folder found", Time = 4 })
+      return
+    end
+    local grinder = nearestGrinder()
+    if not grinder then
+      library:Notify({ Title = "Scrap Dropped Items", Description = "No scrapper found", Time = 4 })
+      return
+    end
+    local moved = 0
+    for _, drop in ipairs(drops:GetChildren()) do
+      local ok = false
+      if drop:IsA("Model") then
+        ok = pcall(function() drop:PivotTo(grinder) end)
+      elseif drop:IsA("BasePart") then
+        ok = pcall(function() drop.CFrame = grinder end)
+      end
+      if ok then moved = moved + 1 end
+    end
+    library:Notify({ Title = "Scrap Dropped Items", Description = "Sent " .. moved .. " item(s) to the scrapper", Time = 3 })
+  end
+
+  -- ------------------------------------------------------------------ Garden monuments
+  local monuments = {}
+
+  local function refreshMonuments()
+    table.clear(monuments)
+    local folder = roomsFolder()
+    if not folder then return end
+    local gameData = replicatedStorage:FindFirstChild("GameData")
+    local latestValue = gameData and gameData:FindFirstChild("LatestRoom")
+    local latest = latestValue and tonumber(latestValue.Value)
+    local function collect(room)
+      local monument = room:FindFirstChild("MonumentEntity", true)
+      if monument then table.insert(monuments, monument) end
+    end
+    if latest then
+      for number = math.max(0, latest - 4), latest do
+        local room = folder:FindFirstChild(tostring(number))
+        if room then collect(room) end
+      end
+    else
+      for _, room in ipairs(folder:GetChildren()) do collect(room) end
+    end
+  end
+
+  -- Angle (degrees) from the character to the nearest monument, the way MotorReplication expects it.
+  local function monumentAngle()
+    local character = localPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+    local nearest, nearestDistance = nil, math.huge
+    for _, monument in ipairs(monuments) do
+      if monument.Parent then
+        local part = monument:IsA("BasePart") and monument
+          or (monument:IsA("Model") and (monument.PrimaryPart or monument:FindFirstChildWhichIsA("BasePart", true)))
+        if part then
+          local distance = (part.Position - root.Position).Magnitude
+          if distance < nearestDistance then nearest, nearestDistance = part.Position, distance end
+        end
+      end
+    end
+    if not nearest then return nil end
+    local offset = nearest - root.Position
+    if offset.Magnitude < 0.001 then return nil end
+    return math.deg(math.atan2(offset.X, offset.Z))
+  end
+
+  -- The namecall hook asks for the angle through featureState (it is created before this block).
+  featureState.MonumentAngle = function()
+    if #monuments == 0 or not isOn("BypassMonument") then return nil end
+    return monumentAngle()
+  end
+
+  function Handlers.BypassMonumentChanged(enabled)
+    release("BypassMonument")
+    if not enabled then return end
+    refreshMonuments()
+    local folder = roomsFolder()
+    if folder then
+      own("BypassMonument", folder.ChildAdded:Connect(function()
+        for _ = 1, 4 do
+          if not alive or _Unloading or #monuments > 0 then return end
+          refreshMonuments()
+          task.wait(0.5)
+        end
+      end))
+    end
+    own("BypassMonument", runService.Heartbeat:Connect((function()
+      local nextFire = 0
+      return function()
+        local now = os.clock()
+        if now < nextFire or #monuments == 0 then return end
+        nextFire = now + 0.05
+        local angle = monumentAngle()
+        local remote = remotesFolder and remotesFolder:FindFirstChild("MotorReplication")
+        if angle and remote then remote:FireServer(angle) end
+      end
+    end)()))
+    pollWhile("BypassMonument", 1, refreshMonuments)
+  end
+
+  -- ------------------------------------------------------------------ entity path nodes
+  local shownNodes = {}   -- part -> its original transparency
+  local nodeContainers = setmetatable({}, { __mode = "k" })
+
+  local function isNodeContainer(inst)
+    return (inst:IsA("Folder") or inst:IsA("Model")) and string.find(string.lower(inst.Name), "node", 1, true) ~= nil
+  end
+
+  local function revealNode(part)
+    if part:IsA("BasePart") and part.Transparency ~= 0 and shownNodes[part] == nil then
+      shownNodes[part] = part.Transparency
+      part.Transparency = 0
+    end
+  end
+
+  local function insideNodeContainer(inst)
+    local folder = roomsFolder()
+    local node = inst.Parent
+    while node and node ~= folder do
+      if nodeContainers[node] or isNodeContainer(node) then return true end
+      node = node.Parent
+    end
+    return false
+  end
+
+  local function watchNodeContainer(container)
+    if nodeContainers[container] then return end
+    nodeContainers[container] = true
+    for _, descendant in ipairs(container:GetDescendants()) do revealNode(descendant) end
+    own("ShowEntityPath", container.DescendantAdded:Connect(revealNode))
+  end
+
+  local function hideNodes()
+    release("ShowEntityPath")
+    table.clear(nodeContainers)
+    for part, original in pairs(shownNodes) do
+      if part.Parent then pcall(function() part.Transparency = original end) end
+      shownNodes[part] = nil
+    end
+  end
+
+  function Handlers.ShowEntityPathChanged(enabled)
+    hideNodes()
+    if not enabled then return end
+    local folder = roomsFolder()
+    if not folder then return end
+    for _, descendant in ipairs(folder:GetDescendants()) do
+      if isNodeContainer(descendant) then
+        watchNodeContainer(descendant)
+      elseif descendant:IsA("BasePart") and insideNodeContainer(descendant) then
+        revealNode(descendant)
+      end
+    end
+    own("ShowEntityPath", folder.DescendantAdded:Connect(function(added)
+      if isNodeContainer(added) then
+        watchNodeContainer(added)
+      elseif added:IsA("BasePart") and insideNodeContainer(added) then
+        revealNode(added)
+      end
+    end))
+  end
+
+  -- ------------------------------------------------------------------ crouch spoof
+  function Handlers.CrouchSpoofChanged(enabled)
+    release("CrouchSpoof")
+    if not enabled then return end
+    -- The namecall hook forces the flag on outgoing Crouch calls; this keeps the server told even when idle.
+    pollWhile("CrouchSpoof", 0.25, function()
+      local crouch = remotesFolder and remotesFolder:FindFirstChild("Crouch")
+      if crouch then crouch:FireServer(true, true) end
+    end)
+  end
+
+  library:OnUnload(function()
+    alive = false
+    for flag in pairs(owned) do release(flag) end
+    hideNodes()
+    featureState.MonumentAngle = nil
+  end)
+
+  -- ------------------------------------------------------------------ menu (built later from MENU)
+  Menus.FloorExtras = function()
+    local stairwell = Groupboxes.StairwellMain
+    stairwell:AddToggle("AntiCrusher", {
+      Text = "Anti Crusher", Default = false, Tooltip = "Prevents you from getting hurt by crushers",
+    })
+    stairwell:AddToggle("BreakNoiseTv", {
+      Text = "Break Noise TV", Default = false, Tooltip = "Drops Noise's TV through the floor after you pushed it",
+    })
+    stairwell:AddToggle("CreakAggressionMeter", {
+      Text = "Creak Aggression Meter", Default = true,
+      Tooltip = "Shows Creak's aggression percentage in the entity ESP text (needs Entities ESP and ESP text)",
+    })
+    stairwell:AddButton({
+      Text = "Scrap Dropped Items", Tooltip = "Puts all of your dropped items into the nearest scrapper",
+      Func = function()
+        local ok, err = pcall(scrapDrops)
+        if not ok then library:Notify({ Title = "Scrap Dropped Items", Description = tostring(err), Time = 6 }) end
+      end,
+    })
+    toggles.AntiCrusher:OnChanged(Handlers.AntiCrusherChanged)
+    toggles.BreakNoiseTv:OnChanged(Handlers.BreakNoiseTvChanged)
+    toggles.CreakAggressionMeter:OnChanged(Handlers.CreakAggressionMeterChanged)
+
+    Groupboxes.GardenMonument = tabs.Garden:AddLeftGroupbox("Monument")
+    Groupboxes.GardenMonument:AddToggle("BypassMonument", {
+      Text = "Anti Monument", Default = false, Disabled = not hasHookMeta,
+      Tooltip = "Tells the server you are looking at the nearest monument without turning your camera",
+      DisabledTooltip = "Your executor doesn't support this feature",
+    })
+    toggles.BypassMonument:OnChanged(Handlers.BypassMonumentChanged)
+
+    Groupboxes.Visuals_ESP:AddToggle("ShowEntityPath", {
+      Text = "Show Entity Path", Default = false, Tooltip = "Shows the pathfind nodes entities follow in each room",
+    })
+    toggles.ShowEntityPath:OnChanged(Handlers.ShowEntityPathChanged)
+
+    Groupboxes.Exploits:AddToggle("CrouchSpoof", {
+      Text = "Crouch Spoof", Default = false, Disabled = not hasHookMeta,
+      Tooltip = "Always makes the game think you are crouching",
+      DisabledTooltip = "Your executor doesn't support this feature",
+    })
+    toggles.CrouchSpoof:OnChanged(Handlers.CrouchSpoofChanged)
+  end
+end)() end
+
+
+-- =====================================================================
 --  MENU
 --  Everything above only defines logic and handlers. All tabs, sections,
 --  toggles, sliders and buttons are created here, in the order they appear.
@@ -20231,6 +20690,7 @@ Menus.ESPLook()
 Menus.ModelSwap()
 Menus.Fun()
 Menus.PostFx()
+Menus.FloorExtras()
 
 Groupboxes.Visuals_Notifs = tabs.Visuals:AddLeftGroupbox("Entity Notifications")
 
