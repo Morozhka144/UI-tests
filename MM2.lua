@@ -5184,6 +5184,7 @@ do
     local SoundService = game:GetService("SoundService")
     local Stats = game:GetService("Stats")
 
+    do
     -- Defense ---------------------------------------------------------
     local df = R:CreateSection({ Name = "Defense", Icon = "shield", Collapsible = true })
     local AA = { on = false, strength = 20 }
@@ -5247,7 +5248,9 @@ do
             if TG.decline and declineTrade then pcall(function() declineTrade:FireServer() end) end
         end))
     end
+    end
 
+    do
     -- Sounds ----------------------------------------------------------
     local SOUNDS = {
         Ping = "rbxasset://sounds/electronicpingshort.wav", Oof = "rbxasset://sounds/uuhhh.mp3", Slash = "rbxasset://sounds/swordslash.wav",
@@ -5289,7 +5292,9 @@ do
         F.sndPlay("kill", true)
         SND.kill.on = was
     end })
+    end
 
+    do
     -- Round music -----------------------------------------------------
     local MU = { auto = false, id = "", vol = 40, loop = true, snd = nil }
     local function stopMusic() if MU.snd then pcall(function() MU.snd:Destroy() end) MU.snd = nil end end
@@ -5316,7 +5321,9 @@ do
     if rs and rs:IsA("RemoteEvent") then track(rs.OnClientEvent:Connect(function() if MU.auto then playMusic() end end)) end
     if go and go:IsA("RemoteEvent") then track(go.OnClientEvent:Connect(function() if MU.auto then stopMusic() end end)) end
     onCleanup(stopMusic)
+    end
 
+    do
     -- Emotes ----------------------------------------------------------
     local EM = { name = "ninja", auto = false }
     local em = R:CreateSection({ Name = "Emotes", Icon = "smile", Collapsible = true })
@@ -5338,7 +5345,9 @@ do
             task.wait(1.5)
         end
     end)
+    end
 
+    do
     -- HUD / performance ----------------------------------------------
     local hu = R:CreateSection({ Name = "HUD", Icon = "gauge", Collapsible = true })
     local label = Instance.new("TextLabel")
@@ -5381,7 +5390,9 @@ do
         label:Destroy()
         pcall(function() RunService:Set3dRenderingEnabled(true) end)
     end)
+    end
 
+    do
     -- Map vote duplication --------------------------------------------
     -- Standing on a vote pad counts a vote; dying and standing on it again counts another one
     local VT = { busy = false, stop = false, done = 0, want = 0, status = "Idle", pad = 1, count = 10 }
@@ -5480,7 +5491,9 @@ do
         return VT.busy and (VT.status .. "  " .. VT.done .. "/" .. VT.want) or VT.status
     end })
     onCleanup(function() VT.stop = true end)
+    end
 
+    do
     -- Auto Prestige ----------------------------------------------------
     local PR = { on = false, last = 0, level = "-", pres = "-" }
     local acct = R:CreateSection({ Name = "Account", Icon = "crown", Collapsible = true })
@@ -5509,7 +5522,9 @@ do
             end)
         end
     end)
+    end
 
+    do
     -- hide accessories / headless (client only) ------------------------
     local hidden = setmetatable({}, { __mode = "k" })
     task.spawn(function()
@@ -5540,8 +5555,8 @@ do
         end
     end)
     onCleanup(function() F.sndPlay = nil F.hideHats, F.headless = false, false end)
+    end
 end
-
 -- MISC --------------------------------------------------------------
 do
     local L = MiscTab:Column("left")
