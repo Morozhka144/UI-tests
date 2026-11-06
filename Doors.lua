@@ -19752,6 +19752,15 @@ do (function()
             end
             local goal, stopDistance = standPoint(target)
             local distance = flat(goal - guide.root.Position).Magnitude
+            -- Seek chase: no time to walk, the guide appears at the right door right away
+            local gameData = replicatedStorage:FindFirstChild("GameData")
+            local chase = gameData and gameData:FindFirstChild("ChaseInSession")
+            if chase and chase.Value == true and target.kind == "door" and distance > stopDistance + 1.5 then
+              guide.hum:Move(Vector3.zero)
+              guide.rig:PivotTo(CFrame.new(goal.X, goal.Y + guide.hum.HipHeight + guide.root.Size.Y / 2 + 0.5, goal.Z))
+              guide.root.AssemblyLinearVelocity = Vector3.zero
+              distance = 0
+            end
             if distance > stopDistance + 1.5 then
               setStatus((target.kind == "door" and "going to the door (room " or ("going to the " .. (target.label or "key") .. " (room ")) .. target.room .. ")")
               local reached = walkTo(goal, stopDistance, function()
