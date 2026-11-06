@@ -19480,14 +19480,14 @@ end)() end
 -- =====================================================================
 do (function()
   local alive = true
-  local VERITY_ID = 235686917499405
+  local VERITY_ID = 33498031238003   -- BIG Verity
   local SOUND_FOLDER, SOUND_FILE = "moro/Guide", "moro/Guide/hey.mp3"
   local SOUND_URL = "https://raw.githubusercontent.com/Morozhka144/UI-tests/main/hey.mp3"
   -- Roblox's stock R15 animations
   local ANIMATIONS = { walk = "rbxassetid://507777826", idle = "rbxassetid://507766666", wave = "rbxassetid://507770239" }
 
-  local settings = { on = false, speed = 24, waveEvery = 4, volume = 0.8, xray = true, color = Color3.fromRGB(130, 200, 255), modelId = VERITY_ID }
-  local guide = { rig = nil, hum = nil, root = nil, tracks = {}, sound = nil, highlight = nil, key = nil, lastGreet = 0, failures = 0 }
+  local settings = { on = false, speed = 24, waveEvery = 4, volume = 0.8, xray = true, color = Color3.fromRGB(130, 200, 255), modelId = VERITY_ID, height = 5.5 }
+  local guide = { rig = nil, hum = nil, root = nil, tracks = {}, sound = nil, highlight = nil, key = nil, lastGreet = 0, failures = 0, scale = 1 }
   local statusLabel
 
   local function setStatus(text)
@@ -19565,12 +19565,20 @@ do (function()
     hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
     hum.BreakJointsOnDeath = false
     hum.AutoRotate = true
+    -- no tumbling or ragdolling: it only walks and stands, whatever the proportions of the model
+    pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end)
+    pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false) end)
+    hum.PlatformStand = false
+    -- every model is brought to the same height first, so a chubby bundle and a tall one walk alike
+    local _, boxSize = rig:GetBoundingBox()
+    pcall(function() rig:ScaleTo(settings.height / math.max(boxSize.Y, 0.5)) end)
     rig.Name = "MoroGuide"
 
     local mine = playerRoot()
     local origin = mine and (mine.Position + Vector3.new(2, 0, 3)) or Vector3.new(0, 5, 0)
+    rig.PrimaryPart = root   -- the pivot must be the root part, not the middle of the bounding box
     rig.Parent = workspace
-    rig:PivotTo(CFrame.new(origin.X, floorY(origin, { rig, localPlayer.Character }) + hum.HipHeight + 1.5, origin.Z))
+    rig:PivotTo(CFrame.new(origin.X, floorY(origin, { rig, localPlayer.Character }) + hum.HipHeight + root.Size.Y / 2 + 1, origin.Z))
     root.AssemblyLinearVelocity = Vector3.zero
 
     local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
@@ -19603,6 +19611,10 @@ do (function()
     highlight.Parent = rig
 
     guide.rig, guide.hum, guide.root, guide.sound, guide.highlight = rig, hum, root, sound, highlight
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+    -- a big model needs a wider path and larger stopping distances
+    local extents = rig:GetExtentsSize()
+    guide.scale = math.clamp(extents.Y / 5.5, 1, 6)
     applyLook()
     return true
   end
@@ -19695,19 +19707,19 @@ do (function()
   local function standPoint(target)
     local ignore = { guide.rig, localPlayer.Character }
     if target.kind == "key" then
-      return Vector3.new(target.position.X, floorY(target.position, ignore), target.position.Z), 3.5
+      return Vector3.new(target.position.X, floorY(target.position, ignore), target.position.Z), 3.5 * guide.scale
     end
     local look = target.part.CFrame.LookVector
     local normal = flat(look).Magnitude > 0.01 and flat(look).Unit or Vector3.new(0, 0, 1)
     local side = (flat(guide.root.Position - target.position)):Dot(normal) >= 0 and 1 or -1
-    local point = target.position + normal * side * 5
+    local point = target.position + normal * side * 5 * guide.scale
     return Vector3.new(point.X, floorY(point, ignore), point.Z), 2.5
   end
 
   -- ------------------------------------------------------------------ walking
   local function walkTo(goal, stopDistance, stillWanted)
     local hum, root = guide.hum, guide.root
-    local path = pathfindingService:CreatePath({ AgentRadius = 1.8, AgentHeight = 5, AgentCanJump = false, WaypointSpacing = 5 })
+    local path = pathfindingService:CreatePath({ AgentRadius = math.min(1.8 * guide.scale, 6), AgentHeight = math.min(5 * guide.scale, 30), AgentCanJump = false, WaypointSpacing = 5 })
     local computed = pcall(function() path:ComputeAsync(root.Position, goal) end)
     if not computed or path.Status ~= Enum.PathStatus.Success then return false end
     local waypoints = path:GetWaypoints()
@@ -19745,6 +19757,13 @@ do (function()
   local animationConnection = runService.Heartbeat:Connect(function()
     local hum, root = guide.hum, guide.root
     if not (hum and root and root.Parent) then return end
+    -- fell through the floor: put it back next to you instead of waiting for the void to remove it
+    local mine = playerRoot()
+    if mine and root.Position.Y < mine.Position.Y - 40 then
+      guide.rig:PivotTo(CFrame.new(mine.Position + Vector3.new(2, 1, 3)))
+      root.AssemblyLinearVelocity = Vector3.zero
+      pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+    end
     local moving = flat(root.AssemblyLinearVelocity).Magnitude > 1
     local walk, idle = guide.tracks.walk, guide.tracks.idle
     if not (walk and idle) then return end
@@ -19842,7 +19861,7 @@ do (function()
     statusLabel = box:AddLabel("Status: off")
     box:AddToggle("GuideEnabled", {
       Text = "Enable Guide", Default = false,
-      Tooltip = "A Verity pet walks to the next key or door, waits for you, turns to you, waves and says hey (only you see it)",
+      Tooltip = "A BIG Verity pet walks to the next key or door, waits for you, turns to you, waves and says hey (only you see it)",
     })
     toggles.GuideEnabled:OnChanged(Handlers.GuideEnabledChanged)
     box:AddButton({
@@ -19865,6 +19884,11 @@ do (function()
       Text = "Walk Speed", Min = 12, Max = 40, Default = settings.speed, Rounding = 0,
       Callback = function(value) settings.speed = value applyLook() end,
     })
+    look:AddSlider("GuideHeight", {
+      Text = "Guide Height", Min = 3, Max = 12, Default = settings.height, Rounding = 1, Suffix = " studs",
+      Tooltip = "Size of the guide. Takes effect after the guide is called again",
+      Callback = function(value) settings.height = value end,
+    })
     look:AddSlider("GuideWaveEvery", {
       Text = "Wave Every", Min = 2, Max = 12, Default = settings.waveEvery, Rounding = 0, Suffix = " s",
       Tooltip = "How often it waves and says hey while waiting for you",
@@ -19875,7 +19899,7 @@ do (function()
       Callback = function(value) settings.volume = value applyLook() end,
     })
     look:AddInput("GuideModelId", {
-      Text = "Bundle / Item ID", Default = tostring(VERITY_ID), Placeholder = "default: Verity",
+      Text = "Bundle / Item ID", Default = tostring(VERITY_ID), Placeholder = "default: BIG Verity",
       Tooltip = "Catalog bundle or item id of the pet. Takes effect after the guide is called again",
       Callback = function(value)
         local id = tonumber(value)
