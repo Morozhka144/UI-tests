@@ -567,7 +567,7 @@ local SECTION_ICONS = {
     ["Miscellaneous"] = "wrench", ["Fun"] = "party-popper", ["Ladders"] = "arrow-up-down", ["Anticheat"] = "shield",
     ["Visuals"] = "eye", ["Archives"] = "archive", ["Anticheat Bypass"] = "shield", ["Archives Addons"] = "puzzle",
     ["Chams & Boxes"] = "box-select", ["Labels"] = "tag", ["Tracers & Arrows"] = "locate", ["Colors"] = "palette",
-    ["Targets"] = "crosshair", ["ESP Preset"] = "wand-sparkles",
+    ["Targets"] = "crosshair", ["Third Person"] = "user", ["Viewmodel"] = "hand", ["Effects"] = "sparkles", ["Swap: Models"] = "box", ["ESP Preset"] = "wand-sparkles",
     ["Post FX Presets"] = "clapperboard", ["Color Grading"] = "palette", ["Bloom / Rays / Blur"] = "sun", ["Depth of Field / Fog"] = "aperture", ["Weather"] = "cloud-snow", ["Vignette"] = "circle",
     ["Screen Filter"] = "sparkles", ["Aura"] = "wand-sparkles", ["Entity Fun"] = "party-popper", ["HUD"] = "layout-dashboard", ["Model Library"] = "box", ["Model Search"] = "search", ["Swap Options"] = "sliders-horizontal",
 }
@@ -2254,9 +2254,8 @@ tabs = {
     { "ESP", "eye", { "Targets", "ESP Preset" } },
     { "ESP Style", "box-select", { "Chams & Boxes", "Labels", "Tracers & Arrows", "Colors" } },
     { "Notifications", "bell", { "Entity Notifications", "Item Notifications" } },
-    { "Camera", "camera", { "Camera" } },
-    { "Models", "box", { "Model Library", "Model Search", "Swap Options", "Swap: Players", "Swap: Figure", "Swap: Seek",
-      "Swap: Rush and clones", "Swap: Ambush and clones", "Swap: A-60 / A-120", "Swap: Eyes / Lookman", "Swap: Companion", "Swap: Custom entity" } },
+    { "Camera", "camera", { "Camera", "Third Person", "Viewmodel", "Effects" } },
+    { "Models", "box", { "Swap: Models" } },
     { "Fun", "party-popper", { "Screen Filter", "Aura", "Entity Fun" } },
     { "Post FX", "clapperboard", { "Post FX Presets", "Color Grading", "Bloom / Rays / Blur", "Depth of Field / Fog", "Weather", "Vignette" } },
     { "HUD", "layout-dashboard", { "HUD" } },
@@ -12383,17 +12382,22 @@ local ESP_FLAGS = {
   ESPBoxThickness = { key = "boxThick", kind = "option" },
   ESPChamsStyle = { key = "chams", kind = "option" },
   ESPNameStyle = { key = "nameStyle", kind = "option" },
-  ESPHpBar = { key = "hpBar", kind = "toggle" },
-  ESPHpText = { key = "hpText", kind = "toggle" },
-  ESPSkeleton = { key = "skeleton", kind = "toggle" },
-  ESPHeadDot = { key = "headDot", kind = "toggle" },
-  ESPLookLine = { key = "lookLine", kind = "toggle" },
   ESPDistFade = { key = "distFade", kind = "toggle" },
 }
 
 local ESP_BASE = {
   ESPBoxStyle = "Rounded Glow", ESPBoxThickness = 1.6, ESPChamsStyle = "Flat", ESPNameStyle = "Pill",
-  ESPHpBar = true, ESPHpText = true, ESPSkeleton = true, ESPHeadDot = true, ESPLookLine = true, ESPDistFade = true,
+  ESPDistFade = true,
+}
+
+-- Health bar, health text, skeleton, head dot and look line only exist for players: one multi-select dropdown
+-- ("flag the presets use" -> label shown in the menu, setting of the ESP engine)
+local ESP_PLAYER_EXTRAS = {
+  { flag = "ESPHpBar", label = "Health Bar", key = "hpBar" },
+  { flag = "ESPHpText", label = "Health Text", key = "hpText" },
+  { flag = "ESPSkeleton", label = "Skeleton", key = "skeleton" },
+  { flag = "ESPHeadDot", label = "Head Dot", key = "headDot" },
+  { flag = "ESPLookLine", label = "Look Line", key = "lookLine" },
 }
 
 local ESP_PRESETS = {
@@ -12418,6 +12422,15 @@ local function applyESPPreset(name)
     local control = spec.kind == "toggle" and toggles[flag] or options[flag]
     pcall(function() control:SetValue(value) end)
   end
+
+  local selection = {}
+  for _, extra in ipairs(ESP_PLAYER_EXTRAS) do
+    local value = preset[extra.flag]
+    if value == nil then value = true end
+    loader:SetSetting(extra.key, value)
+    if value then selection[extra.label] = true end
+  end
+  pcall(function() options.ESPPlayerExtras:SetValue(selection) end)
 
   library:Notify({ Title = "ESP", Description = "Preset: " .. name, Time = 2 })
 end
@@ -12464,29 +12477,18 @@ Menus.ESPLook = function()
     Callback = function(v) loader:SetSetting("nameStyle", v or "Pill") end,
   })
 
-  Groupboxes.Visuals_Labels:AddToggle("ESPHpBar", {
-    Text = "Health Bar", Default = true, Tooltip = "Players only",
-    Callback = function(v) loader:SetSetting("hpBar", v) end,
-  })
-
-  Groupboxes.Visuals_Labels:AddToggle("ESPHpText", {
-    Text = "Health Text", Default = true, Tooltip = "Players only",
-    Callback = function(v) loader:SetSetting("hpText", v) end,
-  })
-
-  Groupboxes.Visuals_Labels:AddToggle("ESPSkeleton", {
-    Text = "Skeleton", Default = true, Tooltip = "Players only",
-    Callback = function(v) loader:SetSetting("skeleton", v) end,
-  })
-
-  Groupboxes.Visuals_Labels:AddToggle("ESPHeadDot", {
-    Text = "Head Dot", Default = true, Tooltip = "Players only",
-    Callback = function(v) loader:SetSetting("headDot", v) end,
-  })
-
-  Groupboxes.Visuals_Labels:AddToggle("ESPLookLine", {
-    Text = "Look Line", Default = true, Tooltip = "Shows where a player is looking",
-    Callback = function(v) loader:SetSetting("lookLine", v) end,
+  local extraLabels = {}
+  for _, extra in ipairs(ESP_PLAYER_EXTRAS) do extraLabels[#extraLabels + 1] = extra.label end
+  Groupboxes.Visuals_Labels:AddDropdown("ESPPlayerExtras", {
+    Text = "Player Extras", Values = extraLabels, Default = extraLabels, Multi = true, AllowNull = true,
+    Tooltip = "Extra info drawn for players only",
+    Callback = function(value)
+      local chosen = {}
+      for k, v in pairs(value or {}) do
+        if type(k) == "number" then chosen[v] = true elseif v == true then chosen[k] = true end
+      end
+      for _, extra in ipairs(ESP_PLAYER_EXTRAS) do loader:SetSetting(extra.key, chosen[extra.label] == true) end
+    end,
   })
 end
 
@@ -17456,6 +17458,11 @@ do (function()
     { "Shark", 1105996, true },
     { "TUNG Sahur", 164815366314625, true },
     { "Withered Golden Freddy", 103872628924571, true },
+    { "Herobrine", 103153167628525, true },
+    { "Shrek", 34356843621214, true },
+    { "Stylized Skeleton", 160527682802304, true },
+    { "Rabbid Classic", 141407388683693, true },
+    { "BIG Verity", 33498031238003, true },
   }
   local presetNames, presetByName = {}, {}
   for _, p in ipairs(PRESETS) do
@@ -18270,7 +18277,7 @@ do (function()
 
   -- ------------------------------------------------------------------ menu (built later from MENU)
   Menus.ModelSwap = function()
-    -- HUD
+    -- HUD: on / off and a color, everything else keeps its default
     Groupboxes.Hud = tabs.Visuals:AddLeftGroupbox("HUD")
     Groupboxes.Hud:AddToggle("RoomCounter", {
       Text = "Room Counter", Default = false, Tooltip = "Shows the current room at the top center of the screen",
@@ -18282,162 +18289,31 @@ do (function()
     toggles.RoomCounter:AddColorPicker("RoomCounterColor", {
       Default = hud.color, Callback = function(color) hud.color = color end,
     })
-    Groupboxes.Hud:AddToggle("RoomCounterFloor", {
-      Text = "Show Floor Name", Default = true, Callback = function(value) hud.showFloor = value end,
-    })
-    Groupboxes.Hud:AddSlider("RoomCounterSize", {
-      Text = "Text Size", Min = 14, Max = 40, Default = hud.size, Rounding = 0, Callback = function(value) hud.size = value end,
-    })
 
-    -- model library
-    local library2 = tabs.Visuals:AddLeftGroupbox("Model Library")
-    local categoryNames = {}
-    for _, cat in ipairs(CATEGORIES) do categoryNames[#categoryNames + 1] = cat.key end
-    local libraryTarget, libraryPreset, libraryId, libraryItem = "Players", presetNames[1], "", ""
-    local statusRow = library2:AddLabel("Status: nothing loaded. Everything here only changes YOUR screen.")
-    statusLabel = statusRow
-    library2:AddDropdown("MS_LibraryTarget", {
-      Text = "Load Into", Values = categoryNames, Default = "Players", Tooltip = "Which target gets the model you load below",
-      Callback = function(value) libraryTarget = value or libraryTarget end,
-    })
-    library2:AddDropdown("MS_LibraryPreset", {
-      Text = "Preset", Values = presetNames, Default = presetNames[1],
-      Callback = function(value) libraryPreset = value or libraryPreset end,
-    })
-    library2:AddButton({ Text = "Load Preset", Callback = function()
-      local preset = presetByName[libraryPreset]
-      if preset then loadTemplate(libraryTarget, preset[2], preset[3]) end
-    end })
-    library2:AddInput("MS_LibraryId", {
-      Text = "Asset ID", Default = "", Placeholder = "e.g. 138151705692565", Numeric = true,
-      Callback = function(text) libraryId = text end,
-    })
-    library2:AddButton({ Text = "Load Asset ID", Callback = function()
-      local id = tonumber(libraryId)
-      if id then loadTemplate(libraryTarget, id, false) else say("Model Swap", "Enter a numeric asset id") end
-    end })
-    library2:AddInput("MS_LibraryItem", {
-      Text = "Marketplace Item", Default = "", Placeholder = "bundle / item link or id",
-      Callback = function(text) libraryItem = text end,
-    })
-    library2:AddButton({ Text = "Load Marketplace Item", Callback = function()
-      local id, kind = parseItemId(libraryItem)
-      if id then loadTemplate(libraryTarget, id, true) else say("Model Swap", kind or "Paste a /bundles/ or /catalog/ link") end
-    end })
-
-    local search = tabs.Visuals:AddRightGroupbox("Model Search")
-    local keyword, results, chosen = "tung tung sahur", {}, nil
-    search:AddLabel("Searches the Roblox toolbox. Scripts and sounds are stripped.")
-    search:AddInput("MS_SearchKeyword", {
-      Text = "Keyword", Default = keyword, Placeholder = "keyword", Callback = function(text) keyword = text end,
-    })
-    search:AddDropdown("MS_SearchResults", {
-      Text = "Results", Values = { "-" }, Default = "-", Callback = function(value) chosen = value end,
-    })
-    search:AddButton({ Text = "Search", Callback = function()
-      say("Model Swap", "Searching...")
-      searchToolbox(keyword, function(list, err)
-        if not list then return say("Model Swap", "Search failed: " .. tostring(err), "error") end
-        results = {}
-        local names = {}
-        for _, item in ipairs(list) do
-          local label = string.format("%s - %s", item.name:sub(1, 38), item.by)
-          local n = 1
-          while results[label] do
-            n = n + 1
-            label = string.format("%s - %s #%d", item.name:sub(1, 34), item.by, n)
-          end
-          results[label] = item.id
-          names[#names + 1] = label
-        end
-        pcall(function() options.MS_SearchResults._raw.Refresh(names) end)
-        say("Model Swap", #names .. " results")
-      end)
-    end })
-    search:AddButton({ Text = "Load Result", Callback = function()
-      local id = chosen and results[chosen]
-      if id then loadTemplate(libraryTarget, id, false) else say("Model Swap", "Pick a result first") end
-    end })
-
-    -- global options
-    local globalBox = tabs.Visuals:AddRightGroupbox("Swap Options")
-    globalBox:AddToggle("MS_HideEffects", {
-      Text = "Hide Original Particles", Default = true, Tooltip = "Also hides smoke / trails of the replaced entity",
-      Callback = function(value) options2.hideEffects = value end,
-    })
-    globalBox:AddButton({ Text = "Remove All Replacements", Callback = function()
-      for _, cat in ipairs(CATEGORIES) do
-        settings[cat.key].mode = "Off"
-        pcall(function() options["MS_" .. cat.key .. "_Mode"]:SetValue("Off") end)
-        if templates[cat.key] and templates[cat.key].model then templates[cat.key].model:Destroy() end
-        templates[cat.key] = nil
-      end
-      dropRecords()
-      setStatus("Status: cleared")
-    end })
-
-    -- one section per target
-    for index, cat in ipairs(CATEGORIES) do
-      local conf = settings[cat.key]
-      local box = (index % 2 == 1) and tabs.Visuals:AddLeftGroupbox("Swap: " .. cat.title) or tabs.Visuals:AddRightGroupbox("Swap: " .. cat.title)
-      local flag = "MS_" .. cat.key
-      box:AddDropdown(flag .. "_Mode", {
-        Text = "Replace With", Values = cat.players and { "Off", "Model" } or { "Off", "Model", "Sprite" }, Default = "Off",
-        Tooltip = "Model = the 3D model loaded for this target. Sprite = a flat PNG that always faces you",
-        Callback = function(value) conf.mode = value or "Off" end,
-      })
-      if cat.players then
-        box:AddDropdown(flag .. "_Scope", {
-          Text = "Who", Values = { "Everyone", "Me only", "Others only" }, Default = "Everyone",
-          Callback = function(value) conf.scope = value or "Everyone"; dropRecords() end,
-        })
-      end
-      if cat.key == "Custom" then
-        box:AddInput(flag .. "_Names", {
-          Text = "Entity Names", Default = "", Placeholder = "model names in workspace, separated by commas",
-          Callback = function(text) conf.customNames = text end,
-        })
-      end
-      box:AddSlider(flag .. "_Height", {
-        Text = "Height", Min = 1, Max = 30, Default = conf.height, Rounding = 1, Suffix = " st",
-        Callback = function(value) conf.height = value end,
-      })
-      box:AddSlider(flag .. "_Yaw", {
-        Text = "Rotation", Min = 0, Max = 360, Default = 0, Rounding = 0, Suffix = " deg",
-        Callback = function(value) conf.yaw = value end,
-      })
-      box:AddSlider(flag .. "_YOff", {
-        Text = "Vertical Offset", Min = -5, Max = 5, Default = 0, Rounding = 1,
-        Callback = function(value) conf.yoff = value end,
-      })
-      -- animation, speech bubble and sprites exist for entities only (player models follow the real skeleton)
-      if not cat.players then
-        box:AddDropdown(flag .. "_Anim", {
-          Text = "Animation", Values = { "None", "Bob", "Spin", "Wobble" }, Default = conf.anim,
-          Tooltip = "Extra movement on top of the target (Spin is for models, sprites always face you)",
-          Callback = function(value) conf.anim = value or "None" end,
-        })
-        box:AddInput(flag .. "_Bubble", {
-          Text = "Speech Bubble", Default = "", Placeholder = "phrases separated with ;",
-          Callback = function(text) conf.bubble = text or "" end,
-        })
-        box:AddInput(flag .. "_Image", {
-          Text = "Sprite Image", Default = "", Placeholder = "asset id or link to a PNG",
-          Callback = function(text) spriteTexts[cat.key] = text end,
-        })
-        box:AddButton({ Text = "Load Sprite", Callback = function()
-          local image, why = resolveImage(spriteTexts[cat.key])
-          if image then
-            spriteImages[cat.key] = image
-            if conf.mode == "Off" then
-              conf.mode = "Sprite"
-              pcall(function() options[flag .. "_Mode"]:SetValue("Sprite") end)
+    -- one dropdown per target: pick a ready model (or Off). Everything here only changes YOUR screen.
+    local models = tabs.Visuals:AddLeftGroupbox("Swap: Models")
+    local choices = { "Off" }
+    for _, name in ipairs(presetNames) do choices[#choices + 1] = name end
+    for _, cat in ipairs(CATEGORIES) do
+      if cat.key ~= "Custom" then
+        local conf = settings[cat.key]
+        models:AddDropdown("MS_" .. cat.key, {
+          Text = cat.title, Values = choices, Default = "Off",
+          Callback = function(value)
+            local preset = value and presetByName[value]
+            if not preset then
+              conf.mode = "Off"
+              dropRecords()
+              return
             end
-            say("Model Swap", cat.title .. ": sprite ready")
-          else
-            say("Model Swap", why or "Type an asset id or a link to a PNG", "error")
-          end
-        end })
+            if templates[cat.key] and templates[cat.key].id == preset[2] then
+              conf.mode = "Model"
+              dropRecords()
+            else
+              loadTemplate(cat.key, preset[2], preset[3])
+            end
+          end,
+        })
       end
     end
   end
@@ -20990,6 +20866,9 @@ options.ShowSeekPathColor:OnChanged(function(value) setPathColor(worldObjects.Se
 toggles.AutoSteerMinecart:OnChanged(Handlers.AutoSteerMinecartChanged)
 
 Groupboxes.Visuals_Camera = tabs.Visuals:AddRightGroupbox("Camera")
+Groupboxes.Visuals_ThirdPerson = tabs.Visuals:AddRightGroupbox("Third Person")
+Groupboxes.Visuals_Viewmodel = tabs.Visuals:AddRightGroupbox("Viewmodel")
+Groupboxes.Visuals_Effects = tabs.Visuals:AddRightGroupbox("Effects")
 
 Groupboxes.Visuals_Camera:AddToggle("Fullbright", {
   Text = "Fullbright", Default = false, Tooltip = "Makes your game very bright, and removes shadows", })
@@ -21009,43 +20888,39 @@ toggles.AmbientToggle:OnChanged(Handlers.AmbientToggleChanged)
 
 options.AmbientColor:OnChanged(Handlers.AmbientColorChanged)
 
-Groupboxes.Visuals_Camera:AddDivider()
-
 Groupboxes.Visuals_Camera:AddSlider("FieldOfView", {
   Text = "Field of View", Min = 70, Max = 120, Default = 70, Rounding = 0, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddToggle("ThirdPerson", {
+Groupboxes.Visuals_ThirdPerson:AddToggle("ThirdPerson", {
   Text = "Third Person", Default = false, Tooltip = "Puts your camera in a third person view", })
 
 toggles.ThirdPerson:AddKeyPicker("ThirdPersonKeybind", {
   Text = "Third Person", Default = "V", Mode = "Toggle", SyncToggleState = true, })
 
-Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetX", {
+Groupboxes.Visuals_ThirdPerson:AddSlider("ThirdPersonOffsetX", {
   Text = "X Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetY", {
+Groupboxes.Visuals_ThirdPerson:AddSlider("ThirdPersonOffsetY", {
   Text = "Y Offset", Min = -10, Max = 10, Default = 0.5, Rounding = 1, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddSlider("ThirdPersonOffsetZ", {
+Groupboxes.Visuals_ThirdPerson:AddSlider("ThirdPersonOffsetZ", {
   Text = "Z Offset", Min = -10, Max = 10, Default = 7.5, Rounding = 1, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddToggle("ThirdPersonWallCheck", {
+Groupboxes.Visuals_ThirdPerson:AddToggle("ThirdPersonWallCheck", {
   Text = "Wall Check", Default = false, Tooltip = "Prevents third person camera from going through walls", })
 
 toggles.ThirdPerson:OnChanged(refreshThirdPerson)
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("ViewmodelOffsetToggle", {
+Groupboxes.Visuals_Viewmodel:AddToggle("ViewmodelOffsetToggle", {
   Text = "Viewmodel Offset", Default = false, Tooltip = "Changes the offset of your viewmodel while holding an item.", })
 
-Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetX", {
+Groupboxes.Visuals_Viewmodel:AddSlider("ViewmodelOffsetX", {
   Text = "X Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetY", {
+Groupboxes.Visuals_Viewmodel:AddSlider("ViewmodelOffsetY", {
   Text = "Y Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddSlider("ViewmodelOffsetZ", {
+Groupboxes.Visuals_Viewmodel:AddSlider("ViewmodelOffsetZ", {
   Text = "Z Offset", Min = -10, Max = 10, Default = 0, Rounding = 1, Compact = true, })
 
 Groupboxes.Visuals_Camera:AddToggle("FreecamToggle", {
@@ -21057,49 +20932,39 @@ toggles.FreecamToggle:AddKeyPicker("FreecamKeybind", {
 Groupboxes.Visuals_Camera:AddSlider("FreecamSpeed", {
   Text = "Freecam Speed", Min = 10, Max = 300, Default = 75, Rounding = 0, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("RemoveCameraBobbing", {
+Groupboxes.Visuals_Effects:AddToggle("RemoveCameraBobbing", {
   Text = "Remove Camera Bobbing", Default = false, Tooltip = "Removes camera 'bobbing'", })
 
-Groupboxes.Visuals_Camera:AddToggle("RemoveCameraShake", {
+Groupboxes.Visuals_Effects:AddToggle("RemoveCameraShake", {
   Text = "Remove Camera Shake", Default = false, Tooltip = "Removes camera shake", })
 
-Groupboxes.Visuals_Camera:AddToggle("RemoveCameraFog", {
+Groupboxes.Visuals_Effects:AddToggle("RemoveCameraFog", {
   Text = "Remove Fog", Default = false, Tooltip = "Removes camera fog", })
 
-Groupboxes.Visuals_Camera:AddToggle("DisableFiredampEffect", {
+Groupboxes.Visuals_Effects:AddToggle("DisableFiredampEffect", {
   Text = "Remove Firedamp Effect", Default = false, Tooltip = "Removes the firedamp fog/effect when inside a room", })
 
 toggles.FreecamToggle:OnChanged(Handlers.FreecamToggleChanged)
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("NotifyOxygen", {
+Groupboxes.Visuals_Effects:AddToggle("NotifyOxygen", {
   Text = "Oxygen Notifications", Default = false, Tooltip = "Shows a notification when your oxygen level changes", })
 
-Groupboxes.Visuals_Camera:AddToggle("NotifyHasteTime", {
+Groupboxes.Visuals_Effects:AddToggle("NotifyHasteTime", {
   Text = "Haste/Time Notifications", Default = false, Tooltip = "Shows a notification of the remaining time before Haste spawns", })
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("TransparentHidingSpotsToggle", {
+Groupboxes.Visuals_Effects:AddToggle("TransparentHidingSpotsToggle", {
   Text = "Transparent Hiding Spots", Default = false, Tooltip = "Makes a hiding spot transparent when you enter it", })
 
-Groupboxes.Visuals_Camera:AddSlider("TransparentHidingSpotsSlider", {
+Groupboxes.Visuals_Effects:AddSlider("TransparentHidingSpotsSlider", {
   Text = "Transparency", Min = 0, Max = 1, Default = 0.5, Rounding = 2, Compact = true, })
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("DisableJumpscares", {
+Groupboxes.Visuals_Effects:AddToggle("DisableJumpscares", {
   Text = "Disable Jumpscares", Default = false, Tooltip = "Removes jumpscares from the chosen entities", })
 
-Groupboxes.Visuals_Camera:AddDropdown("JumpscaresList", {
+Groupboxes.Visuals_Effects:AddDropdown("JumpscaresList", {
   Text = "Jumpscares To Disable", Values = { "Glitch", "Timothy", "Void", "Rush", "Ambush", "Screech", "Figure", "Seek" }, Multi = true, AllowNull = true, })
 
-Groupboxes.Visuals_Camera:AddDivider()
-
-Groupboxes.Visuals_Camera:AddToggle("RemoveCutscenes", {
+Groupboxes.Visuals_Effects:AddToggle("RemoveCutscenes", {
   Text = "Remove Cutscenes", Default = false, Tooltip = "Removes cutscenes that aren't needed for progression", })
 
 toggles.RemoveCutscenes:OnChanged(Handlers.RemoveCutscenesChanged)
