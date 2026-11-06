@@ -19487,7 +19487,7 @@ do (function()
   local ANIMATIONS = { walk = "rbxassetid://507777826", idle = "rbxassetid://507766666", wave = "rbxassetid://507770239" }
 
   local settings = { on = false, speed = 24, waveEvery = 4, volume = 0.8, xray = true, color = Color3.fromRGB(130, 200, 255), modelId = VERITY_ID, height = 5.5 }
-  local guide = { rig = nil, hum = nil, root = nil, tracks = {}, sound = nil, highlight = nil, key = nil, lastGreet = 0, failures = 0, scale = 1 }
+  local guide = { rig = nil, hum = nil, root = nil, tracks = {}, sound = nil, highlight = nil, key = nil, lastGreet = 0, failures = 0, scale = 1, parts = {} }
   local statusLabel
 
   local function setStatus(text)
@@ -19530,6 +19530,7 @@ do (function()
     guide.tracks = {}
     if guide.rig then pcall(function() guide.rig:Destroy() end) end
     guide.rig, guide.hum, guide.root, guide.sound, guide.highlight, guide.key = nil, nil, nil, nil, nil, nil
+    guide.parts = {}
   end
 
   local function applyLook()
@@ -19554,10 +19555,11 @@ do (function()
     local root = rig:FindFirstChild("HumanoidRootPart")
     if not (hum and root) then rig:Destroy() return false, "the model has no humanoid" end
 
+    guide.parts = {}
     for _, child in ipairs(rig:GetDescendants()) do
       if child:IsA("BasePart") then
-        child.CanCollide = false
         child.Anchored = false
+        guide.parts[#guide.parts + 1] = child
       elseif child:IsA("Script") or child:IsA("LocalScript") then
         child:Destroy()
       end
@@ -19670,12 +19672,61 @@ do (function()
     return nil
   end
 
+  -- Things the guide helps to find: books and the hint paper in the library, fuses / keys / levers in room 100.
+  -- It stands next to the nearest one (highest priority first) until you have taken it.
+  local OBJECTIVES = {
+    [50] = {
+      { names = { LiveHintBook = "book" }, priority = 1 },
+      { names = { LibraryHintPaper = "hint paper", PickupItem = "hint paper" }, priority = 2 },
+    },
+    [100] = {
+      { names = { FusePickup = "fuse", FuseObtain = "fuse", LiveBreakerPolePickup = "fuse" }, priority = 1 },
+      { names = { ElectricalKeyObtain = "electrical key", KeyElectrical = "electrical key" }, priority = 2 },
+      { names = { LeverForGate = "gate lever" }, priority = 3 },
+      { names = { ElevatorBreaker = "breaker box" }, priority = 4 },
+      { names = { ElevatorCar = "elevator" }, priority = 5 },
+    },
+  }
+
+  local function hasLivePrompt(inst)
+    if not inst.Parent then return false end
+    if inst:IsA("ProximityPrompt") then return inst.Enabled end
+    for _, descendant in ipairs(inst:GetDescendants()) do
+      if descendant:IsA("ProximityPrompt") and descendant.Enabled then return true end
+    end
+    return false
+  end
+
+  local function objectiveTarget(number, room)
+    local groups = OBJECTIVES[number]
+    if not groups or not guide.root then return nil end
+    local best, bestPriority, bestDistance = nil, math.huge, math.huge
+    for _, descendant in ipairs(room:GetDescendants()) do
+      for _, group in ipairs(groups) do
+        local label = group.names[descendant.Name]
+        if label and (descendant:IsA("Model") or descendant:IsA("BasePart")) and hasLivePrompt(descendant) then
+          local position = positionOf(descendant)
+          if position then
+            local distance = (position - guide.root.Position).Magnitude
+            if group.priority < bestPriority or (group.priority == bestPriority and distance < bestDistance) then
+              best, bestPriority, bestDistance = { kind = "item", inst = descendant, position = position, room = number, label = label }, group.priority, distance
+            end
+          end
+        end
+      end
+    end
+    return best
+  end
+
   -- First unopened door from your room onwards (a teammate may have opened the ones before it).
   -- A locked door sends the guide to its key first and keeps it there until you pick the key up.
   local function pickTarget()
     local folder = workspace:FindFirstChild("CurrentRooms")
     if not folder then return nil end
     local current, latest = roomNumbers()
+    local here = folder:FindFirstChild(tostring(current))
+    local objective = here and objectiveTarget(current, here)
+    if objective then return objective end
     for number = current, latest do
       local room = folder:FindFirstChild(tostring(number))
       local door = room and exitDoor(room, number)
@@ -19706,7 +19757,7 @@ do (function()
   -- Where the guide stands: next to a key, or in front of a door on the side it arrives from.
   local function standPoint(target)
     local ignore = { guide.rig, localPlayer.Character }
-    if target.kind == "key" then
+    if target.kind == "key" or target.kind == "item" then
       return Vector3.new(target.position.X, floorY(target.position, ignore), target.position.Z), 3.5 * guide.scale
     end
     local look = target.part.CFrame.LookVector
@@ -19752,6 +19803,18 @@ do (function()
     if guide.sound and guide.sound.SoundId ~= "" then guide.sound:Play() end
     guide.lastGreet = os.clock()
   end
+
+  -- Fully visual: no collision, no touch events, invisible to raycasts. The Humanoid keeps switching collision
+  -- back on for its limbs, so it is cleared again on every physics step.
+  local collisionConnection = runService.Stepped:Connect(function()
+    for _, part in ipairs(guide.parts) do
+      if part.Parent then
+        part.CanCollide = false
+        part.CanTouch = false
+        part.CanQuery = false
+      end
+    end
+  end)
 
   -- Walk / idle animation follows the actual movement.
   local animationConnection = runService.Heartbeat:Connect(function()
@@ -19814,7 +19877,7 @@ do (function()
             local goal, stopDistance = standPoint(target)
             local distance = flat(goal - guide.root.Position).Magnitude
             if distance > stopDistance + 1.5 then
-              setStatus((target.kind == "key" and "going to the key (room " or "going to the door (room ") .. target.room .. ")")
+              setStatus((target.kind == "door" and "going to the door (room " or ("going to the " .. (target.label or "key") .. " (room ")) .. target.room .. ")")
               local reached = walkTo(goal, stopDistance, function()
                 local latest = currentTarget()
                 return latest ~= nil and targetKey(latest) == key
@@ -19831,7 +19894,7 @@ do (function()
                 task.wait(0.3)
               end
             else
-              setStatus((target.kind == "key" and "waiting for you to take the key" or "waiting by the door") .. " (room " .. target.room .. ")")
+              setStatus((target.kind == "door" and "waiting by the door" or ("waiting for you to take the " .. (target.label or "key"))) .. " (room " .. target.room .. ")")
               if mine and (mine.Position - target.position).Magnitude > 12 and os.clock() - guide.lastGreet >= settings.waveEvery then
                 greet()
               end
@@ -19852,6 +19915,7 @@ do (function()
     alive = false
     settings.on = false
     pcall(function() animationConnection:Disconnect() end)
+    pcall(function() collisionConnection:Disconnect() end)
     destroyRig()
   end)
 
