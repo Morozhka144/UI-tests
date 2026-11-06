@@ -2286,6 +2286,7 @@ tabs = {
     { "Addons", "puzzle", { "Archives Addons" } },
   }),
   Stairwell = moroWindow:AddTab("Stairwell", "tv"),
+  Guide = moroWindow:AddTab("Guide", "compass"),
 }
 moroWindow:AddSettingsTab()
 do
@@ -17615,6 +17616,8 @@ do (function()
     return { rig }
   end
 
+  featureState.MarketModel = marketModel   -- reused by the Guide pet
+
   local loading = false
   local function dropRecords()
     for instance, record in pairs(records) do
@@ -19470,6 +19473,419 @@ do (function()
   end
 end)() end
 
+-- =====================================================================
+--  GUIDE: a pet (Verity by default) that walks to the next key / door through the rooms, turns to you,
+--  waves and says "hey". It is a real R15 rig walking on a navmesh path, so it never cuts through walls,
+--  and an always-on-top highlight keeps it visible behind them. Client-side only.
+-- =====================================================================
+do (function()
+  local alive = true
+  local VERITY_ID = 235686917499405
+  local SOUND_FOLDER, SOUND_FILE = "moro/Guide", "moro/Guide/hey.mp3"
+  local SOUND_URL = "https://raw.githubusercontent.com/Morozhka144/UI-tests/main/hey.mp3"
+  -- Roblox's stock R15 animations
+  local ANIMATIONS = { walk = "rbxassetid://507777826", idle = "rbxassetid://507766666", wave = "rbxassetid://507770239" }
+
+  local settings = { on = false, speed = 24, waveEvery = 4, volume = 0.8, xray = true, color = Color3.fromRGB(130, 200, 255), modelId = VERITY_ID }
+  local guide = { rig = nil, hum = nil, root = nil, tracks = {}, sound = nil, highlight = nil, key = nil, lastGreet = 0, failures = 0 }
+  local statusLabel
+
+  local function setStatus(text)
+    if statusLabel then pcall(function() statusLabel:SetText("Status: " .. text) end) end
+  end
+
+  local function playerRoot()
+    local character = localPlayer.Character
+    return character and character:FindFirstChild("HumanoidRootPart")
+  end
+
+  local function flat(vector) return Vector3.new(vector.X, 0, vector.Z) end
+
+  local function floorY(position, ignore)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = ignore
+    local hit = workspace:Raycast(position + Vector3.new(0, 6, 0), Vector3.new(0, -30, 0), params)
+    return hit and hit.Position.Y or position.Y
+  end
+
+  -- ------------------------------------------------------------------ the "hey" sound
+  local function heySoundAsset()
+    if not (writefile and getcustomasset and isfile) then return nil, "executor has no writefile/getcustomasset" end
+    pcall(function() if makefolder and isfolder and not isfolder("moro") then makefolder("moro") end end)
+    pcall(function() if makefolder and isfolder and not isfolder(SOUND_FOLDER) then makefolder(SOUND_FOLDER) end end)
+    if not isfile(SOUND_FILE) then
+      local ok, data = pcall(function() return game:HttpGet(SOUND_URL) end)
+      if not ok or type(data) ~= "string" or #data < 1000 then return nil, "could not download hey.mp3" end
+      if not pcall(writefile, SOUND_FILE, data) then return nil, "could not save hey.mp3" end
+    end
+    local ok, asset = pcall(getcustomasset, SOUND_FILE)
+    if not ok or not asset then return nil, "could not load hey.mp3" end
+    return asset
+  end
+
+  -- ------------------------------------------------------------------ the rig
+  local function destroyRig()
+    for _, track in pairs(guide.tracks) do pcall(function() track:Stop() end) end
+    guide.tracks = {}
+    if guide.rig then pcall(function() guide.rig:Destroy() end) end
+    guide.rig, guide.hum, guide.root, guide.sound, guide.highlight, guide.key = nil, nil, nil, nil, nil, nil
+  end
+
+  local function applyLook()
+    if guide.highlight then
+      guide.highlight.Enabled = settings.xray
+      guide.highlight.FillColor = settings.color
+      guide.highlight.OutlineColor = settings.color
+    end
+    if guide.sound then guide.sound.Volume = settings.volume end
+    if guide.hum then guide.hum.WalkSpeed = settings.speed end
+  end
+
+  local function spawnRig()
+    destroyRig()
+    local build = featureState.MarketModel
+    if not build then return false, "Model Swap is not loaded" end
+    local ok, result, why = pcall(build, settings.modelId)
+    local rig = ok and result and result[1] or nil
+    if not rig then return false, tostring(ok and why or result) end
+
+    local hum = rig:FindFirstChildOfClass("Humanoid")
+    local root = rig:FindFirstChild("HumanoidRootPart")
+    if not (hum and root) then rig:Destroy() return false, "the model has no humanoid" end
+
+    for _, child in ipairs(rig:GetDescendants()) do
+      if child:IsA("BasePart") then
+        child.CanCollide = false
+        child.Anchored = false
+      elseif child:IsA("Script") or child:IsA("LocalScript") then
+        child:Destroy()
+      end
+    end
+    hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    hum.BreakJointsOnDeath = false
+    hum.AutoRotate = true
+    rig.Name = "MoroGuide"
+
+    local mine = playerRoot()
+    local origin = mine and (mine.Position + Vector3.new(2, 0, 3)) or Vector3.new(0, 5, 0)
+    rig.Parent = workspace
+    rig:PivotTo(CFrame.new(origin.X, floorY(origin, { rig, localPlayer.Character }) + hum.HipHeight + 1.5, origin.Z))
+    root.AssemblyLinearVelocity = Vector3.zero
+
+    local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+    for name, id in pairs(ANIMATIONS) do
+      local animation = Instance.new("Animation")
+      animation.AnimationId = id
+      local loaded = animator:LoadAnimation(animation)
+      loaded.Priority = name == "wave" and Enum.AnimationPriority.Action or Enum.AnimationPriority.Movement
+      loaded.Looped = name ~= "wave"
+      guide.tracks[name] = loaded
+    end
+
+    local sound = Instance.new("Sound")
+    sound.Name = "GuideHey"
+    sound.RollOffMode = Enum.RollOffMode.Linear
+    sound.RollOffMaxDistance = 160
+    local asset, reason = heySoundAsset()
+    if asset then
+      sound.SoundId = asset
+    else
+      setStatus("no sound: " .. tostring(reason))
+    end
+    sound.Parent = root
+
+    local highlight = Instance.new("Highlight")
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillTransparency = 0.75
+    highlight.OutlineTransparency = 0
+    highlight.Adornee = rig
+    highlight.Parent = rig
+
+    guide.rig, guide.hum, guide.root, guide.sound, guide.highlight = rig, hum, root, sound, highlight
+    applyLook()
+    return true
+  end
+
+  -- ------------------------------------------------------------------ what to walk to
+  local function roomNumbers()
+    local gameData = replicatedStorage:FindFirstChild("GameData")
+    local latestValue = gameData and gameData:FindFirstChild("LatestRoom")
+    local current = tonumber(localPlayer:GetAttribute("CurrentRoom")) or 0
+    return current, math.max(current, latestValue and tonumber(latestValue.Value) or current)
+  end
+
+  -- The exit door of a room; when a room has several (Seek corridors), the one whose sign shows the next number.
+  local function exitDoor(room, number)
+    local candidates = {}
+    for _, child in ipairs(room:GetChildren()) do
+      if child.Name == "Door" and child:IsA("Model") then candidates[#candidates + 1] = child end
+    end
+    if #candidates <= 1 then return candidates[1] end
+    for _, door in ipairs(candidates) do
+      local sign = door:FindFirstChild("Sign")
+      local label = sign and sign:FindFirstChildWhichIsA("TextLabel", true)
+      if label and label.Text == tostring(number + 1) then return door end
+    end
+    for _, door in ipairs(candidates) do
+      if not (door:FindFirstChild("Board") or door:FindFirstChild("Plank") or door:FindFirstChild("Barricade")) then return door end
+    end
+    return candidates[1]
+  end
+
+  local function isLocked(door)
+    local lock = door:FindFirstChild("Lock")
+    return lock ~= nil and lock:FindFirstChildWhichIsA("ProximityPrompt", true) ~= nil and door:GetAttribute("Opened") ~= true
+  end
+
+  local function holdsKeyFor(lockId)
+    for _, container in ipairs({ localPlayer.Character, localPlayer:FindFirstChildOfClass("Backpack") }) do
+      if container then
+        for _, tool in ipairs(container:GetChildren()) do
+          if tool:IsA("Tool") and string.find(string.lower(tool.Name), "key", 1, true) and not string.find(string.lower(tool.Name), "skeleton", 1, true) then
+            local id = tool:GetAttribute("LockID")
+            if id == nil or id == lockId then return true end
+          end
+        end
+      end
+    end
+    return false
+  end
+
+  local function positionOf(inst)
+    if inst:IsA("Model") then return inst:GetPivot().Position end
+    if inst:IsA("BasePart") then return inst.Position end
+    return nil
+  end
+
+  -- First unopened door from your room onwards (a teammate may have opened the ones before it).
+  -- A locked door sends the guide to its key first and keeps it there until you pick the key up.
+  local function pickTarget()
+    local folder = workspace:FindFirstChild("CurrentRooms")
+    if not folder then return nil end
+    local current, latest = roomNumbers()
+    for number = current, latest do
+      local room = folder:FindFirstChild(tostring(number))
+      local door = room and exitDoor(room, number)
+      if door and door:GetAttribute("Opened") ~= true then
+        if isLocked(door) and not holdsKeyFor(door:GetAttribute("RoomID")) then
+          local key = room:FindFirstChild("KeyObtain", true)
+          local keyPosition = key and key.Parent and positionOf(key)
+          if keyPosition then
+            return { kind = "key", inst = key, position = keyPosition, room = number }
+          end
+        end
+        local part = door:FindFirstChild("Door") or door.PrimaryPart
+        if part then
+          return { kind = "door", inst = door, part = part, position = part.Position, room = number }
+        end
+      end
+    end
+    return nil
+  end
+
+  local targetCache = { at = 0, value = nil }
+  local function currentTarget()
+    local now = os.clock()
+    if now - targetCache.at > 0.3 then targetCache.at, targetCache.value = now, pickTarget() end
+    return targetCache.value
+  end
+
+  -- Where the guide stands: next to a key, or in front of a door on the side it arrives from.
+  local function standPoint(target)
+    local ignore = { guide.rig, localPlayer.Character }
+    if target.kind == "key" then
+      return Vector3.new(target.position.X, floorY(target.position, ignore), target.position.Z), 3.5
+    end
+    local look = target.part.CFrame.LookVector
+    local normal = flat(look).Magnitude > 0.01 and flat(look).Unit or Vector3.new(0, 0, 1)
+    local side = (flat(guide.root.Position - target.position)):Dot(normal) >= 0 and 1 or -1
+    local point = target.position + normal * side * 5
+    return Vector3.new(point.X, floorY(point, ignore), point.Z), 2.5
+  end
+
+  -- ------------------------------------------------------------------ walking
+  local function walkTo(goal, stopDistance, stillWanted)
+    local hum, root = guide.hum, guide.root
+    local path = pathfindingService:CreatePath({ AgentRadius = 1.8, AgentHeight = 5, AgentCanJump = false, WaypointSpacing = 5 })
+    local computed = pcall(function() path:ComputeAsync(root.Position, goal) end)
+    if not computed or path.Status ~= Enum.PathStatus.Success then return false end
+    local waypoints = path:GetWaypoints()
+    for index = 2, #waypoints do
+      if not (alive and settings.on and guide.root and stillWanted()) then return false end
+      hum:MoveTo(waypoints[index].Position)
+      local started = os.clock()
+      while alive and settings.on and guide.root and stillWanted() do
+        local remaining = flat(waypoints[index].Position - root.Position).Magnitude
+        if remaining < 2.5 then break end
+        if flat(goal - root.Position).Magnitude <= stopDistance then hum:Move(Vector3.zero) return true end
+        if os.clock() - started > 3 then return false end   -- blocked: ask for a fresh path
+        task.wait(0.1)
+      end
+    end
+    hum:Move(Vector3.zero)
+    return flat(goal - root.Position).Magnitude <= stopDistance + 2
+  end
+
+  -- ------------------------------------------------------------------ greeting
+  local function greet()
+    local hum, root, mine = guide.hum, guide.root, playerRoot()
+    if not (hum and root and mine) then return end
+    hum:Move(Vector3.zero)
+    local toPlayer = flat(mine.Position - root.Position)
+    if toPlayer.Magnitude > 0.2 then
+      root.CFrame = CFrame.lookAt(root.Position, root.Position + toPlayer)
+    end
+    if guide.tracks.wave then guide.tracks.wave:Play(0.15) end
+    if guide.sound and guide.sound.SoundId ~= "" then guide.sound:Play() end
+    guide.lastGreet = os.clock()
+  end
+
+  -- Walk / idle animation follows the actual movement.
+  local animationConnection = runService.Heartbeat:Connect(function()
+    local hum, root = guide.hum, guide.root
+    if not (hum and root and root.Parent) then return end
+    local moving = flat(root.AssemblyLinearVelocity).Magnitude > 1
+    local walk, idle = guide.tracks.walk, guide.tracks.idle
+    if not (walk and idle) then return end
+    if moving then
+      if not walk.IsPlaying then walk:Play(0.2) end
+      if idle.IsPlaying then idle:Stop(0.2) end
+      walk:AdjustSpeed(math.clamp(flat(root.AssemblyLinearVelocity).Magnitude / 12, 0.6, 2.2))
+    else
+      if walk.IsPlaying then walk:Stop(0.2) end
+      if not idle.IsPlaying then idle:Play(0.2) end
+    end
+  end)
+
+  -- ------------------------------------------------------------------ brain
+  local function targetKey(target) return target.kind .. ":" .. tostring(target.inst) end
+
+  task.spawn(function()
+    while alive and not _Unloading do
+      if not settings.on then
+        if guide.rig then destroyRig() setStatus("off") end
+        task.wait(0.5)
+      else
+        if not (guide.rig and guide.rig.Parent and guide.hum and guide.hum.Health > 0) then
+          setStatus("calling the guide...")
+          local ok, reason = spawnRig()
+          if not ok then
+            setStatus("error: " .. tostring(reason))
+            settings.on = false
+            pcall(function() toggles.GuideEnabled:SetValue(false) end)
+          end
+        else
+          applyLook()
+          local mine = playerRoot()
+          local target = mine and currentTarget()
+          -- lost: far from you with nothing to walk to, or stuck for good — come back next to you
+          if mine and flat(mine.Position - guide.root.Position).Magnitude > 140 and not target then
+            guide.rig:PivotTo(CFrame.new(mine.Position + Vector3.new(2, 1, 3)))
+          end
+          if not target then
+            setStatus("waiting for the next room")
+            guide.hum:Move(Vector3.zero)
+            task.wait(0.4)
+          else
+            local key = targetKey(target)
+            if key ~= guide.key then
+              guide.key, guide.failures, guide.lastGreet = key, 0, 0
+            end
+            local goal, stopDistance = standPoint(target)
+            local distance = flat(goal - guide.root.Position).Magnitude
+            if distance > stopDistance + 1.5 then
+              setStatus((target.kind == "key" and "going to the key (room " or "going to the door (room ") .. target.room .. ")")
+              local reached = walkTo(goal, stopDistance, function()
+                local latest = currentTarget()
+                return latest ~= nil and targetKey(latest) == key
+              end)
+              if reached then
+                guide.failures = 0
+              else
+                guide.failures = guide.failures + 1
+                if guide.failures >= 4 and mine then
+                  -- no route found four times: bring the guide back to you instead of cutting through walls
+                  guide.rig:PivotTo(CFrame.new(mine.Position + Vector3.new(2, 1, 3)))
+                  guide.failures = 0
+                end
+                task.wait(0.3)
+              end
+            else
+              setStatus((target.kind == "key" and "waiting for you to take the key" or "waiting by the door") .. " (room " .. target.room .. ")")
+              if mine and (mine.Position - target.position).Magnitude > 12 and os.clock() - guide.lastGreet >= settings.waveEvery then
+                greet()
+              end
+              task.wait(0.2)
+            end
+          end
+        end
+      end
+    end
+  end)
+
+  function Handlers.GuideEnabledChanged(value)
+    settings.on = value
+    if not value then destroyRig() setStatus("off") end
+  end
+
+  library:OnUnload(function()
+    alive = false
+    settings.on = false
+    pcall(function() animationConnection:Disconnect() end)
+    destroyRig()
+  end)
+
+  -- ------------------------------------------------------------------ menu (built later from MENU)
+  Menus.Guide = function()
+    local box = tabs.Guide:AddLeftGroupbox("Guide")
+    statusLabel = box:AddLabel("Status: off")
+    box:AddToggle("GuideEnabled", {
+      Text = "Enable Guide", Default = false,
+      Tooltip = "A Verity pet walks to the next key or door, waits for you, turns to you, waves and says hey (only you see it)",
+    })
+    toggles.GuideEnabled:OnChanged(Handlers.GuideEnabledChanged)
+    box:AddButton({
+      Text = "Call Guide to me", Tooltip = "Brings the guide back next to you",
+      Func = function()
+        local mine = playerRoot()
+        if guide.rig and mine then guide.rig:PivotTo(CFrame.new(mine.Position + Vector3.new(2, 1, 3))) end
+      end,
+    })
+
+    local look = tabs.Guide:AddRightGroupbox("Look and sound")
+    look:AddToggle("GuideXray", {
+      Text = "Visible Through Walls", Default = true, Tooltip = "Highlights the guide on top of everything",
+      Callback = function(value) settings.xray = value applyLook() end,
+    })
+    toggles.GuideXray:AddColorPicker("GuideColor", {
+      Default = settings.color, Callback = function(color) settings.color = color applyLook() end,
+    })
+    look:AddSlider("GuideSpeed", {
+      Text = "Walk Speed", Min = 12, Max = 40, Default = settings.speed, Rounding = 0,
+      Callback = function(value) settings.speed = value applyLook() end,
+    })
+    look:AddSlider("GuideWaveEvery", {
+      Text = "Wave Every", Min = 2, Max = 12, Default = settings.waveEvery, Rounding = 0, Suffix = " s",
+      Tooltip = "How often it waves and says hey while waiting for you",
+      Callback = function(value) settings.waveEvery = value end,
+    })
+    look:AddSlider("GuideVolume", {
+      Text = "Hey Volume", Min = 0, Max = 2, Default = settings.volume, Rounding = 1,
+      Callback = function(value) settings.volume = value applyLook() end,
+    })
+    look:AddInput("GuideModelId", {
+      Text = "Bundle / Item ID", Default = tostring(VERITY_ID), Placeholder = "default: Verity",
+      Tooltip = "Catalog bundle or item id of the pet. Takes effect after the guide is called again",
+      Callback = function(value)
+        local id = tonumber(value)
+        if id then settings.modelId = id end
+      end,
+    })
+  end
+end)() end
+
+
 
 -- =====================================================================
 --  MENU
@@ -20691,6 +21107,7 @@ Menus.ModelSwap()
 Menus.Fun()
 Menus.PostFx()
 Menus.FloorExtras()
+Menus.Guide()
 
 Groupboxes.Visuals_Notifs = tabs.Visuals:AddLeftGroupbox("Entity Notifications")
 
