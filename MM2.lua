@@ -44,6 +44,7 @@ if _G.__MM2Cleanup then pcall(_G.__MM2Cleanup) end
 --                              CORE / HELPERS                         --
 --=====================================================================--
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -1629,7 +1630,7 @@ local function updateSkins()
         local skin = SK.pick[slot] and SK.list[slot][SK.pick[slot]]
         local real = findTool(lp, slot)
         local equipped = real and real.Parent == c
-        local show = skin and visAlive(lp) and (equipped or (not real and SK.idle == slot))
+        local show = skin and visAlive(lp) and equipped
         local f = SK.fakes[slot]
         if show then
             f = fakeFor(slot, skin, equipped and real:FindFirstChild("Handle") or nil)
@@ -1706,6 +1707,196 @@ local function loadSkinAsset(id, name, slot)
     end)
 end
 
+--=== SKIN LIBRARY =====================================================
+-- Every knife and gun that shows up on screen (yours, or in another player's hand) is copied as data - meshes, textures,
+-- colours, offsets - into a library saved to a file. Any saved weapon can then be worn as a skin, in the lobby too.
+do
+    local LIBFILE = "MM2_SkinLibrary.json"
+    local lib = { items = {}, bySig = {}, count = { Knife = 0, Gun = 0 }, on = true, dirty = false, dd = {}, seen = setmetatable({}, { __mode = "k" }) }
+    SK.lib = lib
+
+    local function v3(v) return { v.X, v.Y, v.Z } end
+    local function partRec(p, rootCF)
+        local r = {
+            cls = p:IsA("MeshPart") and "MeshPart" or "Part", name = p.Name,
+            size = v3(p.Size), cf = { rootCF:ToObjectSpace(p.CFrame):GetComponents() },
+            color = { p.Color.R, p.Color.G, p.Color.B }, mat = p.Material.Name, tr = p.Transparency, refl = p.Reflectance,
+        }
+        if p:IsA("MeshPart") then
+            r.mesh, r.tex = p.MeshId, p.TextureID
+        elseif p:IsA("Part") then
+            r.shape = p.Shape.Name
+        end
+        local sm = p:FindFirstChildOfClass("SpecialMesh")
+        if sm then r.sm = { type = sm.MeshType.Name, id = sm.MeshId, tex = sm.TextureId, scale = v3(sm.Scale), off = v3(sm.Offset), vc = v3(sm.VertexColor) } end
+        return r
+    end
+    local function signature(parts)
+        local s = {}
+        for _, r in ipairs(parts) do
+            s[#s + 1] = table.concat({ r.cls, r.mesh or "", r.tex or "", r.sm and (r.sm.id .. r.sm.tex .. r.sm.type) or "", string.format("%.2f,%.2f,%.2f", r.size[1], r.size[2], r.size[3]) }, "|")
+        end
+        return table.concat(s, ";")
+    end
+
+    local function save()
+        if not (writefile and lib.dirty) then return end
+        lib.dirty = false
+        local out = {}
+        for _, it in ipairs(lib.items) do out[#out + 1] = { slot = it.slot, label = it.label, sig = it.sig, owner = it.owner, parts = it.parts } end
+        pcall(writefile, LIBFILE, HttpService:JSONEncode({ v = 1, items = out }))
+    end
+    local function labelFor(slot, owner)
+        lib.count[slot] += 1
+        return slot .. " " .. lib.count[slot] .. (owner and (" - " .. owner) or "")
+    end
+    local function refresh()
+        for _, slot in ipairs({ "Knife", "Gun" }) do
+            local names = { "Off" }
+            for _, it in ipairs(lib.items) do if it.slot == slot then names[#names + 1] = it.label end end
+            lib.names = lib.names or {}
+            lib.names[slot] = names
+            local dd = lib.dd[slot]
+            if dd then pcall(dd.Refresh, names, true) end
+        end
+    end
+    local function add(slot, parts, owner, label)
+        local sig = slot .. "#" .. signature(parts)
+        if lib.bySig[sig] then return false end
+        local it = { slot = slot, label = label or labelFor(slot, owner), sig = sig, owner = owner, parts = parts }
+        lib.items[#lib.items + 1] = it
+        lib.bySig[sig] = it
+        lib.dirty = true
+        return it
+    end
+
+    -- load what earlier sessions saved
+    pcall(function()
+        if isfile and isfile(LIBFILE) then
+            local d = HttpService:JSONDecode(readfile(LIBFILE))
+            for _, it in ipairs(d.items or {}) do
+                local n = tonumber(string.match(it.label or "", "^%a+ (%d+)")) or 0
+                if n > (lib.count[it.slot] or 0) then lib.count[it.slot] = n end
+                local sig = it.slot .. "#" .. signature(it.parts)
+                if not lib.bySig[sig] then
+                    local rec = { slot = it.slot, label = it.label, sig = sig, owner = it.owner, parts = it.parts }
+                    lib.items[#lib.items + 1] = rec
+                    lib.bySig[sig] = rec
+                end
+            end
+        end
+    end)
+
+    local function capture(tool, owner)
+        local h = tool:FindFirstChild("Handle")
+        if not (h and h:IsA("BasePart")) then return false end
+        local parts = {}
+        for _, d in ipairs(tool:GetDescendants()) do
+            if d:IsA("BasePart") and (d == h or d.Transparency < 0.98) then
+                local rec = partRec(d, h.CFrame)
+                if d == h then table.insert(parts, 1, rec) else parts[#parts + 1] = rec end
+            end
+        end
+        local meshy = false
+        for _, r in ipairs(parts) do if r.mesh and r.mesh ~= "" or r.sm and r.sm.id ~= "" then meshy = true end end
+        if not meshy then return false end   -- not loaded yet
+        local slot = tool.Name
+        local it = add(slot, parts, owner)
+        if it then
+            refresh()
+            notify("Skin Library", "Saved " .. it.label .. " (" .. lib.count.Knife .. " knives, " .. lib.count.Gun .. " guns)", "success", 3)
+        end
+        return true
+    end
+
+    task.spawn(function()
+        while alive do
+            if lib.on then
+                pcall(function()
+                    for _, p in ipairs(Players:GetPlayers()) do
+                        local list = {}
+                        local c = p.Character
+                        if c then for _, ch in ipairs(c:GetChildren()) do if ch:IsA("Tool") then list[#list + 1] = ch end end end
+                        if p == lp and p:FindFirstChild("Backpack") then
+                            for _, ch in ipairs(p.Backpack:GetChildren()) do if ch:IsA("Tool") then list[#list + 1] = ch end end
+                        end
+                        for _, tool in ipairs(list) do
+                            if (tool.Name == "Knife" or tool.Name == "Gun") and not lib.seen[tool] and tool:FindFirstChild("Handle") then
+                                if capture(tool, p ~= lp and p.DisplayName or nil) then lib.seen[tool] = true end
+                            end
+                        end
+                    end
+                end)
+            end
+            if lib.dirty then save() end
+            task.wait(1.2)
+        end
+    end)
+
+    -- turn a saved weapon back into a model
+    local function makePart(r)
+        local p
+        if r.cls == "MeshPart" then
+            local ok, mp = pcall(function() local m = Instance.new("MeshPart") m.MeshId = r.mesh return m end)
+            if ok and mp and mp.MeshId ~= "" then
+                p = mp
+            else
+                local ok2, m2 = pcall(function() return game:GetService("InsertService"):CreateMeshPartAsync(r.mesh, Enum.CollisionFidelity.Box, Enum.RenderFidelity.Automatic) end)
+                if ok2 then p = m2 end
+            end
+            if p then pcall(function() p.TextureID = r.tex end) end
+        else
+            p = Instance.new("Part")
+            pcall(function() p.Shape = Enum.PartType[r.shape or "Block"] end)
+        end
+        if not p then return nil end
+        p.Anchored = true
+        pcall(function() p.Size = Vector3.new(r.size[1], r.size[2], r.size[3]) end)
+        p.CFrame = CFrame.new(table.unpack(r.cf))
+        p.Color = Color3.new(r.color[1], r.color[2], r.color[3])
+        pcall(function() p.Material = Enum.Material[r.mat] end)
+        p.Transparency, p.Reflectance = r.tr or 0, r.refl or 0
+        if r.sm then
+            local sm = Instance.new("SpecialMesh")
+            pcall(function() sm.MeshType = Enum.MeshType[r.sm.type] end)
+            sm.MeshId, sm.TextureId = r.sm.id, r.sm.tex
+            sm.Scale = Vector3.new(r.sm.scale[1], r.sm.scale[2], r.sm.scale[3])
+            sm.Offset = Vector3.new(r.sm.off[1], r.sm.off[2], r.sm.off[3])
+            sm.VertexColor = Vector3.new(r.sm.vc[1], r.sm.vc[2], r.sm.vc[3])
+            sm.Parent = p
+        end
+        return p
+    end
+    local function wear(it)
+        local slot = it.slot
+        if SK.list[slot][it.label] then
+            SK.pick[slot] = it.label
+            return
+        end
+        task.spawn(function()
+            local objs = {}
+            for _, r in ipairs(it.parts) do
+                local p = makePart(r)
+                if p then objs[#objs + 1] = p end
+            end
+            local ok, m = pcall(SK.prep, objs)
+            if not (ok and m) then return notify("Skin Library", "Could not rebuild " .. it.label, "error", 4) end
+            SK.list[slot][it.label] = { model = m, label = it.label }
+            table.insert(SK.names[slot], it.label)
+            SK.pick[slot] = it.label
+            notify("Skin Library", "Wearing " .. it.label, "success", 3)
+        end)
+    end
+    lib.wear = wear
+    lib.refresh = refresh
+    lib.save = function() lib.dirty = true save() end
+    lib.clear = function()
+        lib.items, lib.bySig, lib.count = {}, {}, { Knife = 0, Gun = 0 }
+        if writefile then pcall(writefile, LIBFILE, HttpService:JSONEncode({ v = 1, items = {} })) end
+        refresh()
+    end
+end
+
 local origDesc
 local avatarBusy = false
 local function applyDescriptionFor(userId, label)
@@ -1754,7 +1945,6 @@ end
 --=====================================================================--
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
-local HttpService = game:GetService("HttpService")
 
 local F = {
     -- bullet tracers
@@ -3197,7 +3387,7 @@ for _, p in ipairs(Players:GetPlayers()) do hookDeath(p) end
 track(Players.PlayerAdded:Connect(hookDeath))
 
 --=== AURAS / TRAIL ====================================================
-local OBJECT_STYLES = { "Orbs", "Energy Rings", "Sigil", "Wings & Halo", "Gyroscope", "Constellation", "Helix" }
+local OBJECT_STYLES = { "Orbs", "Gyroscope", "Helix", "Constellation", "Fireflies", "Light Wings" }
 local auras = {}
 
 local function clearAura(c)
@@ -3230,6 +3420,75 @@ local function mkEmitter(parent, cfg)
     return e
 end
 
+-- shared pieces for the object styles: a glowing orb (hot core inside two soft shells) and a light beam between two orbs
+function FXH.auOrb(add, size, color, o)
+    o = o or {}
+    local white = Color3.new(1, 1, 1)
+    local b = { size = size, k = 1, col = color }
+    b.core = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * size * 0.4, Color = white }))
+    b.s1 = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * size, Color = color, Transparency = 0.7 }))
+    b.s2 = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * size * 1.9, Color = color, Transparency = 0.9 }))
+    if o.light then
+        local pl = Instance.new("PointLight") pl.Color, pl.Brightness, pl.Range = color, 0.9, 8 pl.Parent = b.core
+        b.pl = pl
+    end
+    if o.trail then
+        b.tr1 = FXH.trailOn(b.core, color, color:Lerp(white, 0.5), o.trail, size * 0.22, 0.3)
+        b.tr2 = FXH.trailOn(b.core, white, color, o.trail * 0.6, size * 0.07, 0.1)
+    end
+    if o.spark then
+        local em = Instance.new("ParticleEmitter")
+        em.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        em.Color = ColorSequence.new(white, color)
+        em.LightEmission = 1
+        em.Rate = 10
+        em.Lifetime = NumberRange.new(0.6, 1.1)
+        em.Speed = NumberRange.new(0.2, 0.8)
+        em.SpreadAngle = Vector2.new(180, 180)
+        em.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, size * 0.32), NumberSequenceKeypoint.new(1, 0) })
+        em.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+        em.Parent = b.core
+        b.em = em
+    end
+    return b
+end
+
+function FXH.auPut(b, pos, col, k)
+    k = k or 1
+    b.core.Position, b.s1.Position, b.s2.Position = pos, pos, pos
+    if math.abs(b.k - k) > 0.01 then
+        b.k = k
+        local sz = b.size * k
+        b.core.Size, b.s1.Size, b.s2.Size = Vector3.one * sz * 0.4, Vector3.one * sz, Vector3.one * sz * 1.9
+    end
+    if b.col ~= col then
+        b.col = col
+        local white = Color3.new(1, 1, 1)
+        b.s1.Color, b.s2.Color = col, col
+        if b.pl then b.pl.Color = col end
+        if b.tr1 then
+            b.tr1.Color = ColorSequence.new(col, col:Lerp(white, 0.45))
+            b.tr2.Color = ColorSequence.new(white, col)
+        end
+        if b.em then b.em.Color = ColorSequence.new(white, col) end
+    end
+end
+
+function FXH.auBeam(c0, c1, width, color)
+    local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+    a0.Parent, a1.Parent = c0, c1
+    local b = Instance.new("Beam")
+    b.Attachment0, b.Attachment1 = a0, a1
+    b.Width0, b.Width1 = width, width
+    b.LightEmission = 1
+    b.FaceCamera = true
+    b.Segments = 1
+    b.Color = ColorSequence.new(color)
+    b.Transparency = NumberSequence.new(0.5)
+    b.Parent = c0
+    return b
+end
+
 local function buildAura(c, style, color, scale)
     local a = { style = style, scale = scale, objs = {}, color = color }
     local function add(o) a.objs[#a.objs + 1] = o return o end
@@ -3242,8 +3501,8 @@ local function buildAura(c, style, color, scale)
             local s1 = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * 0.75 * scale, Color = color, Transparency = 0.7 }))
             local s2 = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * 1.4 * scale, Color = color, Transparency = 0.9 }))
             local pl = Instance.new("PointLight") pl.Color, pl.Brightness, pl.Range = color, 0.9, 8 pl.Parent = core
-            local tr1 = FXH.trailOn(core, color, color:Lerp(Color3.new(1, 1, 1), 0.5), 1.1, 0.16 * scale, 0.25)
-            local tr2 = FXH.trailOn(core, Color3.new(1, 1, 1), color, 0.7, 0.05 * scale, 0.05)
+            local tr1 = FXH.trailOn(core, color, color:Lerp(Color3.new(1, 1, 1), 0.5), 0.38, 0.14 * scale, 0.3)
+            local tr2 = FXH.trailOn(core, Color3.new(1, 1, 1), color, 0.22, 0.045 * scale, 0.1)
             local em = Instance.new("ParticleEmitter")
             em.Texture = "rbxasset://textures/particles/sparkles_main.dds"
             em.Color = ColorSequence.new(Color3.new(1, 1, 1), color)
@@ -3257,123 +3516,113 @@ local function buildAura(c, style, color, scale)
             em.Parent = core
             a.orbs[i] = { core = core, s1 = s1, s2 = s2, pl = pl, tr1 = tr1, tr2 = tr2, em = em, ph = i / 5 * math.pi * 2 }
         end
-    elseif style == "Energy Rings" then
-        -- thin rings are born at the feet, climb up the body swelling and fading, with beads running along them
-        a.rr = {}
+    elseif style == "Gyroscope" then
+        -- three tilted orbits with two glowing orbs on each; every orb draws a short arc behind it, so the rings weave themselves
+        a.gy = {}
         for ri = 1, 3 do
-            local segs, glow, beads = {}, {}, {}
-            for i = 1, 64 do segs[i] = add(mk({ Size = Vector3.new(0.05, 0.05, 0.2), Color = color })) end
-            for i = 1, 32 do glow[i] = add(mk({ Size = Vector3.new(0.16, 0.04, 0.4), Color = color, Transparency = 0.8 })) end
-            for i = 1, 3 do beads[i] = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * 0.16 * scale, Color = Color3.new(1, 1, 1) })) end
-            a.rr[ri] = { segs = segs, glow = glow, beads = beads, ph = (ri - 1) / 3 }
-        end
-    elseif style == "Sigil" then
-        -- a layered ground sigil: tick-marked outer ring, counter-rotating rings, diamonds, a hexagram, an inner wheel,
-        -- six light pillars at the hexagram points and a pulse that spreads out every couple of seconds
-        local function ringGroup(n, thick, tr, speed, R)
-            local segs = {}
-            for i = 1, n do segs[i] = add(mk({ Size = Vector3.new(thick, thick, 0.2), Color = color, Transparency = tr })) end
-            return { segs = segs, thick = thick, tr = tr, speed = speed, R = R * scale }
-        end
-        a.sg = {
-            rings = { ringGroup(72, 0.05, 0.1, 0.35, 4.3), ringGroup(72, 0.04, 0.2, -0.5, 3.5), ringGroup(48, 0.04, 0.25, 0.7, 1.6), ringGroup(28, 0.035, 0.3, -1.0, 0.5) },
-            ticks = {}, dia = {}, lines = {}, spokes = {}, pillars = {},
-        }
-        for i = 1, 60 do a.sg.ticks[i] = add(mk({ Size = Vector3.new(0.03, 0.03, i % 2 == 0 and 0.34 or 0.2), Color = color, Transparency = 0.2 })) end
-        for i = 1, 12 do a.sg.dia[i] = add(mk({ Size = Vector3.new(0.16, 0.04, 0.16), Color = color:Lerp(Color3.new(1, 1, 1), 0.4) })) end
-        local HR = 3.0 * scale
-        for tri = 0, 1 do
-            for k = 0, 2 do
-                local a0 = math.rad(tri * 60 + k * 120)
-                local a1 = math.rad(tri * 60 + (k + 1) * 120)
-                local p0 = Vector3.new(math.cos(a0) * HR, 0, math.sin(a0) * HR)
-                local p1 = Vector3.new(math.cos(a1) * HR, 0, math.sin(a1) * HR)
-                a.sg.lines[#a.sg.lines + 1] = { part = add(mk({ Size = Vector3.new(0.04, 0.04, (p1 - p0).Magnitude), Color = color, Transparency = 0.15 })), p0 = p0, p1 = p1 }
+            for k = 0, 1 do
+                a.gy[#a.gy + 1] = { o = FXH.auOrb(add, 0.55 * scale, color, { trail = 0.75, spark = true, light = (k == 0) }), ri = ri, ph = k * math.pi, R = (2.5 + 0.45 * ri) * scale }
             end
         end
-        for i = 1, 8 do a.sg.spokes[i] = add(mk({ Size = Vector3.new(0.025, 0.025, 1.1 * scale), Color = color, Transparency = 0.35 })) end
-        for i = 1, 6 do a.sg.pillars[i] = add(mk({ Size = Vector3.new(0.05, 4.2 * scale, 0.05), Color = color, Transparency = 0.55 })) end
-        a.sg.pulse = ringGroup(48, 0.05, 0.1, 0, 1)
-        a.core.Size = Vector3.new(7 * scale, 0.2, 7 * scale)
-        mkEmitter(a.core, { c0 = color, rate = 22, s0 = 2, s1 = 5, size = 0.4, l0 = 0.9, l1 = 1.8, spread = Vector2.new(8, 8), shape = Enum.ParticleEmitterShape.Disc })
-    elseif style == "Wings & Halo" then
-        -- three layers of feathers (primaries, secondaries, coverts) that flap in a wave, glowing tips, shedding feathers and a halo
-        a.feathers = {}
+    elseif style == "Helix" then
+        -- two strands of orbs spiral up the body and fade out at the top; light rungs join each pair
+        a.hx = { A = {}, B = {}, rung = {}, last = {} }
+        for i = 1, 5 do
+            local oa = FXH.auOrb(add, 0.5 * scale, color, { trail = 0.55 })
+            local ob = FXH.auOrb(add, 0.5 * scale, color, { trail = 0.55 })
+            a.hx.A[i], a.hx.B[i] = oa, ob
+            a.hx.rung[i] = FXH.auBeam(oa.core, ob.core, 0.035, color)
+            a.hx.last[i] = 0
+        end
+    elseif style == "Constellation" then
+        -- eight slow stars; any two that drift close are joined by a thread of light
+        a.cs = { stars = {}, beams = {} }
+        for i = 1, 8 do
+            a.cs.stars[i] = FXH.auOrb(add, (0.28 + (i % 3) * 0.07) * scale, color, { spark = true, light = (i % 3 == 0) })
+        end
+        for i = 1, 7 do
+            for j = i + 1, 8 do
+                a.cs.beams[#a.cs.beams + 1] = { i = i, j = j, b = FXH.auBeam(a.cs.stars[i].core, a.cs.stars[j].core, 0.03, color) }
+            end
+        end
+    elseif style == "Fireflies" then
+        -- a handful of glowing flies wandering on smooth noise, with a little drifting dust
+        a.ff = {}
+        for i = 1, 9 do
+            a.ff[i] = { o = FXH.auOrb(add, 0.5 * scale, color, { light = (i % 3 == 1), spark = true }), seed = i * 17.3 }
+        end
+        a.core.Size = Vector3.one * 7 * scale
+        a.dust = mkEmitter(a.core, { c0 = color, rate = 5, s0 = 0.1, s1 = 0.4, size = 0.16, l0 = 2, l1 = 3.5, spread = Vector2.new(180, 180), shape = Enum.ParticleEmitterShape.Sphere })
+    elseif style == "Light Wings" then
+        -- wings drawn with light: an arm sweeps up and out, and three layers of tapering feather-blades hang from it,
+        -- beating in a wave and shedding glints
         local rows = {
-            { n = 10, len0 = 1.9, len1 = 2.8, width = 0.36, tr = 0.08, mix = 0, z = 0, a0 = 1.0, a1 = -0.35 },
-            { n = 9, len0 = 1.2, len1 = 1.95, width = 0.34, tr = 0.15, mix = 0.25, z = -0.07, a0 = 0.95, a1 = -0.3 },
-            { n = 8, len0 = 0.75, len1 = 1.2, width = 0.3, tr = 0.22, mix = 0.55, z = -0.14, a0 = 0.9, a1 = -0.2 },
+            { n = 9, lenK = 1.0, w = 0.26, tr = 0.18, zoff = 0, glow = true },
+            { n = 8, lenK = 0.62, w = 0.2, tr = 0.3, zoff = 0.06 },
+            { n = 7, lenK = 0.34, w = 0.15, tr = 0.42, zoff = 0.12 },
         }
-        for side = -1, 1, 2 do
+        a.wg = { feathers = {}, bones = {} }
+        a.core.Size = Vector3.new(0.3, 0.3, 0.3)
+        for sd = -1, 1, 2 do
+            -- the bone: shoulder, elbow, wrist and fingertip joined by light, with a glowing orb at each joint
+            local bone = { side = sd, atts = {}, orbs = {} }
+            for i = 1, 4 do
+                bone.atts[i] = Instance.new("Attachment") bone.atts[i].Parent = a.core
+                bone.orbs[i] = FXH.auOrb(add, (i == 1 and 0.55 or 0.45) * scale, color, { light = (i == 3), spark = (i == 4) })
+            end
+            bone.beams = {}
+            for i = 1, 3 do
+                for layer = 1, 2 do
+                    local b = Instance.new("Beam")
+                    b.Attachment0, b.Attachment1 = bone.atts[i], bone.atts[i + 1]
+                    b.Width0, b.Width1 = (layer == 1 and 0.26 or 0.7) * scale * (1.2 - i * 0.2), (layer == 1 and 0.2 or 0.55) * scale * (1.2 - i * 0.2)
+                    b.LightEmission = 1
+                    b.FaceCamera = true
+                    b.Segments = 1
+                    b.Color = ColorSequence.new(color)
+                    b.Transparency = NumberSequence.new(layer == 1 and 0 or 0.7)
+                    b.Parent = a.core
+                    bone.beams[#bone.beams + 1] = b
+                end
+            end
+            a.wg.bones[#a.wg.bones + 1] = bone
             for ri, row in ipairs(rows) do
                 for k = 1, row.n do
-                    local f = (k - 1) / (row.n - 1)
-                    local len = (row.len0 + (row.len1 - row.len0) * f) * scale
-                    local part = add(mk({ Size = Vector3.new(len, 0.035, row.width * scale), Color = color:Lerp(Color3.new(1, 1, 1), row.mix), Transparency = row.tr + f * 0.1 }))
-                    local tip
-                    if ri == 1 and k >= row.n - 1 then
-                        tip = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * 0.15 * scale, Color = Color3.new(1, 1, 1) }))
+                    local u = (k - 1) / (row.n - 1)
+                    local root = Instance.new("Attachment") root.Parent = a.core
+                    local tip = Instance.new("Attachment") tip.Parent = a.core
+                    local function beam(w, tr0)
+                        local b = Instance.new("Beam")
+                        b.Attachment0, b.Attachment1 = root, tip
+                        b.Width0, b.Width1 = w * scale, 0.04
+                        b.LightEmission = 1
+                        b.FaceCamera = true
+                        b.Segments = 1
+                        b.Color = ColorSequence.new(color)
+                        b.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, tr0), NumberSequenceKeypoint.new(0.6, math.min(1, tr0 + 0.12)), NumberSequenceKeypoint.new(1, 1) })
+                        b.Parent = a.core
+                        return b
+                    end
+                    local fe = { root = root, tip = tip, side = sd, u = u, row = ri, zoff = row.zoff, len = (2.6 + 1.2 * math.sin(u * math.pi * 0.9 + 0.15)) * row.lenK * scale, beams = { beam(row.w, row.tr) } }
+                    if row.glow then fe.beams[2] = beam(row.w * 2.4, 0.84) end
+                    if ri == 1 and (k == 3 or k == 7) then
                         local em = Instance.new("ParticleEmitter")
                         em.Texture = "rbxasset://textures/particles/sparkles_main.dds"
                         em.Color = ColorSequence.new(Color3.new(1, 1, 1), color)
                         em.LightEmission = 1
-                        em.Rate = 8
-                        em.Lifetime = NumberRange.new(0.7, 1.3)
-                        em.Speed = NumberRange.new(0.2, 0.8)
+                        em.Rate = 5
+                        em.Lifetime = NumberRange.new(1.2, 2.0)
+                        em.Speed = NumberRange.new(0.1, 0.5)
                         em.SpreadAngle = Vector2.new(180, 180)
+                        em.Acceleration = Vector3.new(0, -1.6, 0)
                         em.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2 * scale), NumberSequenceKeypoint.new(1, 0) })
                         em.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
                         em.Parent = tip
+                        fe.em = em
                     end
-                    a.feathers[#a.feathers + 1] = { part = part, tip = tip, side = side, k = k, f = f, len = len, ang = row.a0 + (row.a1 - row.a0) * f, z = row.z, row = ri, mix = row.mix }
+                    a.wg.feathers[#a.wg.feathers + 1] = fe
                 end
             end
-        end
-        a.halo, a.haloBeads = {}, {}
-        for i = 1, 64 do a.halo[i] = add(mk({ Size = Vector3.new(0.045, 0.045, 0.2), Color = color })) end
-        for i = 1, 3 do a.haloBeads[i] = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * 0.16 * scale, Color = Color3.new(1, 1, 1) })) end
-        a.shedAt = 0
-    elseif style == "Gyroscope" then
-        -- three thin gimbal rings, each with a bright bead running along it
-        a.gyro = {}
-        for ri, base in ipairs({ 2.5, 3.0, 3.5 }) do
-            local R = base * scale
-            local segLen = (math.pi * 2 * R / 72) * 1.12
-            local segs = {}
-            for i = 1, 72 do
-                segs[i] = add(mk({ Size = Vector3.new(0.045, 0.045, segLen), Color = color, Transparency = 0.12 + ri * 0.07 }))
-            end
-            a.gyro[ri] = { segs = segs, R = R, bead = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * 0.24 * scale, Color = Color3.new(1, 1, 1) })) }
-        end
-    elseif style == "Constellation" then
-        -- nine slow stars joined by hair-thin lines that fade with distance
-        a.pts, a.lines = {}, {}
-        for i = 1, 9 do
-            a.pts[i] = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * (0.16 + (i % 3) * 0.05) * scale, Color = color }))
-        end
-        for i = 1, 8 do
-            for j = i + 1, 9 do
-                a.lines[#a.lines + 1] = { i = i, j = j, part = add(mk({ Size = Vector3.new(0.025, 0.025, 1), Color = color, Transparency = 1 })) }
-            end
-        end
-    elseif style == "Helix" then
-        -- three glowing points spiral up and down the body, each pulling a thin ribbon behind it
-        a.dots = {}
-        for i = 1, 3 do
-            local o = add(mk({ Shape = Enum.PartType.Ball, Size = Vector3.one * 0.2 * scale, Color = Color3.new(1, 1, 1) }))
-            local a0 = Instance.new("Attachment") a0.Position = Vector3.new(0, 0.12 * scale, 0) a0.Parent = o
-            local a1 = Instance.new("Attachment") a1.Position = Vector3.new(0, -0.12 * scale, 0) a1.Parent = o
-            local tr = Instance.new("Trail")
-            tr.Attachment0, tr.Attachment1 = a0, a1
-            tr.Lifetime = 1.6
-            tr.LightEmission = 1
-            tr.MinLength = 0.03
-            tr.FaceCamera = true
-            tr.Color = ColorSequence.new(color)
-            tr.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
-            tr.WidthScale = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.15) })
-            tr.Parent = o
-            a.dots[i] = { part = o, trail = tr }
         end
     end
     auras[c] = a
@@ -3402,207 +3651,108 @@ local function updateAura(c, a, t)
             o.tr2.Color = ColorSequence.new(white, col)
             o.em.Color = ColorSequence.new(white, col)
         end
-    elseif style == "Energy Rings" then
-        local white = Color3.new(1, 1, 1)
-        local parts, cfs = {}, {}
-        for ri, rg in ipairs(a.rr) do
-            local k = (t * 0.42 + rg.ph) % 1
-            local fade = math.sin(k * math.pi)
-            local R = (1.6 + fade * 0.7 + k * 0.4) * s
-            local base = CFrame.new(r.Position.X, feet.Y + 0.15 + k * 6.4, r.Position.Z) * CFrame.Angles(0, t * 0.6 * (ri % 2 == 0 and -1 or 1), 0)
-            local n = #rg.segs
-            local segLen = (math.pi * 2 * R / n) * 1.15
-            local tr = 0.12 + (1 - fade) * 0.88
-            for i, p in ipairs(rg.segs) do
-                local ang = i / n * math.pi * 2
-                local lpos = Vector3.new(math.cos(ang) * R, 0, math.sin(ang) * R)
-                parts[#parts + 1] = p
-                cfs[#cfs + 1] = base * CFrame.lookAt(lpos, lpos + Vector3.new(-math.sin(ang), 0, math.cos(ang)))
-                p.Size = Vector3.new(0.05, 0.05, segLen)
-                p.Color, p.Transparency = col, tr
-            end
-            for i, p in ipairs(rg.glow) do
-                local ang = i / #rg.glow * math.pi * 2
-                local lpos = Vector3.new(math.cos(ang) * R, 0, math.sin(ang) * R)
-                parts[#parts + 1] = p
-                cfs[#cfs + 1] = base * CFrame.lookAt(lpos, lpos + Vector3.new(-math.sin(ang), 0, math.cos(ang)))
-                p.Size = Vector3.new(0.16, 0.04, segLen * 2)
-                p.Color, p.Transparency = col, math.min(1, 0.8 + (1 - fade) * 0.2)
-            end
-            for bi, bd in ipairs(rg.beads) do
-                local ang = t * 2.2 + bi * 2.094 + ri
-                parts[#parts + 1] = bd
-                cfs[#cfs + 1] = base * CFrame.new(math.cos(ang) * R, 0, math.sin(ang) * R)
-                bd.Color, bd.Transparency = col:Lerp(white, 0.6), 1 - fade
-            end
-        end
-        workspace:BulkMoveTo(parts, cfs, Enum.BulkMoveMode.FireCFrameChanged)
-    elseif style == "Sigil" then
-        a.core.CFrame = CFrame.new(feet)
-        local sg = a.sg
-        local base = CFrame.new(feet)
-        local parts, cfs = {}, {}
-        local breathe = (1 - (0.5 + 0.5 * math.sin(t * 1.6))) * 0.15
-        local function placeRing(g, R, ang0, trExtra)
-            local n = #g.segs
-            local segLen = (math.pi * 2 * R / n) * 1.15
-            for i, p in ipairs(g.segs) do
-                local ang = i / n * math.pi * 2 + ang0
-                local lpos = Vector3.new(math.cos(ang) * R, 0, math.sin(ang) * R)
-                parts[#parts + 1] = p
-                cfs[#cfs + 1] = base * CFrame.lookAt(lpos, lpos + Vector3.new(-math.sin(ang), 0, math.cos(ang)))
-                p.Size = Vector3.new(g.thick, g.thick, segLen)
-                p.Color = col
-                p.Transparency = math.min(1, (trExtra or g.tr) + breathe)
-            end
-        end
-        for _, g in ipairs(sg.rings) do placeRing(g, g.R, t * g.speed) end
-        -- tick marks around the outer ring
-        for i, p in ipairs(sg.ticks) do
-            local ang = i / #sg.ticks * math.pi * 2 - t * 0.35
-            local R = (4.6 * s)
-            local lpos = Vector3.new(math.cos(ang) * R, 0, math.sin(ang) * R)
-            parts[#parts + 1] = p
-            cfs[#cfs + 1] = base * CFrame.lookAt(lpos, lpos + Vector3.new(math.cos(ang), 0, math.sin(ang)))
-            p.Color = col
-        end
-        -- diamonds on the middle ring
-        for i, p in ipairs(sg.dia) do
-            local ang = i / #sg.dia * math.pi * 2 - t * 0.5
-            local R = sg.rings[2].R
-            parts[#parts + 1] = p
-            cfs[#cfs + 1] = base * CFrame.new(math.cos(ang) * R, 0, math.sin(ang) * R) * CFrame.Angles(0, ang + math.rad(45), 0)
-        end
-        -- hexagram, spokes, pillars
-        local spin = CFrame.Angles(0, t * 0.4, 0)
-        for _, l in ipairs(sg.lines) do
-            parts[#parts + 1] = l.part
-            cfs[#cfs + 1] = base * spin * CFrame.lookAt((l.p0 + l.p1) / 2, l.p1)
-            l.part.Color = col
-        end
-        for i, p in ipairs(sg.spokes) do
-            local ang = i / #sg.spokes * math.pi * 2 + t * 0.7
-            local lpos = Vector3.new(math.cos(ang) * 1.05 * s, 0, math.sin(ang) * 1.05 * s)
-            parts[#parts + 1] = p
-            cfs[#cfs + 1] = base * CFrame.lookAt(lpos, lpos + Vector3.new(math.cos(ang), 0, math.sin(ang)))
-            p.Color = col
-        end
-        for i, p in ipairs(sg.pillars) do
-            local ang = math.rad((i - 1) * 60) + t * 0.4
-            local HR = 3.0 * s
-            parts[#parts + 1] = p
-            cfs[#cfs + 1] = base * CFrame.new(math.cos(ang) * HR, 2.1 * s, math.sin(ang) * HR)
-            p.Color, p.Transparency = col, 0.55 + math.sin(t * 2 + i) * 0.12
-        end
-        -- the pulse
-        local k = (t % 2.4) / 2.4
-        local pr = sg.pulse
-        pr.R = (0.5 + k * 4.8) * s
-        placeRing(pr, pr.R, 0, 0.1 + k * 0.9)
-        workspace:BulkMoveTo(parts, cfs, Enum.BulkMoveMode.FireCFrameChanged)
-    elseif style == "Wings & Halo" then
-        local white = Color3.new(1, 1, 1)
-        local rootCF = r.CFrame * CFrame.new(0, 0.9, 0.5)
-        local parts, cfs = {}, {}
-        for _, f in ipairs(a.feathers) do
-            local sd = f.side
-            local flap = math.sin(t * 3.1 - f.f * 0.9 - f.row * 0.25) * 0.3
-            local rcf = rootCF * CFrame.new(sd * 0.4, 0, f.z) * CFrame.Angles(0, -sd * (0.4 + flap), 0)
-            local cf = rcf * CFrame.Angles(0, 0, sd * f.ang) * CFrame.new(sd * f.len / 2, 0, 0)
-            parts[#parts + 1] = f.part
-            cfs[#cfs + 1] = cf
-            f.part.Color = col:Lerp(white, f.mix)
-            if f.tip then
-                parts[#parts + 1] = f.tip
-                cfs[#cfs + 1] = cf * CFrame.new(sd * f.len / 2, 0, 0)
-                f.tip.Color = col:Lerp(white, 0.5)
-            end
-        end
-        local head = r.Position + Vector3.new(0, 3.2 + math.sin(t * 2) * 0.07, 0)
-        local R = 0.95 * s
-        local segLen = (math.pi * 2 * R / #a.halo) * 1.15
-        for i, p in ipairs(a.halo) do
-            local ang = i / #a.halo * math.pi * 2
-            local lpos = Vector3.new(math.cos(ang) * R, 0, math.sin(ang) * R)
-            parts[#parts + 1] = p
-            cfs[#cfs + 1] = CFrame.new(head) * CFrame.Angles(math.rad(6), 0, math.rad(-4)) * CFrame.lookAt(lpos, lpos + Vector3.new(-math.sin(ang), 0, math.cos(ang)))
-            p.Size = Vector3.new(0.045, 0.045, segLen)
-            p.Color = col
-        end
-        for i, bd in ipairs(a.haloBeads) do
-            local ang = t * 1.4 + i * 2.094
-            parts[#parts + 1] = bd
-            cfs[#cfs + 1] = CFrame.new(head + Vector3.new(math.cos(ang) * R, 0, math.sin(ang) * R))
-            bd.Color = col:Lerp(white, 0.6)
-        end
-        workspace:BulkMoveTo(parts, cfs, Enum.BulkMoveMode.FireCFrameChanged)
-        -- every so often a feather drifts off the wings
-        if t > a.shedAt then
-            a.shedAt = t + 0.45
-            local src = a.feathers[math.random(#a.feathers)]
-            local fp = src.part
-            if fp.Parent then
-                local fe = mk({ Size = Vector3.new(0.75 * s, 0.02, 0.2 * s), Color = col:Lerp(white, 0.4), Transparency = 0.1, CFrame = fp.CFrame })
-                local drift = Vector3.new((math.random() - 0.5) * 2.2, -3.4 - math.random() * 1.2, (math.random() - 0.5) * 2.2)
-                tw(fe, 2.4, { CFrame = fp.CFrame * CFrame.new(drift.X, drift.Y, drift.Z) * CFrame.Angles(math.random() * 3, math.random() * 3, math.random() * 3), Transparency = 1 }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-                life(fe, 2.5)
-            end
-        end
     elseif style == "Gyroscope" then
-        local parts, cfs = {}, {}
         local center = CFrame.new(r.Position)
         local bases = {
-            CFrame.Angles(t * 0.8, 0, 0),
-            CFrame.Angles(0, 0, t * 0.65 + 1.0),
-            CFrame.Angles(math.rad(50), t * 0.5, 0),
+            CFrame.Angles(t * 0.6, 0, 0),
+            CFrame.Angles(0, 0, t * 0.5 + 1.0),
+            CFrame.Angles(math.rad(55), t * 0.4, 0),
         }
-        for ri, g in ipairs(a.gyro) do
-            local base = center * bases[ri]
-            for i, seg in ipairs(g.segs) do
-                local ang = i / #g.segs * math.pi * 2
-                local pos = Vector3.new(math.cos(ang) * g.R, 0, math.sin(ang) * g.R)
-                parts[#parts + 1] = seg
-                cfs[#cfs + 1] = base * CFrame.lookAt(pos, pos + Vector3.new(-math.sin(ang), 0, math.cos(ang)))
-                seg.Color = col
-            end
-            local ba = t * (1.6 + ri * 0.4)
-            parts[#parts + 1] = g.bead
-            cfs[#cfs + 1] = base * CFrame.new(math.cos(ba) * g.R, 0, math.sin(ba) * g.R)
-            g.bead.Color = col:Lerp(Color3.new(1, 1, 1), 0.6)
+        for _, g in ipairs(a.gy) do
+            local ang = t * (1.5 + 0.3 * g.ri) + g.ph
+            local cf = center * bases[g.ri] * CFrame.new(math.cos(ang) * g.R, 0, math.sin(ang) * g.R)
+            FXH.auPut(g.o, cf.Position, col)
         end
-        workspace:BulkMoveTo(parts, cfs, Enum.BulkMoveMode.FireCFrameChanged)
+    elseif style == "Helix" then
+        local hx = a.hx
+        local n = #hx.A
+        for i = 1, n do
+            local k = (t * 0.2 + i / n) % 1
+            local fade = math.sin(k * math.pi) ^ 0.6
+            if k < hx.last[i] then
+                pcall(function() hx.A[i].tr1:Clear() hx.A[i].tr2:Clear() hx.B[i].tr1:Clear() hx.B[i].tr2:Clear() end)
+            end
+            hx.last[i] = k
+            local ang = t * 1.9 + k * 5
+            local R = 1.7 * s
+            local off = Vector3.new(math.cos(ang) * R, 0, math.sin(ang) * R)
+            local mid = r.Position + Vector3.new(0, (-2.2 + k * 4.6) * s, 0)
+            FXH.auPut(hx.A[i], mid + off, col, fade)
+            FXH.auPut(hx.B[i], mid - off, col, fade)
+            hx.rung[i].Color = ColorSequence.new(col)
+            hx.rung[i].Transparency = NumberSequence.new(1 - fade * 0.55)
+        end
     elseif style == "Constellation" then
+        local cs = a.cs
         local center = r.Position + Vector3.new(0, 0.6, 0)
         local pos3 = {}
-        for i, p in ipairs(a.pts) do
+        for i, st in ipairs(cs.stars) do
             local ang = t * (0.35 + (i % 3) * 0.12) + i * 2.4
             local inc = t * (0.5 + (i % 4) * 0.1) + i * 1.7
             local R = (3.0 + math.sin(t * 0.8 + i) * 0.4) * s
             pos3[i] = center + Vector3.new(math.cos(ang) * math.cos(inc), math.sin(inc) * 0.9, math.sin(ang) * math.cos(inc)) * R
-            p.Position = pos3[i]
-            p.Color = col
+            FXH.auPut(st, pos3[i], col, 1 + math.sin(t * 2 + i * 1.3) * 0.12)
         end
-        local reach = 4.6 * s
-        for _, l in ipairs(a.lines) do
+        local reach = 4.8 * s
+        for _, l in ipairs(cs.beams) do
             local d = (pos3[l.i] - pos3[l.j]).Magnitude
             if d < reach then
-                l.part.Size = Vector3.new(0.025, 0.025, d)
-                l.part.CFrame = CFrame.lookAt((pos3[l.i] + pos3[l.j]) / 2, pos3[l.j])
-                l.part.Transparency = 0.2 + (d / reach) * 0.75
-                l.part.Color = col
+                l.b.Enabled = true
+                l.b.Color = ColorSequence.new(col)
+                l.b.Transparency = NumberSequence.new(0.35 + (d / reach) * 0.6)
             else
-                l.part.Transparency = 1
+                l.b.Enabled = false
             end
         end
-    elseif style == "Helix" then
-        for i, d in ipairs(a.dots) do
-            local ph = (i - 1) * math.pi * 2 / 3
-            local ang = t * 2.1 + ph
-            local y = math.sin(t * 1.15 + ph) * 1.9 * s
-            local R = (1.8 + math.sin(t * 0.7 + ph) * 0.35) * s
-            d.part.Position = r.Position + Vector3.new(math.cos(ang) * R, y, math.sin(ang) * R)
-            d.part.Color = col:Lerp(Color3.new(1, 1, 1), 0.5)
-            d.trail.Color = ColorSequence.new(col, col:Lerp(Color3.new(1, 1, 1), 0.7))
+    elseif style == "Fireflies" then
+        a.core.Position = r.Position
+        a.dust.Color = ColorSequence.new(col)
+        for _, f in ipairs(a.ff) do
+            local sd = f.seed
+            local nx = math.noise(t * 0.22, sd, 0) * 2
+            local ny = math.noise(t * 0.22, sd, 7.7) * 2
+            local nz = math.noise(t * 0.22, sd, 15.3) * 2
+            local pos = r.Position + Vector3.new(nx * 3.4, ny * 1.9 + 0.4, nz * 3.4) * s
+            local glow = 0.7 + 0.3 * math.sin(t * 3.2 + sd)
+            FXH.auPut(f.o, pos, col, glow)
+        end
+    elseif style == "Light Wings" then
+        local white = Color3.new(1, 1, 1)
+        a.core.CFrame = r.CFrame * CFrame.new(0, 0.7, 0.45)
+        local recolor = a.wcol ~= col
+        a.wcol = col
+        local grad = ColorSequence.new(col:Lerp(white, 0.25), col)
+        local sc = a.scale
+        for _, bn in ipairs(a.wg.bones) do
+            local sd = bn.side
+            for i = 1, 4 do
+                local u = (i - 1) / 3
+                local psi = math.sin(t * 2.0 - u * 0.8 - 0.25) * 0.26 * (0.35 + u * 0.65)
+                local c, s2 = math.cos(sd * psi), math.sin(sd * psi)
+                local v = Vector3.new(sd * (0.3 + 3.0 * u), 0.15 + 1.9 * u ^ 0.85, 0) * sc
+                local p = Vector3.new(v.X * c - v.Y * s2, v.X * s2 + v.Y * c, v.Z)
+                bn.atts[i].Position = p
+                FXH.auPut(bn.orbs[i], (a.core.CFrame * CFrame.new(p)).Position, col)
+            end
+            if recolor then for _, b in ipairs(bn.beams) do b.Color = ColorSequence.new(col:Lerp(white, 0.65), col:Lerp(white, 0.2)) end end
+        end
+        for _, fe in ipairs(a.wg.feathers) do
+            local sd, u = fe.side, fe.u
+            local psi = math.sin(t * 2.0 - u * 0.8 - fe.row * 0.25) * 0.26 * (0.35 + u * 0.65)
+            local function rz(v)
+                local c, s2 = math.cos(sd * psi), math.sin(sd * psi)
+                return Vector3.new(v.X * c - v.Y * s2, v.X * s2 + v.Y * c, v.Z)
+            end
+            -- the arm: out and up from the shoulder; the feather hangs from a point on it, swept outward and back
+            local arm = Vector3.new(sd * (0.3 + 3.0 * u), 0.15 + 1.9 * u ^ 0.85, fe.zoff) * sc
+            local dir = Vector3.new(sd * (0.55 + 0.35 * u), -1, 0.3).Unit
+            local rootP = rz(arm)
+            fe.root.Position = rootP
+            fe.tip.Position = rootP + rz(dir) * fe.len
+            if recolor then
+                for _, b in ipairs(fe.beams) do b.Color = grad end
+                if fe.em then fe.em.Color = ColorSequence.new(white, col) end
+            end
         end
     end
 end
@@ -3738,6 +3888,112 @@ task.spawn(function()
 end)
 onCleanup(function() for c in pairs(auras) do clearAura(c) end end)
 
+--=== JUMP EFFECTS =====================================================
+-- thin rings and a few motes where you take off and land; the harder the fall, the wider the wave
+do
+    local SPARK = "rbxasset://textures/particles/sparkles_main.dds"
+    local SMOKE = "rbxasset://textures/particles/smoke_main.dds"
+    local WHITE = Color3.new(1, 1, 1)
+    F.jfxStyle = F.jfxStyle or "Ripple"
+    F.jfxMode = F.jfxMode or "Custom"
+    F.jfxColor = F.jfxColor or Color3.fromRGB(150, 205, 255)
+    F.jfxSize = F.jfxSize or 1
+    if F.jfxTakeoff == nil then F.jfxTakeoff = true end
+
+    local function colorFor(p)
+        if F.jfxMode == "Rainbow" then return rainbowAt(os.clock() * 1.5) end
+        if F.jfxMode == "By Role" then return ROLE_COLORS[getRole(p)] or F.jfxColor end
+        return F.jfxColor
+    end
+    local function feetOf(r, h)
+        return Vector3.new(r.Position.X, r.Position.Y - ((h and h.HipHeight or 2) + r.Size.Y / 2) + 0.08, r.Position.Z)
+    end
+
+    local function landing(p, r, h, power)
+        if not fxBudget() then return end
+        local col = colorFor(p)
+        local k = math.clamp(power / 55, 0.35, 1.3) * (F.jfxSize or 1)
+        local floor = feetOf(r, h)
+        local up = Vector3.new(0, 0.15, 0)
+        local style = F.jfxStyle
+        if style == "Shockwave" then
+            FXH.thinRing(floor, col, 0.4, 3.4 + 5.2 * k, 0.75, { thick = 0.07, segs = 52 })
+            FXH.thinRing(floor, WHITE, 0.3, 2.2 + 3.4 * k, 0.55, { thick = 0.04, segs = 44 })
+            FXH.burst(floor + up, { tex = SMOKE, c0 = Color3.fromRGB(196, 186, 176), le = 0, count = 8 + math.floor(10 * k), s0 = 3, s1 = 8 * k + 2, size = 0.9 * k, size1 = 2.4 * k, l0 = 0.5, l1 = 1.1, t0 = 0.62, acc = Vector3.new(0, 0.6, 0), spread = Vector2.new(86, 86) })
+        elseif style == "Stardust" then
+            FXH.thinRing(floor, col, 0.2, 1.8 + 2.6 * k, 0.8, { thick = 0.035, segs = 40 })
+            FXH.burst(floor + up, { c0 = WHITE, c1 = col, count = 14 + math.floor(18 * k), s0 = 3, s1 = 9 * k + 2, size = 0.26, l0 = 0.7, l1 = 1.5, acc = Vector3.new(0, -4, 0), spread = Vector2.new(75, 75) })
+            FXH.burst(floor + up, { c0 = col, c1 = WHITE, count = 5, s0 = 0.5, s1 = 1.6, size = 0.5, l0 = 1, l1 = 1.8, acc = Vector3.new(0, 1.5, 0), spread = Vector2.new(40, 40) })
+        elseif style == "Petals" then
+            FXH.thinRing(floor, col:Lerp(WHITE, 0.4), 0.3, 2 + 2.8 * k, 0.85, { thick = 0.03, segs = 36 })
+            FXH.burst(floor + up, { tex = SMOKE, c0 = col:Lerp(WHITE, 0.55), c1 = col, le = 0.15, count = 10 + math.floor(10 * k), s0 = 2, s1 = 6 * k + 1.5, size = 0.38, l0 = 1.3, l1 = 2.4, t0 = 0.08, acc = Vector3.new(0, -2.2, 0), drag = 1.2, spread = Vector2.new(62, 62) })
+        elseif style == "Spirit" then
+            FXH.thinRing(floor, col, 0.3, 2.6 + 3 * k, 1.3, { thick = 0.03, segs = 44 })
+            FXH.burst(floor + up, { tex = SMOKE, c0 = WHITE, c1 = col, le = 0.9, count = 7 + math.floor(6 * k), s0 = 0.4, s1 = 1.8, size = 0.7, size1 = 1.6, l0 = 1.2, l1 = 2.2, t0 = 0.55, acc = Vector3.new(0, 2.6, 0), spread = Vector2.new(35, 35) })
+        else -- Ripple
+            FXH.thinRing(floor, col, 0.3, 2.4 + 3.4 * k, 0.9, { thick = 0.05, segs = 44 })
+            FXH.thinRing(floor, WHITE, 0.2, 1.4 + 2.2 * k, 0.65, { thick = 0.03, segs = 36 })
+            FXH.thinRing(floor, col, 0.1, 0.8 + 1.4 * k, 0.45, { thick = 0.025, segs = 28 })
+            FXH.burst(floor + up, { c0 = WHITE, c1 = col, count = 6 + math.floor(8 * k), s0 = 1.5, s1 = 4, size = 0.22, l0 = 0.5, l1 = 1, acc = Vector3.new(0, 3, 0), spread = Vector2.new(70, 70) })
+        end
+    end
+
+    local function takeoff(p, r, h, inAir)
+        if not fxBudget() then return end
+        local col = colorFor(p)
+        local s = F.jfxSize or 1
+        local pos = inAir and (feetOf(r, h) + Vector3.new(0, 0.3, 0)) or feetOf(r, h)
+        FXH.thinRing(pos, col, 0.15, 1.3 * s + 0.6, 0.5, { thick = 0.03, segs = 32 })
+        if F.jfxStyle == "Stardust" or F.jfxStyle == "Spirit" then
+            FXH.burst(pos, { c0 = WHITE, c1 = col, count = 7, s0 = 1, s1 = 3, size = 0.2, l0 = 0.5, l1 = 0.9, acc = Vector3.new(0, 1, 0), spread = Vector2.new(50, 50), dir = Enum.NormalId.Bottom })
+        elseif F.jfxStyle == "Petals" then
+            FXH.burst(pos, { tex = SMOKE, c0 = col:Lerp(WHITE, 0.55), le = 0.15, count = 5, s0 = 1, s1 = 2.6, size = 0.3, l0 = 0.8, l1 = 1.4, t0 = 0.1, acc = Vector3.new(0, -1.4, 0), spread = Vector2.new(60, 60), dir = Enum.NormalId.Bottom })
+        end
+    end
+
+    local recs = setmetatable({}, { __mode = "k" })
+    track(RunService.Heartbeat:Connect(function()
+        if not F.jfx then return end
+        local now = os.clock()
+        local camPos = cam.CFrame.Position
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p == lp or F.jfxOthers then
+                local c = p.Character
+                local h = c and c:FindFirstChildOfClass("Humanoid")
+                local r = c and c:FindFirstChild("HumanoidRootPart")
+                if h and r and h.Health > 0 and (p == lp or (r.Position - camPos).Magnitude < 90) then
+                    local rec = recs[c]
+                    if not rec then rec = { air = false, minVy = 0, vy = 0, since = 0, cool = 0 } recs[c] = rec end
+                    local air = h.FloorMaterial == Enum.Material.Air
+                    local vy = r.AssemblyLinearVelocity.Y
+                    if air and not rec.air then
+                        rec.air, rec.since, rec.minVy = true, now, 0
+                        if F.jfxTakeoff and vy > 8 and now > rec.cool then rec.cool = now + 0.15 takeoff(p, r, h, false) end
+                    elseif air then
+                        if vy < rec.minVy then rec.minVy = vy end
+                        if F.jfxTakeoff and vy - rec.vy > 24 and now - rec.since > 0.15 and now > rec.cool then
+                            rec.cool = now + 0.15
+                            takeoff(p, r, h, true)   -- a jump in mid-air
+                        end
+                    elseif not air and rec.air then
+                        rec.air = false
+                        if now - rec.since > 0.14 and -rec.minVy > 14 and now > rec.cool then
+                            rec.cool = now + 0.15
+                            landing(p, r, h, -rec.minVy)
+                        end
+                    end
+                    rec.vy = vy
+                end
+            end
+        end
+    end))
+    F.jfxPreview = function()
+        local r, h = hrpOf(lp), humOf(lp)
+        if r and h then landing(lp, r, h, 55) end
+    end
+    onCleanup(function() F.jfx = false F.jfxPreview = nil end)
+end
+
 --=== POST PROCESSING ==================================================
 local PF = { on = false, fx = {}, backup = nil, ui = {} }
 local PF_DEFAULT = {
@@ -3856,46 +4112,241 @@ local function pfPreset(name)
 end
 
 --=== WEATHER ==========================================================
-local WEATHER_KINDS = { "Off", "Snow", "Rain", "Embers", "Fireflies", "Spooky Wisps", "Autumn Leaves", "Confetti" }
-local weather = { part = nil, kind = "Off" }
-local function setWeather(kind)
-    if weather.part then weather.part:Destroy() weather.part = nil end
-    weather.kind = kind
-    if kind == "Off" then return end
-    local p = mk({ Transparency = 1, Size = Vector3.new(70, 1, 70) })
-    local sp = "rbxasset://textures/particles/sparkles_main.dds"
-    local sm = "rbxasset://textures/particles/smoke_main.dds"
-    if kind == "Snow" then
-        mkEmitter(p, { tex = sp, c0 = Color3.new(1, 1, 1), le = 0.3, t0 = 0.05, rate = 380, s0 = 6, s1 = 10, size = 0.55, keep = true, l0 = 3, l1 = 4, spread = Vector2.new(20, 20), dir = Enum.NormalId.Bottom, shape = Enum.ParticleEmitterShape.Box })
-        weather.height = 16
-    elseif kind == "Rain" then
-        local e = mkEmitter(p, { tex = sp, c0 = Color3.fromRGB(170, 200, 255), le = 0.3, t0 = 0.35, rate = 700, s0 = 70, s1 = 90, size = 0.9, keep = true, l0 = 0.5, l1 = 0.6, spread = Vector2.new(2, 2), dir = Enum.NormalId.Bottom, shape = Enum.ParticleEmitterShape.Box })
-        e.Orientation = Enum.ParticleOrientation.VelocityParallel
-        e.Squash = NumberSequence.new(-3)
-        weather.height = 25
-    elseif kind == "Embers" then
-        mkEmitter(p, { c0 = Color3.fromRGB(255, 190, 70), c1 = Color3.fromRGB(255, 60, 20), rate = 70, s0 = 3, s1 = 8, size = 0.28, l0 = 3, l1 = 5, spread = Vector2.new(35, 35), acc = Vector3.new(0, 2, 0), shape = Enum.ParticleEmitterShape.Box })
-        weather.height = -6
-    elseif kind == "Fireflies" then
-        p.Size = Vector3.new(50, 12, 50)
-        local e = mkEmitter(p, { c0 = Color3.fromRGB(220, 255, 120), rate = 28, s0 = 0.4, s1 = 1.4, size = 0.32, l0 = 4, l1 = 6, spread = Vector2.new(180, 180), shape = Enum.ParticleEmitterShape.Box })
-        e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.25, 0.1), NumberSequenceKeypoint.new(0.5, 0.7), NumberSequenceKeypoint.new(0.75, 0.1), NumberSequenceKeypoint.new(1, 1) })
-        e.Size = NumberSequence.new(0.32)
-        weather.height = 3
-    elseif kind == "Spooky Wisps" then
-        p.Size = Vector3.new(50, 8, 50)
-        mkEmitter(p, { c0 = Color3.fromRGB(170, 90, 255), c1 = Color3.fromRGB(255, 130, 30), rate = 40, s0 = 1, s1 = 3, size = 0.8, l0 = 4, l1 = 6, spread = Vector2.new(60, 60), acc = Vector3.new(0, 1.6, 0), shape = Enum.ParticleEmitterShape.Box })
-        weather.height = 1
-    elseif kind == "Autumn Leaves" then
-        mkEmitter(p, { c0 = Color3.fromRGB(255, 150, 40), c1 = Color3.fromRGB(150, 60, 20), le = 0, t0 = 0, rate = 70, s0 = 3, s1 = 5, size = 1.2, keep = true, l0 = 4, l1 = 5, spread = Vector2.new(30, 30), dir = Enum.NormalId.Bottom, shape = Enum.ParticleEmitterShape.Box })
-        weather.height = 16
-    elseif kind == "Confetti" then
-        local e = mkEmitter(p, { c0 = Color3.fromRGB(255, 80, 120), rate = 200, s0 = 5, s1 = 9, size = 0.9, keep = true, l0 = 3, l1 = 4, spread = Vector2.new(25, 25), dir = Enum.NormalId.Bottom, shape = Enum.ParticleEmitterShape.Box })
-        e.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 70, 110)), ColorSequenceKeypoint.new(0.33, Color3.fromRGB(255, 220, 60)), ColorSequenceKeypoint.new(0.66, Color3.fromRGB(70, 220, 255)), ColorSequenceKeypoint.new(1, Color3.fromRGB(190, 90, 255)) })
-        e.LightEmission = 0.2
-        weather.height = 16
+local WEATHER_KINDS = { "Off", "Snowfall", "Blizzard", "Rain", "Thunderstorm", "Misty Morning", "Fireflies", "Ashfall", "Cherry Blossoms", "Autumn Leaves", "Haunted Mist", "Golden Dust", "Confetti" }
+local weather = { kind = "Off", intensity = 1, mood = true, parts = {}, wind = {}, token = nil }
+local setWeather
+do
+    local SPARK = "rbxasset://textures/particles/sparkles_main.dds"
+    local SMOKE = "rbxasset://textures/particles/smoke_main.dds"
+    local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
+
+    -- one particle layer: a flat emitter slab above the camera (or at its feet) that follows it
+    local function layer(o)
+        local part = mk({ Transparency = 1, Size = Vector3.new(o.w or 80, 1, o.w or 80) })
+        local e = Instance.new("ParticleEmitter")
+        e.Texture = o.tex or SMOKE
+        e.LightEmission = o.le or 0
+        e.Color = o.color or ColorSequence.new(o.c0 or Color3.new(1, 1, 1), o.c1 or o.c0 or Color3.new(1, 1, 1))
+        e.Rate = (o.rate or 20) * weather.intensity
+        e.Lifetime = NumberRange.new(o.l0 or 3, o.l1 or o.l0 or 4)
+        e.Speed = NumberRange.new(o.s0 or 1, o.s1 or o.s0 or 2)
+        e.SpreadAngle = o.spread or Vector2.new(12, 12)
+        e.EmissionDirection = o.dir or Enum.NormalId.Bottom
+        local acc = o.acc or Vector3.zero
+        e.Acceleration = acc
+        e.Drag = o.drag or 0
+        e.Rotation = NumberRange.new(0, o.spin and 360 or 0)
+        e.RotSpeed = NumberRange.new(-(o.spin or 0), o.spin or 0)
+        e.Shape = Enum.ParticleEmitterShape.Box
+        e.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+        local sz = o.size or 0.4
+        e.Size = o.grow and NumberSequence.new({ NumberSequenceKeypoint.new(0, sz * 0.4), NumberSequenceKeypoint.new(0.5, sz), NumberSequenceKeypoint.new(1, sz * 1.3) })
+            or NumberSequence.new(sz)
+        local t0 = o.t0 or 0.1
+        e.Transparency = o.alpha or NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.15, t0), NumberSequenceKeypoint.new(0.8, t0), NumberSequenceKeypoint.new(1, 1) })
+        if o.streak then
+            e.Orientation = Enum.ParticleOrientation.VelocityParallel
+            e.Squash = NumberSequence.new(o.streak)
+        end
+        e.Parent = part
+        weather.parts[#weather.parts + 1] = { part = part, height = o.h or 20 }
+        if o.wind then weather.wind[#weather.wind + 1] = { e = e, base = acc, k = o.wind, ph = math.random() * 6.28, fast = o.gust or 0.45 } end
+        return e
     end
-    weather.part = p
+
+    -- the mood: atmosphere haze and a colour grade, faded in and out
+    local atmBackup, atmOwned, cc
+    local function moodClear()
+        local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+        if atm and atmBackup then
+            tw(atm, 1.5, atmBackup, Enum.EasingStyle.Sine)
+            if atmOwned then task.delay(1.6, function() if weather.kind == "Off" and atmOwned and atm.Parent then atm:Destroy() atmOwned = nil end end) end
+        end
+        atmBackup = nil
+        if cc then
+            local old = cc
+            cc = nil
+            tw(old, 1.2, { Brightness = 0, Contrast = 0, Saturation = 0, TintColor = Color3.new(1, 1, 1) }, Enum.EasingStyle.Sine)
+            task.delay(1.3, function() old:Destroy() end)
+        end
+    end
+    local function moodApply(m)
+        if not (m and weather.mood) then return moodClear() end
+        local k = math.clamp(weather.intensity, 0.4, 1.6)
+        local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+        if not atm then
+            atm = Instance.new("Atmosphere")
+            atm.Density, atm.Offset, atm.Glare, atm.Haze = 0, 0, 0, 0
+            atm.Parent = Lighting
+            atmOwned = true
+        end
+        if not atmBackup then
+            atmBackup = { Density = atm.Density, Offset = atm.Offset, Color = atm.Color, Decay = atm.Decay, Glare = atm.Glare, Haze = atm.Haze }
+        end
+        tw(atm, 2, { Density = math.clamp(m.density * k, 0, 1), Offset = m.offset or 0, Color = m.color, Decay = m.decay or m.color, Glare = m.glare or 0, Haze = (m.haze or 1) * k }, Enum.EasingStyle.Sine)
+        if not cc then
+            cc = Instance.new("ColorCorrectionEffect")
+            cc.Name = "MM2WeatherCC"
+            cc.Parent = Lighting
+        end
+        tw(cc, 2, { Brightness = m.bright or 0, Contrast = m.contrast or 0, Saturation = m.sat or 0, TintColor = m.tint or Color3.new(1, 1, 1) }, Enum.EasingStyle.Sine)
+        weather.baseBright = m.bright or 0
+    end
+
+    -- thunderstorm: forked bolts at a distance and a flash of the whole sky
+    local function lightning(token)
+        task.spawn(function()
+            local rp = RaycastParams.new()
+            rp.FilterType = Enum.RaycastFilterType.Exclude
+            while alive and weather.token == token do
+                task.wait(3.5 + math.random() * 6)
+                if weather.token ~= token then break end
+                pcall(function()
+                    local c = cam.CFrame.Position
+                    local ang = math.random() * math.pi * 2
+                    local d = 70 + math.random() * 120
+                    local top = c + Vector3.new(math.cos(ang) * d, 150, math.sin(ang) * d)
+                    rp.FilterDescendantsInstances = { fxFolder, lp.Character }
+                    local hit = workspace:Raycast(top, Vector3.new(0, -400, 0), rp)
+                    local ground = hit and hit.Position or (top - Vector3.new(0, 150, 0))
+                    boltBetween(top, ground, rgb(205, 220, 255), 1.5, 22, 7, 0.5)
+                    boltBetween(top, ground, Color3.new(1, 1, 1), 0.55, 22, 5, 0.4)
+                    for i = 1, 3 do
+                        local from = top:Lerp(ground, 0.25 + math.random() * 0.5)
+                        boltBetween(from, from + Vector3.new(math.random(-30, 30), -math.random(20, 50), math.random(-30, 30)), rgb(190, 205, 255), 0.4, 9, 3, 0.35)
+                    end
+                    if cc then
+                        local base = weather.baseBright or 0
+                        cc.Brightness = base + 0.42
+                        tw(cc, 0.5, { Brightness = base }, Enum.EasingStyle.Quad)
+                        task.delay(0.16, function()
+                            if cc and weather.token == token then
+                                cc.Brightness = base + 0.28
+                                tw(cc, 0.55, { Brightness = base }, Enum.EasingStyle.Quad)
+                            end
+                        end)
+                    end
+                    screenFlash(rgb(210, 220, 255), 0.18)
+                end)
+            end
+        end)
+    end
+
+    local PRESETS = {
+        ["Snowfall"] = {
+            mood = { density = 0.34, color = rgb(214, 224, 240), decay = rgb(170, 186, 208), haze = 1.4, bright = -0.01, sat = -0.12, tint = rgb(226, 236, 255) },
+            function()
+                layer({ h = 22, rate = 240, tex = SMOKE, le = 0.2, c0 = Color3.new(1, 1, 1), t0 = 0.12, size = 0.26, l0 = 5, l1 = 7, s0 = 3, s1 = 6, spread = Vector2.new(28, 28), acc = Vector3.new(2, 0, 1), wind = 3, drag = 0.4 })
+                layer({ h = 20, rate = 26, tex = SPARK, le = 0.35, c0 = Color3.new(1, 1, 1), t0 = 0.08, size = 0.7, spin = 40, l0 = 6, l1 = 8, s0 = 1.5, s1 = 3, spread = Vector2.new(35, 35), acc = Vector3.new(1, 0, 0), wind = 2, drag = 0.6 })
+            end,
+        },
+        ["Blizzard"] = {
+            mood = { density = 0.62, color = rgb(222, 230, 242), decay = rgb(185, 198, 218), haze = 2.6, bright = -0.05, contrast = -0.1, sat = -0.25, tint = rgb(214, 228, 255) },
+            function()
+                layer({ h = 20, rate = 650, tex = SMOKE, le = 0.2, c0 = Color3.new(1, 1, 1), t0 = 0.1, size = 0.3, l0 = 2.5, l1 = 3.5, s0 = 8, s1 = 14, spread = Vector2.new(30, 30), acc = Vector3.new(26, 0, 6), wind = 10, gust = 0.9 })
+                layer({ h = 4, rate = 14, tex = SMOKE, le = 0, c0 = rgb(235, 240, 248), t0 = 0.8, size = 12, grow = true, l0 = 4, l1 = 6, s0 = 6, s1 = 12, spread = Vector2.new(20, 20), dir = Enum.NormalId.Front, acc = Vector3.new(14, 0, 3), wind = 5, w = 120 })
+            end,
+        },
+        ["Rain"] = {
+            mood = { density = 0.42, color = rgb(128, 140, 156), decay = rgb(96, 108, 124), haze = 1.8, bright = -0.07, contrast = 0.04, sat = -0.18, tint = rgb(190, 202, 226) },
+            function()
+                layer({ h = 26, rate = 850, tex = SMOKE, le = 0.3, c0 = rgb(208, 222, 244), t0 = 0.42, size = 1.1, streak = -9, l0 = 0.5, l1 = 0.6, s0 = 90, s1 = 115, spread = Vector2.new(2, 2), acc = Vector3.new(6, 0, 2), wind = 3 })
+                layer({ h = 2, rate = 12, tex = SMOKE, le = 0, c0 = rgb(160, 170, 184), t0 = 0.84, size = 9, grow = true, l0 = 5, l1 = 7, s0 = 1, s1 = 3, spread = Vector2.new(40, 40), dir = Enum.NormalId.Front, wind = 1.5, w = 110 })
+            end,
+        },
+        ["Thunderstorm"] = {
+            lightning = true,
+            mood = { density = 0.55, color = rgb(86, 96, 112), decay = rgb(58, 66, 82), haze = 2.4, bright = -0.12, contrast = 0.08, sat = -0.25, tint = rgb(170, 184, 215) },
+            function()
+                layer({ h = 26, rate = 1250, tex = SMOKE, le = 0.3, c0 = rgb(200, 216, 240), t0 = 0.38, size = 1.2, streak = -10, l0 = 0.4, l1 = 0.5, s0 = 105, s1 = 135, spread = Vector2.new(3, 3), acc = Vector3.new(18, 0, 5), wind = 6, gust = 0.8 })
+                layer({ h = 2, rate = 16, tex = SMOKE, le = 0, c0 = rgb(120, 128, 144), t0 = 0.82, size = 11, grow = true, l0 = 5, l1 = 7, s0 = 2, s1 = 5, spread = Vector2.new(40, 40), dir = Enum.NormalId.Front, wind = 3, w = 120 })
+            end,
+        },
+        ["Misty Morning"] = {
+            mood = { density = 0.58, color = rgb(224, 226, 232), decay = rgb(190, 194, 206), haze = 2.8, glare = 0.25, bright = 0.01, sat = -0.06, tint = rgb(255, 246, 236) },
+            function()
+                layer({ h = 3, rate = 8, tex = SMOKE, le = 0.1, c0 = rgb(228, 232, 240), t0 = 0.86, size = 15, grow = true, l0 = 8, l1 = 11, s0 = 0.6, s1 = 1.6, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1.2, w = 120 })
+                layer({ h = 8, rate = 9, tex = SPARK, le = 0.9, c0 = rgb(255, 236, 190), t0 = 0.25, size = 0.22, l0 = 5, l1 = 8, s0 = 0.2, s1 = 0.7, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1, w = 50 })
+            end,
+        },
+        ["Fireflies"] = {
+            mood = { density = 0.3, color = rgb(70, 92, 120), decay = rgb(40, 56, 80), haze = 1.2, bright = -0.07, sat = 0.06, tint = rgb(176, 206, 240) },
+            function()
+                local blink = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.2, 0.05), NumberSequenceKeypoint.new(0.4, 0.8), NumberSequenceKeypoint.new(0.6, 0.05), NumberSequenceKeypoint.new(0.8, 0.7), NumberSequenceKeypoint.new(1, 1) })
+                layer({ h = 4, w = 55, rate = 11, tex = SMOKE, le = 1, c0 = rgb(214, 255, 140), c1 = rgb(150, 255, 170), alpha = blink, size = 0.3, l0 = 5, l1 = 8, s0 = 0.4, s1 = 1.4, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1.4, drag = 1 })
+                layer({ h = 4, w = 55, rate = 11, tex = SMOKE, le = 1, c0 = rgb(180, 255, 130), alpha = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.2, 0.86), NumberSequenceKeypoint.new(0.4, 0.96), NumberSequenceKeypoint.new(0.6, 0.86), NumberSequenceKeypoint.new(0.8, 0.95), NumberSequenceKeypoint.new(1, 1) }), size = 1.3, l0 = 5, l1 = 8, s0 = 0.4, s1 = 1.4, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1.4, drag = 1 })
+            end,
+        },
+        ["Ashfall"] = {
+            mood = { density = 0.46, color = rgb(94, 56, 46), decay = rgb(70, 38, 30), haze = 2.2, bright = -0.05, contrast = 0.05, sat = -0.05, tint = rgb(255, 214, 188) },
+            function()
+                layer({ h = 20, rate = 150, tex = SMOKE, le = 0, c0 = rgb(78, 74, 74), c1 = rgb(120, 112, 108), t0 = 0.3, size = 0.34, spin = 90, l0 = 6, l1 = 9, s0 = 1.2, s1 = 2.6, spread = Vector2.new(40, 40), acc = Vector3.new(2, 0, 1), wind = 2.5, drag = 0.5 })
+                layer({ h = -3, w = 60, rate = 34, tex = SPARK, le = 1, c0 = rgb(255, 196, 90), c1 = rgb(255, 80, 30), t0 = 0.05, size = 0.24, l0 = 3, l1 = 5, s0 = 2, s1 = 5, spread = Vector2.new(30, 30), dir = Enum.NormalId.Top, acc = Vector3.new(0, 1.5, 0), wind = 3 })
+            end,
+        },
+        ["Cherry Blossoms"] = {
+            mood = { density = 0.22, color = rgb(255, 232, 238), decay = rgb(240, 200, 214), haze = 1.2, glare = 0.2, bright = 0.01, sat = 0.1, tint = rgb(255, 238, 244) },
+            function()
+                layer({ h = 18, rate = 60, tex = SMOKE, le = 0.15, color = ColorSequence.new({ ColorSequenceKeypoint.new(0, rgb(255, 226, 238)), ColorSequenceKeypoint.new(1, rgb(255, 170, 205)) }), t0 = 0.05, size = 0.6, spin = 200, l0 = 6, l1 = 9, s0 = 1.2, s1 = 2.6, spread = Vector2.new(55, 55), acc = Vector3.new(1.5, 0, 0.5), wind = 4.5, gust = 0.35, drag = 0.9 })
+                layer({ h = 14, rate = 10, tex = SPARK, le = 0.8, c0 = rgb(255, 244, 248), t0 = 0.2, size = 0.28, l0 = 5, l1 = 8, s0 = 0.3, s1 = 0.9, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1.5 })
+            end,
+        },
+        ["Autumn Leaves"] = {
+            mood = { density = 0.2, color = rgb(250, 222, 186), decay = rgb(220, 170, 120), haze = 1.1, glare = 0.15, bright = 0, sat = 0.12, tint = rgb(255, 236, 214) },
+            function()
+                layer({ h = 18, rate = 34, tex = SMOKE, le = 0, color = ColorSequence.new({ ColorSequenceKeypoint.new(0, rgb(232, 150, 52)), ColorSequenceKeypoint.new(0.5, rgb(190, 76, 36)), ColorSequenceKeypoint.new(1, rgb(120, 70, 36)) }), t0 = 0, size = 0.75, spin = 140, l0 = 6, l1 = 9, s0 = 1.8, s1 = 3.4, spread = Vector2.new(45, 45), acc = Vector3.new(2.5, 0, 1), wind = 6, gust = 0.3, drag = 0.8 })
+            end,
+        },
+        ["Haunted Mist"] = {
+            mood = { density = 0.5, color = rgb(74, 46, 102), decay = rgb(46, 26, 70), haze = 2.2, bright = -0.1, sat = 0.04, tint = rgb(214, 196, 255) },
+            function()
+                layer({ h = 3, rate = 9, tex = SMOKE, le = 0.35, c0 = rgb(128, 78, 180), c1 = rgb(70, 170, 120), t0 = 0.8, size = 13, grow = true, l0 = 7, l1 = 10, s0 = 0.8, s1 = 2, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1.6, w = 110 })
+                layer({ h = 4, w = 50, rate = 12, tex = SPARK, le = 1, c0 = rgb(255, 150, 40), c1 = rgb(170, 90, 255), t0 = 0.05, size = 0.55, l0 = 4, l1 = 6, s0 = 0.8, s1 = 2, spread = Vector2.new(60, 60), dir = Enum.NormalId.Top, acc = Vector3.new(0, 1.1, 0), wind = 2 })
+            end,
+        },
+        ["Golden Dust"] = {
+            mood = { density = 0.3, color = rgb(255, 236, 196), decay = rgb(240, 200, 140), haze = 1.6, glare = 0.5, bright = 0.02, contrast = 0.06, sat = 0.1, tint = rgb(255, 240, 214) },
+            function()
+                layer({ h = 6, w = 70, rate = 38, tex = SPARK, le = 0.95, c0 = rgb(255, 232, 170), t0 = 0.2, size = 0.22, l0 = 6, l1 = 10, s0 = 0.15, s1 = 0.6, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1.3, drag = 1 })
+                layer({ h = 9, w = 70, rate = 5, tex = SMOKE, le = 0.7, c0 = rgb(255, 226, 160), t0 = 0.93, size = 6, grow = true, l0 = 8, l1 = 12, s0 = 0.2, s1 = 0.8, spread = Vector2.new(180, 180), dir = Enum.NormalId.Front, wind = 1 })
+            end,
+        },
+        ["Confetti"] = {
+            mood = nil,
+            function()
+                layer({ h = 18, rate = 180, tex = SPARK, le = 0.2, color = ColorSequence.new({ ColorSequenceKeypoint.new(0, rgb(255, 70, 110)), ColorSequenceKeypoint.new(0.33, rgb(255, 220, 60)), ColorSequenceKeypoint.new(0.66, rgb(70, 220, 255)), ColorSequenceKeypoint.new(1, rgb(190, 90, 255)) }), t0 = 0, size = 0.7, spin = 260, l0 = 3, l1 = 4, s0 = 5, s1 = 9, spread = Vector2.new(25, 25), wind = 3 })
+            end,
+        },
+    }
+
+    setWeather = function(kind)
+        for _, w in ipairs(weather.parts) do pcall(function() w.part:Destroy() end) end
+        weather.parts, weather.wind = {}, {}
+        weather.kind = kind
+        weather.token = nil
+        local preset = PRESETS[kind]
+        if not preset then
+            moodApply(nil)
+            return
+        end
+        local token = {}
+        weather.token = token
+        preset[1]()
+        moodApply(preset.mood)
+        if preset.lightning then lightning(token) end
+    end
+
+    -- every frame: the slabs follow the camera and the wind keeps changing direction a little
+    weather.step = function(now)
+        if #weather.parts == 0 then return end
+        local c = cam.CFrame.Position
+        for _, w in ipairs(weather.parts) do
+            w.part.CFrame = CFrame.new(c + Vector3.new(0, w.height, 0))
+        end
+        for _, w in ipairs(weather.wind) do
+            w.e.Acceleration = w.base + Vector3.new(math.sin(now * w.fast + w.ph) * w.k, math.sin(now * 0.3 + w.ph * 2) * w.k * 0.15, math.cos(now * w.fast * 0.8 + w.ph) * w.k * 0.7)
+        end
+    end
 end
 onCleanup(function() setWeather("Off") end)
 
@@ -3910,6 +4361,10 @@ local MODEL_PRESETS = {
     { "Shark", 1105996, "market" },
     { "TUNG Sahur", 164815366314625, "market" },
     { "Withered Golden Freddy", 103872628924571, "market" },
+    { "Herobrine", 103153167628525, "market" },
+    { "Shrek", 34356843621214, "market" },
+    { "Cristiano Ronaldo", { 946, 115658016588579, 104775751657638, 15917804613 }, "market" },
+    { "Stylized Skeleton", 160527682802304, "market" },
 }
 local MODEL_NAMES = {}
 local modelIdByName = {}
@@ -4299,9 +4754,7 @@ track(RunService.RenderStepped:Connect(function()
         if c.Parent then pcall(updateAura, c, a, t) end
     end
     if MR.on then pcall(mrStep, t) end
-    if weather.part then
-        weather.part.CFrame = CFrame.new(cam.CFrame.Position + Vector3.new(0, weather.height or 30, 0))
-    end
+    if weather.step then weather.step(t) end
 end))
 
 
@@ -4346,6 +4799,15 @@ local WorldTab = subTab({ Name = "World", Icon = "globe" })
 local SkinTab = Win:CreateTab({ Name = "Skins", Icon = "palette" })
 local HalloweenTab = Win:CreateTab({ Name = "Halloween", Icon = "ghost" })
 local MiscTab = Win:CreateTab({ Name = "Misc", Icon = "wrench" })
+local MiscSub = (function()
+    local function mk(name, icon)
+        if MiscTab.SubTab then return MiscTab:SubTab({ Name = name, Icon = icon }) end
+        return Win:CreateTab({ Name = "Misc: " .. name, Icon = icon })
+    end
+    local general, sounds = mk("General", "wrench"), mk("Sounds", "volume-2")
+    return { general = general, sounds = sounds, left = general:Column("left"), right = general:Column("right"),
+        soundL = sounds:Column("left"), soundR = sounds:Column("right") }
+end)()
 Win:AddSettingsTab()
 
 -- COMBAT ------------------------------------------------------------
@@ -4560,6 +5022,7 @@ do
     end
     local WalkTab, TpTab = moveSub("Walk", "footprints"), moveSub("Teleport", "map-pin")
     local L = WalkTab:Column("left")
+    local WR = WalkTab:Column("right")
     local R = TpTab:Column("left")
     local mv = L:CreateSection({ Name = "Movement", Icon = "footprints", Collapsible = true })
     local sp = mv:AddToggle({ Name = "Speed", Callback = function(v)
@@ -4580,7 +5043,7 @@ do
     mv:AddSlider({ Name = "Fly Speed", Min = 20, Max = 200, Default = S.flySpeed, Callback = function(v) S.flySpeed = v end })
     mv:AddToggle({ Name = "Anti Void", Default = true, Callback = function(v) S.antiVoid = v end })
 
-    local bh = L:CreateSection({ Name = "Bunny Hop", Icon = "rabbit", Collapsible = true })
+    local bh = WR:CreateSection({ Name = "Bunny Hop", Icon = "rabbit", Collapsible = true })
     local bhT = bh:AddToggle({ Name = "Bunny Hop", Icon = "rabbit", Description = "Auto-jumps and gains speed with every hop", Callback = function(v)
         S.bhop = v
         if not v then
@@ -4596,7 +5059,7 @@ do
     bh:AddSlider({ Name = "Speed Gain", Min = 1, Max = 10, Default = S.bhopStep, Decimals = 1, Callback = function(v) S.bhopStep = v end })
     bh:AddSlider({ Name = "Jump Height", Min = 20, Max = 200, Default = S.bhopJump, Description = "How high each hop goes", Callback = function(v) S.bhopJump = v end })
 
-    local bd = L:CreateSection({ Name = "Body", Icon = "ruler", Collapsible = true })
+    local bd = WR:CreateSection({ Name = "Body", Icon = "ruler", Collapsible = true })
     local hipOrig
     bd:AddToggle({ Name = "Hip Height", Description = "Lifts or lowers your body above the floor", Callback = function(v)
         S.hip = v
@@ -4708,17 +5171,7 @@ end
 do
     local L, R = SkinTab:Column("left"), SkinTab:Column("right")
 
-    local ws = L:CreateSection({ Name = "Weapon Skins", Icon = "palette", Collapsible = true })
-    ws:AddLabel("Shown only on your screen. Any model asset works as a weapon.")
-    SK.dd.Knife = ws:AddDropdown({ Name = "Knife", Options = SK.names.Knife, Default = "Default (real)", Callback = function(v)
-        SK.pick.Knife = (v and v ~= "Default (real)") and v or nil
-    end })
-    SK.dd.Gun = ws:AddDropdown({ Name = "Gun", Options = SK.names.Gun, Default = "Default (real)", Callback = function(v)
-        SK.pick.Gun = (v and v ~= "Default (real)") and v or nil
-    end })
-    ws:AddDropdown({ Name = "Show When Empty-Handed", Options = { "Knife", "Gun", "Off" }, Default = "Knife", Description = "What you hold in the lobby / as an innocent", Callback = function(v) SK.idle = v or "Knife" end })
-
-    -- ready-made weapons (model assets)
+    -- two lists, one per weapon; "Off" (the default) shows the real weapon, anything else is applied right away
     local GUN_PRESETS = {
         { "AWP Sniper", 9736025924 }, { "AK-47", 9914863724 }, { "AK-47 (mesh)", 4776045776 },
         { "Minigun", 91486152 }, { "Shotgun", 3840063 }, { "Rocket Launcher", 175731201 },
@@ -4727,111 +5180,45 @@ do
         { "Banana", 13165469156 }, { "Lightsaber", 14558617502 }, { "Green Lightsaber", 12857941046 },
         { "Katana", 11401699633 }, { "Black Katana", 140237683099823 }, { "Chainsaw", 3155896845 },
     }
-    local pr = L:CreateSection({ Name = "Presets", Icon = "swords", Collapsible = true })
-    local function presetPicker(slot, list)
-        local names, byName = {}, {}
+    local sk = L:CreateSection({ Name = "Skins", Icon = "palette", Collapsible = true })
+    local function skinList(slot, title, list)
+        local names, byName = { "Off" }, {}
         for _, p in ipairs(list) do names[#names + 1] = p[1] byName[p[1]] = p end
-        local cur = names[1]
-        pr:AddDropdown({ Name = slot .. " Preset", Options = names, Default = cur, Callback = function(v) cur = v or cur end })
-        pr:AddButton({ Name = "Use as " .. slot, Primary = true, Callback = function()
-            local p = byName[cur]
-            loadSkinAsset(p[2], p[1], slot)
-        end })
-    end
-    presetPicker("Gun", GUN_PRESETS)
-    presetPicker("Knife", KNIFE_PRESETS)
-
-    local fit = L:CreateSection({ Name = "Fit", Icon = "move-3d", Collapsible = true })
-    fit:AddLabel("Rotate / resize the skin if it sits wrong in your hand.")
-    local slotSel = "Knife"
-    local fitSliders = {}
-    fit:AddDropdown({ Name = "Adjust", Options = { "Knife", "Gun" }, Default = "Knife", Callback = function(v)
-        slotSel = v or "Knife"
-        local a = SK.adj[slotSel]
-        local vals = { size = a.size, rx = a.rot.X, ry = a.rot.Y, rz = a.rot.Z, ox = a.off.X, oy = a.off.Y, oz = a.off.Z }
-        for k, s in pairs(fitSliders) do pcall(s.Set, vals[k], true) end
-    end })
-    local function fitSlider(key, name, mn, mx, dec, suffix, apply)
-        fitSliders[key] = fit:AddSlider({ Name = name, Min = mn, Max = mx, Default = key == "size" and 1 or 0, Decimals = dec, Suffix = suffix, Callback = function(v)
-            apply(SK.adj[slotSel], v)
-        end })
-    end
-    fitSlider("size", "Size", 0.2, 3, 2, "x", function(a, v) a.size = v end)
-    fitSlider("rx", "Rotate X", -180, 180, 0, "°", function(a, v) a.rot = Vector3.new(v, a.rot.Y, a.rot.Z) end)
-    fitSlider("ry", "Rotate Y", -180, 180, 0, "°", function(a, v) a.rot = Vector3.new(a.rot.X, v, a.rot.Z) end)
-    fitSlider("rz", "Rotate Z", -180, 180, 0, "°", function(a, v) a.rot = Vector3.new(a.rot.X, a.rot.Y, v) end)
-    fitSlider("ox", "Move X", -2, 2, 2, "", function(a, v) a.off = Vector3.new(v, a.off.Y, a.off.Z) end)
-    fitSlider("oy", "Move Y", -2, 2, 2, "", function(a, v) a.off = Vector3.new(a.off.X, v, a.off.Z) end)
-    fitSlider("oz", "Move Z", -2, 2, 2, "", function(a, v) a.off = Vector3.new(a.off.X, a.off.Y, v) end)
-
-    -- catalog ------------------------------------------------------------
-    local cs = R:CreateSection({ Name = "Catalog Skins", Icon = "search", Collapsible = true })
-    cs:AddLabel("Searches the Roblox toolbox for models.")
-    local kw, results, chosen = "karambit knife", {}, nil
-    cs:AddTextbox({ Name = "Keyword", Default = kw, Placeholder = "knife, sword, pistol...", Callback = function(t) kw = t end })
-    local resDd = cs:AddDropdown({ Name = "Results", Options = {}, Callback = function(v) chosen = v end })
-    cs:AddButton({ Name = "Search", Primary = true, Callback = function()
-        notify("Skins", "Searching...", "info", 2)
-        searchModels(kw, function(list, err)
-            if not list then return notify("Skins", "Search failed: " .. tostring(err), "error", 5) end
-            results = {}
-            local names = {}
-            for _, x in ipairs(list) do
-                local label = string.format("%s - %s", x.name:sub(1, 36), x.by)
-                local i = 1
-                while results[label] do i += 1 label = string.format("%s - %s #%d", x.name:sub(1, 32), x.by, i) end
-                results[label] = { id = x.id, name = x.name }
-                names[#names + 1] = label
+        sk:AddDropdown({ Name = title, Options = names, Default = "Off", Callback = function(v)
+            v = v or "Off"
+            if v == "Off" then
+                SK.pick[slot] = nil
+            elseif SK.list[slot][v] then
+                SK.pick[slot] = v
+            else
+                loadSkinAsset(byName[v][2], v, slot)
             end
-            resDd.Refresh(names)
-            notify("Skins", #names .. " results", "success")
-        end)
-    end })
-    cs:AddButton({ Name = "Use as Knife", Callback = function()
-        local r = chosen and results[chosen]
-        if r then loadSkinAsset(r.id, r.name, "Knife") else notify("Skins", "Pick a result first", "warning") end
-    end })
-    cs:AddButton({ Name = "Use as Gun", Callback = function()
-        local r = chosen and results[chosen]
-        if r then loadSkinAsset(r.id, r.name, "Gun") else notify("Skins", "Pick a result first", "warning") end
-    end })
-
-    local cu = R:CreateSection({ Name = "Asset ID", Icon = "box", Collapsible = true })
-    local assetBox = ""
-    cu:AddTextbox({ Name = "Model Asset ID", Placeholder = "e.g. 9914863724", Numeric = true, Callback = function(t) assetBox = t end })
-    local function byId(slot)
-        local id = tonumber(assetBox)
-        if not id then return notify("Skins", "Enter a numeric asset id", "warning") end
-        loadSkinAsset(id, "Asset " .. id, slot)
+        end })
     end
-    cu:AddButton({ Name = "Use as Knife", Callback = function() byId("Knife") end })
-    cu:AddButton({ Name = "Use as Gun", Callback = function() byId("Gun") end })
+    skinList("Gun", "Gun", GUN_PRESETS)
+    skinList("Knife", "Knife", KNIFE_PRESETS)
 
-    -- avatar -------------------------------------------------------------
-    local av = R:CreateSection({ Name = "Avatar Changer", Icon = "user", Collapsible = true })
-    av:AddLabel("Copies another user's look. Only you see it.")
-    av:AddToggle({ Name = "Hide Accessories", Description = "Hats and hair vanish (only on your screen)", Callback = function(v) F.hideHats = v end })
+
+    local lb = R:CreateSection({ Name = "Skin Library", Icon = "library", Collapsible = true })
+    lb:AddLabel("Every knife and gun you see in a round is copied here, from other players' hands too. Saved to a file, so it keeps growing.")
+    lb:AddToggle({ Name = "Collect Weapons", Default = true, Callback = function(v) SK.lib.on = v end })
+    lb:AddStat({ Name = "Saved", Interval = 1, Get = function() return SK.lib.count.Knife .. " knives, " .. SK.lib.count.Gun .. " guns" end })
+    local function libList(slot, title)
+        SK.lib.names = SK.lib.names or {}
+        SK.lib.dd[slot] = lb:AddDropdown({ Name = title, Options = { "Off" }, Default = "Off", Callback = function(v)
+            v = v or "Off"
+            if v == "Off" then SK.pick[slot] = nil return end
+            for _, it in ipairs(SK.lib.items) do
+                if it.slot == slot and it.label == v then return SK.lib.wear(it) end
+            end
+        end })
+    end
+    libList("Gun", "Saved Guns")
+    libList("Knife", "Saved Knives")
+    SK.lib.refresh()
+
+    local av = L:CreateSection({ Name = "Avatar", Icon = "user", Collapsible = true })
     av:AddToggle({ Name = "Headless", Description = "Your head and face vanish (only on your screen)", Callback = function(v) F.headless = v end })
-    local who = ""
-    av:AddTextbox({ Name = "Username / UserId", Placeholder = "Roblox username or id", Callback = function(t) who = t end })
-    av:AddButton({ Name = "Apply", Primary = true, Callback = function()
-        if who == "" then return notify("Avatar", "Enter a username or id", "warning") end
-        applyAvatar(who)
-    end })
-    local function playerNames()
-        local t = {}
-        for _, p in ipairs(Players:GetPlayers()) do if p ~= lp then t[#t + 1] = p.Name end end
-        table.sort(t)
-        return t
-    end
-    local copyWho
-    local copyDd = av:AddDropdown({ Name = "Copy Player", Options = playerNames(), Callback = function(v) copyWho = v end })
-    av:AddButton({ Name = "Refresh Players", Callback = function() copyDd.Refresh(playerNames(), true) end })
-    av:AddButton({ Name = "Copy Selected", Callback = function()
-        local p = copyWho and Players:FindFirstChild(copyWho)
-        if p then applyDescriptionFor(p.UserId, p.DisplayName) else notify("Avatar", "Select a player", "warning") end
-    end })
-    av:AddButton({ Name = "Reset", Callback = resetAvatar })
 end
 
 -- EFFECTS -----------------------------------------------------------
@@ -4881,6 +5268,16 @@ do
     tlT:AddColorPicker({ Default = F.trailColor, Callback = function(c) F.trailColor = c end })
     tl:AddDropdown({ Name = "Style", Options = { "Ribbon", "Comet", "Stardust", "Ripples" }, Default = F.trailStyle, Callback = function(v) F.trailStyle = v or "Ribbon" end })
     tl:AddToggle({ Name = "Rainbow", Default = true, Callback = function(v) F.trailRainbow = v end })
+
+    local jf = R:CreateSection({ Name = "Jump Effects", Icon = "arrow-up", Collapsible = true })
+    local jfT = jf:AddToggle({ Name = "Jump Effects", Icon = "arrow-up", Description = "Waves where you land, a soft ring when you jump", Callback = function(v) F.jfx = v end })
+    jfT:AddColorPicker({ Default = F.jfxColor, Callback = function(c) F.jfxColor = c end })
+    jf:AddDropdown({ Name = "Jump Style", Options = { "Ripple", "Shockwave", "Stardust", "Petals", "Spirit" }, Default = F.jfxStyle, Callback = function(v) F.jfxStyle = v or "Ripple" end })
+    jf:AddDropdown({ Name = "Jump Colors", Options = { "Custom", "Rainbow", "By Role" }, Default = F.jfxMode, Callback = function(v) F.jfxMode = v or "Custom" end })
+    jf:AddSlider({ Name = "Jump Size", Min = 0.5, Max = 2, Default = F.jfxSize, Decimals = 1, Suffix = "x", Callback = function(v) F.jfxSize = v end })
+    jf:AddToggle({ Name = "Takeoff Ring", Default = true, Callback = function(v) F.jfxTakeoff = v end })
+    jf:AddToggle({ Name = "Show Others", Description = "Other players' jumps too", Callback = function(v) F.jfxOthers = v end })
+    jf:AddButton({ Name = "Preview Landing", Primary = true, Callback = function() if F.jfxPreview then F.jfxPreview() end end })
 end
 
 -- POST FX -----------------------------------------------------------
@@ -4931,6 +5328,14 @@ do
 
     local we = L:CreateSection({ Name = "Weather", Icon = "cloud-snow", Collapsible = true })
     we:AddDropdown({ Name = "Type", Options = WEATHER_KINDS, Default = "Off", Callback = function(v) setWeather(v or "Off") end })
+    we:AddSlider({ Name = "Intensity", Min = 0.4, Max = 2, Default = 1, Decimals = 1, Suffix = "x", Callback = function(v)
+        weather.intensity = v
+        if weather.kind ~= "Off" then setWeather(weather.kind) end
+    end })
+    we:AddToggle({ Name = "Atmosphere Mood", Default = true, Description = "Haze and colour grade that go with the weather", Callback = function(v)
+        weather.mood = v
+        if weather.kind ~= "Off" then setWeather(weather.kind) end
+    end })
 
     local vg = L:CreateSection({ Name = "Vignette", Icon = "circle", Collapsible = true })
     vg:AddSlider({ Name = "Strength", Min = 0, Max = 100, Default = 0, Suffix = " %", Callback = function(v) setVignette(v / 100) end })
@@ -4964,56 +5369,383 @@ do
         local m = modelIdByName[chosen]
         loadModelAsset(m[2], false, m[3])
     end })
-    local customId = ""
-    rp:AddTextbox({ Name = "Asset ID", Placeholder = "e.g. 138151705692565", Numeric = true, Callback = function(t) customId = t end })
-    rp:AddButton({ Name = "Load ID", Callback = function()
-        local id = tonumber(customId)
-        if id then loadModelAsset(id) else notify("Model", "Enter a numeric asset id", "warning") end
-    end })
-    local itemText = ""
-    rp:AddTextbox({ Name = "Marketplace Item", Placeholder = "bundle / item link or id", Callback = function(t) itemText = t end })
-    rp:AddButton({ Name = "Load Item", Callback = function()
-        local id, kind = parseItemId(itemText)
-        local why = not id and kind or nil
-        if id then loadModelAsset(id, false, kind) else notify("Model", why or "Paste a /bundles/ or /catalog/ link", "warning", 6) end
-    end })
-    rp:AddSlider({ Name = "Height", Min = 2, Max = 16, Default = MR.height, Decimals = 1, Suffix = " st", Callback = function(v) MR.height = v end })
-    rp:AddSlider({ Name = "Rotation Offset", Min = 0, Max = 360, Default = 0, Suffix = "°", Callback = function(v) MR.yaw = v end })
-    rp:AddSlider({ Name = "Vertical Offset", Min = -3, Max = 3, Default = 0, Decimals = 1, Callback = function(v) MR.yoff = v end })
-    rp:AddButton({ Name = "Remove", Callback = function()
-        if MR.toggle then MR.toggle.Set(false) end
-        mrDropAll()
-        if MR.template then MR.template:Destroy() MR.template = nil end
-    end })
 
-    local sr = R:CreateSection({ Name = "Search Models", Icon = "search", Collapsible = true })
-    sr:AddLabel("Searches the Roblox toolbox. Scripts and sounds are stripped.")
-    local kw, results = "tung tung sahur", {}
-    sr:AddTextbox({ Name = "Keyword", Default = kw, Placeholder = "keyword", Callback = function(t) kw = t end })
-    local resDd
-    local resChosen
-    resDd = sr:AddDropdown({ Name = "Results", Options = {}, Callback = function(v) resChosen = v end })
-    sr:AddButton({ Name = "Search", Primary = true, Callback = function()
-        notify("Model", "Searching...", "info", 2)
-        searchModels(kw, function(list, err)
-            if not list then return notify("Model", "Search failed: " .. tostring(err), "error", 5) end
-            results = {}
-            local names = {}
-            for _, x in ipairs(list) do
-                local label = string.format("%s - %s", x.name:sub(1, 38), x.by)
-                local i = 1
-                while results[label] do i += 1 label = string.format("%s - %s #%d", x.name:sub(1, 34), x.by, i) end
-                results[label] = x.id
-                names[#names + 1] = label
+    -- Pets: a real little character (own rig, own Humanoid) that walks, runs and jumps after you. Only you see it.
+    do
+        local PETS = {
+            { "Tung Tung Sahur", 164815366314625 }, { "Chubby Dog", 22202531681153 }, { "Capybara", 159803432748970 },
+            { "Squirrel", 178960554982276 }, { "Rabbit", 38324265921292 }, { "Cat", 3623 },
+            { "Baby Frog", 187021437835849 }, { "Chunky Frog", 80198322906896 }, { "Mini Frog", 25322869002475 },
+        }
+        local ANIM = {
+            idle = "rbxassetid://507766666", walk = "rbxassetid://507777826", run = "rbxassetid://507767714",
+            jump = "rbxassetid://507765000", fall = "rbxassetid://507767968",
+            -- things it does when you are away from the keyboard
+            sit = "rbxassetid://2506281703", wave = "rbxassetid://507770239", point = "rbxassetid://507770453",
+            dance = "rbxassetid://507771019", dance2 = "rbxassetid://507776043", dance3 = "rbxassetid://507777268",
+            laugh = "rbxassetid://507770818", cheer = "rbxassetid://507770677",
+            -- the game's own emotes
+            dab = "rbxassetid://2445521505", floss = "rbxassetid://2452938820", headless = "rbxassetid://2513664073",
+            zombie = "rbxassetid://2513692312", ninja = "rbxassetid://2431864798", zen = "rbxassetid://2431812646",
+        }
+        local LOOPING = { idle = true, walk = true, run = true, sit = true, dance = true, dance2 = true, dance3 = true,
+            floss = true, zombie = true, ninja = true, zen = true }
+        -- label -> animation, or a procedural move (flip, spin ...) done by code
+        local EMOTE_DEFS = {
+            ["Backflip"] = { proc = "flip" }, ["Front Flip"] = { proc = "frontflip" }, ["Spin Jump"] = { proc = "spin" }, ["Hop"] = { proc = "hop" },
+            ["Wave"] = { anim = "wave" }, ["Point"] = { anim = "point" }, ["Cheer"] = { anim = "cheer" }, ["Laugh"] = { anim = "laugh" },
+            ["Dance 1"] = { anim = "dance", loop = true }, ["Dance 2"] = { anim = "dance2", loop = true }, ["Dance 3"] = { anim = "dance3", loop = true },
+            ["Dab"] = { anim = "dab" }, ["Floss"] = { anim = "floss", loop = true }, ["Headless"] = { anim = "headless" },
+            ["Zombie"] = { anim = "zombie", loop = true }, ["Ninja"] = { anim = "ninja", loop = true }, ["Zen"] = { anim = "zen", loop = true },
+            ["Sit"] = { anim = "sit", loop = true },
+        }
+        local EMOTE_ORDER = { "Backflip", "Front Flip", "Spin Jump", "Hop", "Wave", "Point", "Cheer", "Laugh", "Dance 1", "Dance 2", "Dance 3",
+            "Dab", "Floss", "Headless", "Zombie", "Ninja", "Zen", "Sit" }
+        local RANDOM_POOL = {}
+        for _, n in ipairs(EMOTE_ORDER) do if n ~= "Sit" then RANDOM_POOL[#RANDOM_POOL + 1] = n end end
+        local PT = { on = false, id = PETS[1][2], size = 0.6, baseH = 5, far = 6, close = 3, following = false, idleSince = 0, wander = nil,
+            loading = false, rig = nil, hum = nil, root = nil, tracks = {}, cur = nil, status = "Off", stuck = 0, ownerChar = nil, ncs = {},
+            pick = "Random", emoteLabel = "", preview = false, proc = nil, sideDir = Vector3.xAxis, lastInput = os.clock(), lastOp = nil, ownerVel = Vector3.zero, movingFor = 0, stillFor = 0, emote = nil, emoteUntil = 0, nextEmote = 0, afkEmotes = true, tick = 0, lastOwner = nil }
+
+        local function dropPet()
+            for _, c in ipairs(PT.ncs) do pcall(function() c:Destroy() end) end
+            PT.ncs = {}
+            if PT.rig then pcall(function() PT.rig:Destroy() end) end
+            PT.rig, PT.hum, PT.root, PT.cur, PT.tracks, PT.ownerChar, PT.emote = nil, nil, nil, nil, {}, nil, nil
+        end
+        -- the pet must never shove you: no collisions between its body and yours
+        local function ignoreOwner()
+            for _, c in ipairs(PT.ncs) do pcall(function() c:Destroy() end) end
+            PT.ncs = {}
+            local oc = lp.Character
+            PT.ownerChar = oc
+            if not (oc and PT.rig) then return end
+            for _, pp in ipairs(PT.rig:GetDescendants()) do
+                if pp:IsA("BasePart") then
+                    for _, op in ipairs(oc:GetDescendants()) do
+                        if op:IsA("BasePart") then
+                            local nc = Instance.new("NoCollisionConstraint")
+                            nc.Part0, nc.Part1, nc.Parent = pp, op, pp
+                            PT.ncs[#PT.ncs + 1] = nc
+                        end
+                    end
+                end
             end
-            resDd.Refresh(names)
-            notify("Model", #names .. " results", "success")
-        end)
-    end })
-    sr:AddButton({ Name = "Load Result", Callback = function()
-        local id = resChosen and results[resChosen]
-        if id then loadModelAsset(id) else notify("Model", "Pick a result first", "warning") end
-    end })
+        end
+        local function play(name, speed)
+            local tr = PT.tracks[name]
+            if not tr then return end
+            if PT.cur ~= name then
+                for n, other in pairs(PT.tracks) do if n ~= name and other.IsPlaying then other:Stop(0.2) end end
+                tr:Play(0.2)
+                PT.cur = name
+            end
+            if speed then tr:AdjustSpeed(speed) end
+        end
+        local function buildPet()
+            if PT.loading then return end
+            PT.loading, PT.status = true, "Loading..."
+            task.spawn(function()
+                local ok, objs = pcall(marketModel, PT.id)
+                PT.loading = false
+                local rig = ok and objs and objs[1]
+                if not rig then PT.status = "Error: could not build" return notify("Pets", "Could not build the pet", "error", 4) end
+                if not PT.on then rig:Destroy() PT.status = "Off" return end
+                dropPet()
+                for _, d in ipairs(rig:GetDescendants()) do
+                    if d:IsA("LuaSourceContainer") then d:Destroy() end
+                end
+                rig.Name = "MM2Pet"
+                local hum = rig:FindFirstChildOfClass("Humanoid")
+                local root = rig:FindFirstChild("HumanoidRootPart")
+                if not (hum and root) then rig:Destroy() PT.status = "Error: no humanoid" return end
+                hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+                hum.WalkSpeed, hum.JumpPower, hum.UseJumpPower = 16, 50, true
+                -- no tumbling or ragdolling: it only ever runs, jumps and falls on its feet
+                pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end)
+                pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false) end)
+                hum.PlatformStand = false
+                -- every pet is brought to the same height first, so a tiny frog and a tall log use the same size slider
+                local _, bb = rig:GetBoundingBox()
+                PT.baseH = math.max(bb.Y, 0.5)
+                pcall(function() rig:ScaleTo(5.2 * PT.size / PT.baseH) end)
+                root.Anchored = false
+                local r = hrpOf(lp)
+                local spot = r and (r.CFrame * CFrame.new(3, 0, 5)).Position or Vector3.new(0, 50, 0)
+                local rp = RaycastParams.new()
+                rp.FilterType = Enum.RaycastFilterType.Exclude
+                rp.FilterDescendantsInstances = { lp.Character, fxFolder }
+                local hit = workspace:Raycast(spot + Vector3.new(0, 6, 0), Vector3.new(0, -60, 0), rp)
+                local floorY = hit and hit.Position.Y or spot.Y
+                rig:PivotTo(CFrame.new(spot.X, floorY + hum.HipHeight + root.Size.Y / 2 + 0.15, spot.Z))
+                rig.Parent = fxFolder
+                root.AssemblyLinearVelocity = Vector3.zero
+                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+                PT.rig, PT.hum, PT.root = rig, hum, root
+                local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+                for name, id in pairs(ANIM) do
+                    local a = Instance.new("Animation")
+                    a.AnimationId = id
+                    local okTrack, tr = pcall(function() return animator:LoadAnimation(a) end)
+                    if okTrack and tr then
+                        tr.Looped = LOOPING[name] == true
+                        PT.tracks[name] = tr
+                    end
+                end
+                ignoreOwner()
+                PT.status = "Following"
+                notify("Pets", "Pet ready", "success", 3)
+            end)
+        end
+
+        local pt = R:CreateSection({ Name = "Pets", Icon = "paw-print", Collapsible = true })
+        pt:AddLabel("A little character that follows you on foot. Only you see it.")
+        pt:AddToggle({ Name = "Pet", Icon = "paw-print", Callback = function(v)
+            PT.on = v
+            if v then buildPet() else dropPet() PT.status = "Off" end
+        end })
+        local names = {}
+        for _, p in ipairs(PETS) do names[#names + 1] = p[1] end
+        pt:AddDropdown({ Name = "Pet Model", Options = names, Default = names[1], Callback = function(v)
+            for _, p in ipairs(PETS) do
+                if p[1] == v and p[2] ~= PT.id then
+                    PT.id = p[2]
+                    if PT.on then dropPet() buildPet() end
+                end
+            end
+        end })
+        pt:AddSlider({ Name = "Pet Size", Min = 0.3, Max = 1.5, Default = PT.size, Decimals = 2, Suffix = "x", Callback = function(v)
+            PT.size = v
+            if PT.on and PT.rig then pcall(function() PT.rig:ScaleTo(5.2 * v / PT.baseH) end) end
+        end })
+        pt:AddSlider({ Name = "Follow Distance", Min = 3, Max = 25, Default = PT.far, Decimals = 1, Suffix = " st", Description = "While you stand it may stray this far", Callback = function(v) PT.far = v end })
+        pt:AddSlider({ Name = "Stay Close", Min = 2, Max = 8, Default = PT.close, Decimals = 1, Suffix = " st", Description = "How near it stops when it catches up", Callback = function(v) PT.close = v end })
+        pt:AddToggle({ Name = "AFK Emotes", Default = true, Description = "Waves, dances and sits when you stand still for a while", Callback = function(v) PT.afkEmotes = v end })
+        pt:AddStat({ Name = "Status", Interval = 1, Get = function() return PT.status end })
+
+        track(UIS.InputBegan:Connect(function() PT.lastInput = os.clock() end))
+        track(UIS.InputChanged:Connect(function(i) if i.UserInputType ~= Enum.UserInputType.MouseMovement or i.Delta.Magnitude > 2 then PT.lastInput = os.clock() end end))
+
+        local function stopEmote()
+            if PT.emote then
+                local tr = PT.tracks[PT.emote]
+                if tr and tr.IsPlaying then tr:Stop(0.25) end
+                PT.emote, PT.cur, PT.proc, PT.preview = nil, nil, nil, false
+            end
+        end
+        local function startEmote(name, seconds)
+            local tr = PT.tracks[name]
+            if not tr then return end
+            for n, other in pairs(PT.tracks) do if n ~= name and other.IsPlaying then other:Stop(0.2) end end
+            tr:Play(0.25)
+            PT.emote, PT.cur, PT.emoteUntil = name, name, os.clock() + seconds
+        end
+
+        -- moves done by code: a jump with a full turn in the air, or hops
+        local function procEmote(kind)
+            local rig, hum, root = PT.rig, PT.hum, PT.root
+            if not (rig and hum and root) then return 0 end
+            local look = root.CFrame.LookVector
+            local yaw = math.atan2(-look.X, -look.Z)
+            local token = {}
+            PT.proc = token
+            if kind == "hop" then
+                task.spawn(function()
+                    for _ = 1, 3 do
+                        if PT.proc ~= token or not hum.Parent then return end
+                        hum.Jump = true
+                        task.wait(0.6)
+                    end
+                end)
+                return 2.1
+            end
+            local v = 46 * math.sqrt(math.max(PT.size, 0.4) / 0.6)
+            local dur = 2 * v / workspace.Gravity * 0.9
+            task.spawn(function()
+                hum.PlatformStand = true
+                root.AssemblyLinearVelocity = Vector3.new(0, v, 0)
+                local t0 = os.clock()
+                while PT.proc == token and os.clock() - t0 < dur and root.Parent do
+                    local dt = RunService.Heartbeat:Wait()
+                    local k = dt / dur
+                    if kind == "spin" then root.CFrame = root.CFrame * CFrame.Angles(0, math.pi * 4 * k, 0)
+                    elseif kind == "flip" then root.CFrame = root.CFrame * CFrame.Angles(-math.pi * 2 * k, 0, 0)
+                    else root.CFrame = root.CFrame * CFrame.Angles(math.pi * 2 * k, 0, 0) end
+                end
+                if root.Parent then root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, yaw, 0) end
+                if hum.Parent then hum.PlatformStand = false end
+            end)
+            return dur + 0.7
+        end
+        local function startLabel(label)
+            local def = EMOTE_DEFS[label]
+            if not def then return false end
+            PT.emoteLabel = label
+            if def.proc then
+                local secs = procEmote(def.proc)
+                PT.emote, PT.cur, PT.emoteUntil = "proc", "proc", os.clock() + secs
+                return true
+            end
+            local tr = PT.tracks[def.anim]
+            if not tr then return false end
+            local secs = def.loop and (4 + math.random() * 3) or math.max((tr.Length > 0 and tr.Length or 3) + 0.3, 1)
+            startEmote(def.anim, secs)
+            return true
+        end
+        local pickNames = { "Random" }
+        for _, n in ipairs(EMOTE_ORDER) do pickNames[#pickNames + 1] = n end
+        pt:AddDropdown({ Name = "AFK Emote", Options = pickNames, Default = "Random", Description = "One emote, or a random one each time", Callback = function(v) PT.pick = v or "Random" end })
+        pt:AddButton({ Name = "Play Emote Now", Callback = function()
+            if not (PT.on and PT.rig) then return notify("Pets", "Turn the pet on first", "warning") end
+            stopEmote()
+            local label = PT.pick == "Random" and RANDOM_POOL[math.random(#RANDOM_POOL)] or PT.pick
+            PT.preview = true
+            PT.following = false
+            startLabel(label)
+        end })
+
+        -- one brain step: where to walk and what to do
+        local function think(dt)
+            local rig, hum, root = PT.rig, PT.hum, PT.root
+            local r = hrpOf(lp)
+            if not (PT.on and rig and rig.Parent and hum and root and r) then return end
+            if PT.ownerChar ~= lp.Character then ignoreOwner() end
+            local op, rp = r.Position, root.Position
+            -- your speed is measured from where you actually are (smoothed), not from the physics velocity, which can flicker
+            if PT.lastOp and dt > 0 then
+                local inst = Vector3.new(op.X - PT.lastOp.X, 0, op.Z - PT.lastOp.Z) / dt
+                if inst.Magnitude < 120 then PT.ownerVel = PT.ownerVel:Lerp(inst, 0.35) end
+            end
+            PT.lastOp = op
+            local ov = PT.ownerVel
+            local ownerSpeed = ov.Magnitude
+            if ownerSpeed > 2.5 then PT.movingFor, PT.stillFor = PT.movingFor + dt, 0 else PT.stillFor, PT.movingFor = PT.stillFor + dt, 0 end
+            local toOwner = Vector3.new(op.X - rp.X, 0, op.Z - rp.Z)
+            local d = toOwner.Magnitude
+            if d > 3 then PT.sideDir = -toOwner / d end   -- the side of you it is on; kept while it stands next to you
+            if d > 70 or rp.Y < op.Y - 80 then
+                local a = math.random() * math.pi * 2
+                local spot = op + Vector3.new(math.cos(a) * PT.close, 0, math.sin(a) * PT.close)
+                local rp = RaycastParams.new()
+                rp.FilterType = Enum.RaycastFilterType.Exclude
+                rp.FilterDescendantsInstances = { lp.Character, fxFolder }
+                local hit = workspace:Raycast(spot + Vector3.new(0, 6, 0), Vector3.new(0, -60, 0), rp)
+                local floorY = hit and hit.Position.Y or spot.Y
+                rig:PivotTo(CFrame.new(spot.X, floorY + hum.HipHeight + root.Size.Y / 2 + 0.15, spot.Z))
+                root.AssemblyLinearVelocity = Vector3.zero
+                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+                PT.following, PT.wander, PT.stuck = false, nil, 0
+                stopEmote()
+                return
+            end
+            local ownerMoving = PT.movingFor > 0 or PT.stillFor < 0.35 and PT.following
+            -- following starts the moment you walk off, and keeps going for as long as you move (no stop-and-go)
+            if ownerMoving and d > PT.close * 0.8 then
+                PT.following = true
+            elseif PT.following and not ownerMoving and d <= PT.close + 1 then
+                PT.following, PT.idleSince = false, os.clock()
+            elseif not PT.following and d > PT.far then
+                PT.following = true
+            end
+
+            if PT.following then
+                PT.status = "Following"
+                stopEmote()
+                PT.wander = nil
+                local rel = Vector3.new(rp.X - op.X, 0, rp.Z - op.Z)
+                local dirOwner = ownerSpeed > 1.5 and ov.Unit or nil
+                local want, speed
+                if dirOwner and rel:Dot(dirOwner) > 0 and d < PT.close * 2.2 then
+                    -- it is in front of you as you walk: step out of your way and drop behind, never ahead
+                    local perp = Vector3.new(-dirOwner.Z, 0, dirOwner.X)
+                    local sgn = rel:Dot(perp) >= 0 and 1 or -1
+                    want = op - dirOwner * PT.close * 1.3 + perp * sgn * PT.close * 0.8
+                    speed = ownerSpeed + 12
+                else
+                    -- it keeps the side it is on; it only hurries when it is really behind, and never faster than you once close
+                    want = op + PT.sideDir * PT.close
+                    speed = d > PT.close * 2.2 and (ownerSpeed + (d - PT.close) * 4 + 2) or math.max(8, ownerSpeed + (d - PT.close) * 1.5)
+                end
+                hum.WalkSpeed = math.clamp(speed, 8, 46)
+                hum:MoveTo(want)
+                local moving = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z).Magnitude
+                if moving < 1 and d > PT.close + 1.5 then
+                    PT.stuck += dt
+                    if PT.stuck > 0.45 then hum.Jump = true PT.stuck = 0 end
+                else
+                    PT.stuck = 0
+                end
+                return
+            end
+
+            -- resting beside you
+            local afk = PT.stillFor > 8 or (os.clock() - PT.lastInput > 10 and ownerSpeed < 0.5)
+            if PT.emote then
+                if (not PT.preview and (not afk or not PT.afkEmotes)) or os.clock() > PT.emoteUntil then stopEmote() PT.nextEmote = os.clock() + 1.5 + math.random() * 2.5 end
+            elseif afk and PT.afkEmotes and os.clock() > PT.nextEmote and not PT.wander then
+                if PT.pick == "Random" then
+                    if os.clock() - PT.lastInput > 45 and PT.tracks.sit then
+                        PT.emoteLabel = "Sit"
+                        startEmote("sit", 1e9)
+                    else
+                        startLabel(RANDOM_POOL[math.random(#RANDOM_POOL)])
+                    end
+                else
+                    startLabel(PT.pick)
+                end
+            end
+            if PT.emote then
+                PT.status = PT.emote == "sit" and "Sitting (you are AFK)" or ("Emote: " .. PT.emoteLabel)
+                hum:Move(Vector3.zero)
+                hum:MoveTo(rp)
+                if toOwner.Magnitude > 0.1 and PT.emote ~= "sit" and PT.emote ~= "proc" then
+                    root.CFrame = root.CFrame:Lerp(CFrame.lookAt(rp, rp + toOwner), 0.12)
+                end
+                return
+            end
+            if PT.wander then
+                local left = Vector3.new(PT.wander.X - rp.X, 0, PT.wander.Z - rp.Z).Magnitude
+                if left < 1.2 or os.clock() - PT.idleSince > 4 then PT.wander, PT.idleSince = nil, os.clock() end
+            end
+            if PT.wander then
+                PT.status = "Strolling"
+                hum.WalkSpeed = 7
+                hum:MoveTo(PT.wander)
+            else
+                PT.status = afk and "Waiting" or "Resting"
+                hum:Move(Vector3.zero)
+                hum:MoveTo(rp)
+                if toOwner.Magnitude > 0.1 then root.CFrame = root.CFrame:Lerp(CFrame.lookAt(rp, rp + toOwner), 0.2) end
+                if not afk and os.clock() - PT.idleSince > 3 + math.random() * 3 then
+                    local a, rad = math.random() * math.pi * 2, 2 + math.random() * 2
+                    local spot = rp + Vector3.new(math.cos(a) * rad, 0, math.sin(a) * rad)
+                    local sd = Vector3.new(spot.X - op.X, 0, spot.Z - op.Z).Magnitude
+                    if sd < PT.far - 0.5 and sd > 2 then PT.wander = spot end
+                    PT.idleSince = os.clock()
+                end
+            end
+        end
+        track(RunService.Heartbeat:Connect(function(dt)
+            PT.tick += dt
+            if PT.tick >= 0.05 then
+                local step = PT.tick
+                PT.tick = 0
+                pcall(think, step)
+            end
+            -- animation follows the real movement, unless an emote is playing
+            if not (PT.on and PT.root and PT.hum and PT.hum.Parent) or PT.emote then return end
+            local v = PT.root.AssemblyLinearVelocity
+            local speed = Vector3.new(v.X, 0, v.Z).Magnitude
+            local air = PT.hum.FloorMaterial == Enum.Material.Air
+            if air and v.Y > 4 then play("jump")
+            elseif air and v.Y < -4 then play("fall")
+            elseif speed < 0.6 then play("idle")
+            elseif speed < 11 then play("walk", math.clamp(speed / 14, 0.4, 1.4))
+            else play("run", math.clamp(speed / 20, 0.6, 1.6)) end
+        end))
+        onCleanup(function() PT.on = false dropPet() end)
+    end
 end
 
 -- HALLOWEEN ---------------------------------------------------------
@@ -5180,7 +5912,7 @@ end
 
 -- EXTRAS: defense, sounds, music, emotes, HUD, trade guard -------------------------------------
 do
-    local R = MiscTab:Column("right")
+    local R = MiscSub.right
     local SoundService = game:GetService("SoundService")
     local Stats = game:GetService("Stats")
 
@@ -5273,7 +6005,7 @@ do
         s:Play()
         Debris:AddItem(s, 6)
     end
-    local sd = R:CreateSection({ Name = "Sounds", Icon = "volume-2", Collapsible = true })
+    local sd = MiscSub.soundL:CreateSection({ Name = "Sounds", Icon = "volume-2", Collapsible = true })
     local function soundGroup(kind, title, extra)
         local c = SND[kind]
         sd:AddToggle({ Name = title, Callback = function(v) c.on = v end })
@@ -5308,7 +6040,7 @@ do
         s:Play()
         MU.snd = s
     end
-    local mu = R:CreateSection({ Name = "Round Music", Icon = "music", Collapsible = true })
+    local mu = MiscSub.soundR:CreateSection({ Name = "Round Music", Icon = "music", Collapsible = true })
     mu:AddTextbox({ Name = "Music ID", Placeholder = "audio asset id", Callback = function(t) MU.id = t end })
     mu:AddSlider({ Name = "Music Volume", Min = 0, Max = 100, Default = MU.vol, Suffix = " %", Callback = function(v) MU.vol = v if MU.snd then MU.snd.Volume = v / 100 * 2 end end })
     mu:AddToggle({ Name = "Loop", Default = true, Callback = function(v) MU.loop = v if MU.snd then MU.snd.Looped = v end end })
@@ -5559,7 +6291,7 @@ do
 end
 -- MISC --------------------------------------------------------------
 do
-    local L = MiscTab:Column("left")
+    local L = MiscSub.left
     local m = L:CreateSection({ Name = "Utility", Icon = "wrench", Collapsible = true })
     m:AddButton({ Name = "Rejoin", Callback = function() if Library.Rejoin then Library:Rejoin() else TeleportService:Teleport(game.PlaceId, lp) end end })
     m:AddButton({ Name = "Server Hop", Callback = function() if Library.ServerHop then Library:ServerHop() end end })
@@ -5568,7 +6300,7 @@ do
 
     -- spin: turns your character around its vertical axis
     local SPIN = { on = false, speed = 720 }
-    local sp = L:CreateSection({ Name = "Spin", Icon = "refresh-cw", Collapsible = true })
+    local sp = MiscSub.right:CreateSection({ Name = "Spin", Icon = "refresh-cw", Collapsible = true })
     local function spinRestore()
         local h = humOf(lp)
         if h then h.AutoRotate = true end
