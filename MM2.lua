@@ -38,6 +38,31 @@ end
 local Library = SafeLoad()
 if not Library then return end
 
+-- MoroVisuals: общая библиотека ESP / PostFX / X-Ray (GitHub first, cache as a fallback)
+local function LoadVisuals()
+    local cache = "MoroVisuals.lua"
+    local function run(src, origin)
+        local fn, err = loadstring(src, "=MoroVisuals")
+        if not fn then warn("[Moro MM2] MoroVisuals compile error (" .. origin .. "): " .. tostring(err)) return nil end
+        local ok, lib = pcall(fn)
+        if not ok or not lib then warn("[Moro MM2] MoroVisuals init error (" .. origin .. "): " .. tostring(lib)) return nil end
+        return lib
+    end
+    local url = "https://raw.githubusercontent.com/Morozhka144/GUI2222/main/MoroVisuals.lua"
+    local ok, content = pcall(function() return game:HttpGet(url) end)
+    if ok and type(content) == "string" and #content > 1000 then
+        local lib = run(content, "GitHub")
+        if lib then
+            if writefile then pcall(writefile, cache, content) end
+            return lib
+        end
+    end
+    if isfile and isfile(cache) then return run(readfile(cache), "local cache") end
+    return nil
+end
+local V = LoadVisuals()
+if not V then warn("[Moro MM2] MoroVisuals could not be loaded") return end
+
 if _G.__MM2Cleanup then pcall(_G.__MM2Cleanup) end
 
 --=====================================================================--
@@ -393,7 +418,7 @@ do local c = Instance.new("UICorner") c.CornerRadius = UDim.new(1, 0) c.Parent =
 --=====================================================================--
 --                                  ESP                                --
 --=====================================================================--
-local E, ESP
+local E, syncESP   -- меню читает E; остальное мост к MoroVisuals живёт в do-блоке (лимит 200 локалов)
 do
 E = {
     on = false, maxDist = 1500, filter = "All players", colorMode = "Role", staticColor = Color3.new(1, 1, 1),
@@ -421,540 +446,86 @@ local function espColor(p, role, t)
     return ROLE_COLORS[role] or ROLE_COLORS.Lobby
 end
 
-local espLayer = Instance.new("Frame")
-espLayer.Name = "ESPLayer"
-espLayer.BackgroundTransparency = 1
-espLayer.Size = UDim2.fromScale(1, 1)
-espLayer.ZIndex = 1
-espLayer.Parent = overlay
-onCleanup(function() espLayer:Destroy() end)
+-- Сам рендер (боксы, скелет, хамсы, трейсеры, стрелки) живёт в MoroVisuals; здесь только роли MM2.
+local ESP = V.ESP
+onCleanup(function() pcall(V.Unload) end)
 
-local function newFrame(parent, props)
-    local f = Instance.new("Frame")
-    f.BorderSizePixel = 0
-    f.BackgroundColor3 = Color3.new(1, 1, 1)
-    f.Visible = false
-    for k, v in pairs(props or {}) do f[k] = v end
-    f.Parent = parent
-    return f
-end
-local function newLine(parent) return newFrame(parent, { AnchorPoint = Vector2.new(0.5, 0.5) }) end
-local function setLine(f, a, b, thick, col, transp)
-    local d = b - a
-    f.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
-    f.Size = UDim2.fromOffset(d.Magnitude, thick)
-    f.Rotation = math.deg(math.atan2(d.Y, d.X))
-    f.BackgroundColor3 = col
-    f.BackgroundTransparency = transp or 0
-    f.Visible = true
-end
-local function addStroke(f, thick, col, transp)
-    local s = Instance.new("UIStroke")
-    s.Thickness = thick
-    s.Color = col
-    s.Transparency = transp or 0
-    s.Parent = f
-    return s
-end
-local function addCorner(f, r)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = r
-    c.Parent = f
-    return c
-end
-local function newText(parent, size)
-    local t = Instance.new("TextLabel")
-    t.BackgroundTransparency = 1
-    t.Font = Enum.Font.GothamBold
-    t.TextSize = size or 13
-    t.RichText = true
-    t.TextColor3 = Color3.new(1, 1, 1)
-    t.Visible = false
-    t.Parent = parent
-    addStroke(t, 1, Color3.new(0, 0, 0), 0.4)
-    return t
-end
-local function hex(c) return string.format("#%02x%02x%02x", c.R * 255, c.G * 255, c.B * 255) end
-
-local BONES_R15 = {
-    { "Head", "UpperTorso" }, { "UpperTorso", "LowerTorso" },
-    { "UpperTorso", "LeftUpperArm" }, { "LeftUpperArm", "LeftLowerArm" }, { "LeftLowerArm", "LeftHand" },
-    { "UpperTorso", "RightUpperArm" }, { "RightUpperArm", "RightLowerArm" }, { "RightLowerArm", "RightHand" },
-    { "LowerTorso", "LeftUpperLeg" }, { "LeftUpperLeg", "LeftLowerLeg" }, { "LeftLowerLeg", "LeftFoot" },
-    { "LowerTorso", "RightUpperLeg" }, { "RightUpperLeg", "RightLowerLeg" }, { "RightLowerLeg", "RightFoot" },
-}
-local BONES_R6 = { { "Head", "Torso" }, { "Torso", "Left Arm" }, { "Torso", "Right Arm" }, { "Torso", "Left Leg" }, { "Torso", "Right Leg" } }
-local CUBE_EDGES = { { 1, 2 }, { 2, 4 }, { 4, 3 }, { 3, 1 }, { 5, 6 }, { 6, 8 }, { 8, 7 }, { 7, 5 }, { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 } }
-
-local pObjs = {}
-local function newPlayerObj()
-    local o = {}
-    o.root = newFrame(espLayer, { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = true })
-    o.glow = newFrame(o.root, { BackgroundTransparency = 1 })
-    addCorner(o.glow, UDim.new(0, 12))
-    o.glowStroke = addStroke(o.glow, 5, Color3.new(1, 1, 1), 0.8)
-    o.boxFull = newFrame(o.root, {})
-    o.boxCorner = addCorner(o.boxFull, UDim.new(0, 0))
-    o.boxStroke = addStroke(o.boxFull, 1.6, Color3.new(1, 1, 1), 0)
-    o.fillGrad = Instance.new("UIGradient")
-    o.fillGrad.Rotation = 90
-    o.fillGrad.Parent = o.boxFull
-    o.corners = {}
-    for i = 1, 8 do o.corners[i] = newFrame(o.root, {}) end
-    o.hpBg = newFrame(o.root, { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.45 })
-    o.hpFill = newFrame(o.hpBg, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Visible = true })
-    o.pill = newFrame(o.root, { BackgroundColor3 = Color3.fromRGB(14, 14, 20), BackgroundTransparency = 0.15 })
-    addCorner(o.pill, UDim.new(0, 7))
-    o.pillStroke = addStroke(o.pill, 1, Color3.new(1, 1, 1), 0.35)
-    o.accent = newFrame(o.pill, { Position = UDim2.new(0, 4, 0, 4), Size = UDim2.new(0, 3, 1, -8), Visible = true })
-    addCorner(o.accent, UDim.new(1, 0))
-    o.nameT = newText(o.pill, 13)
-    o.nameT.Visible = true
-    o.nameT.TextXAlignment = Enum.TextXAlignment.Left
-    o.nameT.Position = UDim2.fromOffset(13, 0)
-    o.nameT.Size = UDim2.new(1, -16, 1, 0)
-    o.plainT = newText(o.root, 13)
-    o.plainT.AnchorPoint = Vector2.new(0.5, 1)
-    o.plainT.Size = UDim2.fromOffset(240, 18)
-    o.infoT = newText(o.root, 12)
-    o.infoT.AnchorPoint = Vector2.new(0.5, 0)
-    o.infoT.Size = UDim2.fromOffset(240, 16)
-    o.bones, o.cube = {}, {}
-    o.tracer = newLine(o.root)
-    o.lookLine = newLine(o.root)
-    o.dot = newFrame(o.root, { AnchorPoint = Vector2.new(0.5, 0.5) })
-    addCorner(o.dot, UDim.new(1, 0))
-    addStroke(o.dot, 1, Color3.new(0, 0, 0), 0.2)
-    o.arrow = newText(espLayer, 20)
-    o.arrow.Text = "▲"
-    o.arrow.AnchorPoint = Vector2.new(0.5, 0.5)
-    o.arrow.Size = UDim2.fromOffset(26, 26)
-    return o
+local roleMemo = setmetatable({}, { __mode = "k" })
+local function roleOf(p)
+    local m = roleMemo[p]
+    local now = os.clock()
+    if m and now - m.t < 0.1 then return m.r end
+    local r = getRole(p)
+    roleMemo[p] = { t = now, r = r }
+    return r
 end
 
-local function destroyObj(o)
-    pcall(function() o.root:Destroy() end)
-    pcall(function() o.arrow:Destroy() end)
+local trackingOn = false
+local function startTracking()
+    ESP:TrackPlayers({
+        Filter = function(p) return roleVisible(roleOf(p)) end,
+        Color = function(p, t) return espColor(p, roleOf(p), t) end,
+        Text = function(p) return E.name and p.DisplayName or "" end,
+        Tag = function(p)
+            if not E.roleTag then return nil end
+            local r = roleOf(p)
+            if r ~= "Lobby" and r ~= "Innocent" then return r end
+        end,
+        Info = function(p)
+            if not E.weapon then return nil end
+            local role = roleOf(p)
+            local tool = p.Character and p.Character:FindFirstChildOfClass("Tool")
+            local wn = tool and tool.Name or (role == "Murderer" and "Knife") or ((role == "Sheriff" or role == "Hero") and "Gun") or ""
+            return wn ~= "" and wn or nil
+        end,
+    })
 end
 
-local function hideBoxes(o)
-    o.boxFull.Visible, o.glow.Visible = false, false
-    for _, f in ipairs(o.corners) do f.Visible = false end
-    for _, f in ipairs(o.cube) do f.Visible = false end
-end
-
-local function renderPlayer(p, o, t, vs, center)
-    o.arrow.Visible = false
-    local c = p.Character
-    local hum = c and c:FindFirstChildOfClass("Humanoid")
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    local head = c and c:FindFirstChild("Head")
-    local me = hrpOf(lp)
-    if not (hum and hrp and head and me and hum.Health > 0) then o.root.Visible = false return end
-    local role = getRole(p)
-    if not roleVisible(role) then o.root.Visible = false return end
-    local dist = (hrp.Position - me.Position).Magnitude
-    if dist > E.maxDist then o.root.Visible = false return end
-
-    local col = espColor(p, role, t)
-    if E.visCheck then
-        if t - (o.visT or 0) > 0.12 then o.vis = visible(head) o.visT = t end
-        if not o.vis then col = col:Lerp(Color3.new(0, 0, 0), 0.45) end
+-- настройки меню (E) -> движок; вызывается каждый кадр, это просто запись в таблицу
+function syncESP()
+    if E.on ~= trackingOn then
+        trackingOn = E.on
+        if E.on then startTracking() else ESP:StopTrackingPlayers() end
     end
-    local ta = E.fade and math.clamp(dist / E.maxDist, 0, 1) * 0.55 or 0
-
-    local footOff = (hum.HipHeight > 0 and hum.HipHeight or 2) + hrp.Size.Y / 2
-    local topW = head.Position + Vector3.new(0, head.Size.Y / 2 + 0.2, 0)
-    local botW = hrp.Position - Vector3.new(0, footOff, 0)
-    local tp, bp = cam:WorldToViewportPoint(topW), cam:WorldToViewportPoint(botW)
-    local onScreen = tp.Z > 0 and bp.Z > 0 and tp.X > -150 and tp.X < vs.X + 150 and tp.Y > -150 and bp.Y < vs.Y + 150
-
-    if not onScreen then
-        o.root.Visible = false
-        if E.arrows then
-            local sp = cam:WorldToViewportPoint(hrp.Position)
-            local dir = Vector2.new(sp.X, sp.Y) - center
-            if sp.Z < 0 then dir = -dir end
-            if dir.Magnitude < 1 then dir = Vector2.new(0, 1) end
-            local u = dir.Unit
-            local rad = E.arrowRadius * math.min(vs.X, vs.Y)
-            o.arrow.Position = UDim2.fromOffset(center.X + u.X * rad, center.Y + u.Y * rad)
-            o.arrow.Rotation = math.deg(math.atan2(u.Y, u.X)) + 90
-            o.arrow.TextColor3 = col
-            o.arrow.TextSize = 18 + (1 - math.clamp(dist / E.maxDist, 0, 1)) * 10
-            o.arrow.Visible = true
-        end
-        return
-    end
-
-    o.root.Visible = true
-    local h = math.abs(bp.Y - tp.Y)
-    local w = h * 0.5
-    local x = (tp.X + bp.X) / 2 - w / 2
-    local y = math.min(tp.Y, bp.Y)
-    local th = E.boxThick
-
-    hideBoxes(o)
-    local style = E.box
-    if style == "Full" or style == "Rounded Glow" then
-        o.boxFull.Visible = true
-        o.boxFull.Position, o.boxFull.Size = UDim2.fromOffset(x, y), UDim2.fromOffset(w, h)
-        o.boxFull.BackgroundColor3 = Color3.new(1, 1, 1)
-        o.boxFull.BackgroundTransparency = E.boxFill / 100
-        o.fillGrad.Color = ColorSequence.new(col, col:Lerp(Color3.new(0, 0, 0), 0.6))
-        o.boxStroke.Thickness, o.boxStroke.Color, o.boxStroke.Transparency = th, col, ta
-        o.boxCorner.CornerRadius = UDim.new(0, style == "Rounded Glow" and 10 or 0)
-        if style == "Rounded Glow" then
-            o.glow.Visible = true
-            o.glow.Position, o.glow.Size = UDim2.fromOffset(x - 2, y - 2), UDim2.fromOffset(w + 4, h + 4)
-            o.glowStroke.Color, o.glowStroke.Transparency = col, 0.72 + ta * 0.3
-        end
-    elseif style == "Corners" then
-        local L = math.max(math.min(w, h) * 0.3, 6)
-        local cs = o.corners
-        local tr = ta
-        local defs = {
-            { x, y, L, th }, { x, y, th, L }, { x + w - L, y, L, th }, { x + w - th, y, th, L },
-            { x, y + h - th, L, th }, { x, y + h - L, th, L }, { x + w - L, y + h - th, L, th }, { x + w - th, y + h - L, th, L },
-        }
-        for i, d in ipairs(defs) do
-            local f = cs[i]
-            f.Position, f.Size = UDim2.fromOffset(d[1], d[2]), UDim2.fromOffset(d[3], d[4])
-            f.BackgroundColor3, f.BackgroundTransparency, f.Visible = col, tr, true
-        end
-    elseif style == "3D Box" then
-        local yaw = math.atan2(-hrp.CFrame.LookVector.X, -hrp.CFrame.LookVector.Z)
-        local centerW = (topW + botW) / 2
-        local half = Vector3.new(1.5, (topW.Y - botW.Y) / 2, 1.0)
-        local cf = CFrame.new(centerW) * CFrame.Angles(0, yaw, 0)
-        local pts, ok = {}, true
-        local i = 0
-        for sx = -1, 1, 2 do
-            for sy = -1, 1, 2 do
-                for sz = -1, 1, 2 do
-                    i += 1
-                    local sp = cam:WorldToViewportPoint(cf * Vector3.new(half.X * sx, half.Y * sy, half.Z * sz))
-                    if sp.Z <= 0 then ok = false end
-                    pts[i] = Vector2.new(sp.X, sp.Y)
-                end
-            end
-        end
-        if ok then
-            for e, ed in ipairs(CUBE_EDGES) do
-                local f = o.cube[e]
-                if not f then f = newLine(o.root) o.cube[e] = f end
-                setLine(f, pts[ed[1]], pts[ed[2]], th, col, ta)
-            end
-        end
-    end
-
-    -- health bar
-    if E.hpBar then
-        local ratio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-        o.hpBg.Visible = true
-        o.hpBg.Position, o.hpBg.Size = UDim2.fromOffset(x - 6, y), UDim2.fromOffset(3, h)
-        o.hpFill.Size = UDim2.fromScale(1, ratio)
-        o.hpFill.BackgroundColor3 = Color3.fromRGB(255, 70, 70):Lerp(Color3.fromRGB(80, 235, 130), ratio)
-    else
-        o.hpBg.Visible = false
-    end
-
-    -- name
-    local label = p.DisplayName
-    local tag = (E.roleTag and role ~= "Lobby" and role ~= "Innocent") and string.format('  <font color="%s">%s</font>', hex(col), role) or ""
-    o.pill.Visible, o.plainT.Visible = false, false
-    if E.name then
-        if E.nameStyle == "Pill" then
-            o.nameT.TextSize = E.textSize
-            o.nameT.Text = label .. tag
-            local pw = o.nameT.TextBounds.X + 22
-            local ph = E.textSize + 10
-            o.pill.Size = UDim2.fromOffset(pw, ph)
-            o.pill.Position = UDim2.fromOffset(x + w / 2 - pw / 2, y - ph - 5)
-            o.pill.Visible = true
-            o.accent.BackgroundColor3 = col
-            o.pillStroke.Color = col
-        else
-            o.plainT.TextSize = E.textSize
-            o.plainT.Text = '<font color="' .. hex(col) .. '">' .. label .. "</font>" .. tag
-            o.plainT.Position = UDim2.fromOffset(x + w / 2, y - 3)
-            o.plainT.Visible = true
-        end
-    end
-
-    -- info under the box
-    local info = {}
-    if E.dist then info[#info + 1] = math.floor(dist) .. "m" end
-    if E.hpText then info[#info + 1] = math.floor(hum.Health) .. "hp" end
-    if E.weapon then
-        local tool = c:FindFirstChildOfClass("Tool")
-        local wn = tool and tool.Name or (role == "Murderer" and "Knife") or ((role == "Sheriff" or role == "Hero") and "Gun") or ""
-        if wn ~= "" then info[#info + 1] = '<font color="' .. hex(col) .. '">' .. wn .. "</font>" end
-    end
-    if #info > 0 then
-        o.infoT.TextSize = math.max(E.textSize - 1, 9)
-        o.infoT.Text = table.concat(info, "  ·  ")
-        o.infoT.Position = UDim2.fromOffset(x + w / 2, y + h + 3)
-        o.infoT.Visible = true
-    else
-        o.infoT.Visible = false
-    end
-
-    -- skeleton
-    if E.skeleton then
-        local bones = BONES_R15
-        if not c:FindFirstChild("UpperTorso") then bones = BONES_R6 end
-        for i, b in ipairs(bones) do
-            local f = o.bones[i]
-            if not f then f = newLine(o.root) o.bones[i] = f end
-            local a0, a1 = c:FindFirstChild(b[1]), c:FindFirstChild(b[2])
-            if a0 and a1 then
-                local s0, s1 = cam:WorldToViewportPoint(a0.Position), cam:WorldToViewportPoint(a1.Position)
-                if s0.Z > 0 and s1.Z > 0 then
-                    setLine(f, Vector2.new(s0.X, s0.Y), Vector2.new(s1.X, s1.Y), E.skelThick, col, ta)
-                else f.Visible = false end
-            else f.Visible = false end
-        end
-    else
-        for _, f in ipairs(o.bones) do f.Visible = false end
-    end
-
-    -- head dot / look line
-    if E.headDot then
-        local sp = cam:WorldToViewportPoint(head.Position)
-        local d = math.clamp(h * 0.13, 5, 16)
-        o.dot.Size = UDim2.fromOffset(d, d)
-        o.dot.Position = UDim2.fromOffset(sp.X, sp.Y)
-        o.dot.BackgroundColor3 = col
-        o.dot.Visible = true
-    else o.dot.Visible = false end
-    if E.look then
-        local a = cam:WorldToViewportPoint(head.Position)
-        local b = cam:WorldToViewportPoint(head.Position + head.CFrame.LookVector * 7)
-        if a.Z > 0 and b.Z > 0 then setLine(o.lookLine, Vector2.new(a.X, a.Y), Vector2.new(b.X, b.Y), 1.6, col, 0.15) else o.lookLine.Visible = false end
-    else o.lookLine.Visible = false end
-
-    -- tracer
-    if E.tracer then
-        local from
-        if E.tracerFrom == "Center" then from = center
-        elseif E.tracerFrom == "Top" then from = Vector2.new(vs.X / 2, 0)
-        elseif E.tracerFrom == "Mouse" then from = UIS:GetMouseLocation()
-        else from = Vector2.new(vs.X / 2, vs.Y) end
-        setLine(o.tracer, from, Vector2.new(x + w / 2, y + h), E.tracerThick, col, 0.15 + ta * 0.5)
-    else o.tracer.Visible = false end
-end
-
--- chams (box adornments: bright where visible, dim through walls) ---------
-local CHAM_PARTS = {
-    "Head", "UpperTorso", "LowerTorso", "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand",
-    "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot",
-    "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
-}
-local chamObjs = {}
-local function clearChams(p)
-    local d = chamObjs[p]
-    if not d then return end
-    for _, l in ipairs(d.layers) do pcall(function() l.a:Destroy() end) end
-    if d.hl then pcall(function() d.hl:Destroy() end) end
-    chamObjs[p] = nil
-end
-local function buildChams(p, c, sig)
-    local d = { char = c, sig = sig, layers = {} }
-    if sig == "hl" then
-        local hl = Instance.new("Highlight")
-        hl.Adornee = c
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Parent = espFolder
-        d.hl = hl
-    else
-        for _, n in ipairs(CHAM_PARTS) do
-            local part = c:FindFirstChild(n)
-            if part and part:IsA("BasePart") then
-                local kinds = { "hidden", "visible" }
-                if sig == "glow" then kinds[3] = "glow" end
-                for _, kind in ipairs(kinds) do
-                    local a
-                    local grow = kind == "glow" and 0.2 or 0.05
-                    if n == "Head" then
-                        a = Instance.new("SphereHandleAdornment")
-                        a.Radius = math.max(part.Size.X, part.Size.Y, part.Size.Z) / 2 + grow / 2
-                    else
-                        a = Instance.new("BoxHandleAdornment")
-                        a.Size = part.Size + Vector3.new(grow, grow, grow)
-                    end
-                    a.Adornee = part
-                    a.AlwaysOnTop = kind ~= "visible"
-                    a.ZIndex = kind == "glow" and 1 or (kind == "hidden" and 2 or 3)
-                    a.Parent = espFolder
-                    d.layers[#d.layers + 1] = { a = a, kind = kind }
-                end
-            end
-        end
-    end
-    chamObjs[p] = d
-end
-
-local function updateChams(t)
-    local style = E.on and E.chams or "Off"   -- chams follow the ESP master switch
-    local used = {}
-    local me = hrpOf(lp)
-    if style ~= "Off" and me then
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then
-                local c = p.Character
-                local hum = c and c:FindFirstChildOfClass("Humanoid")
-                local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                if hum and hrp and hum.Health > 0 and (hrp.Position - me.Position).Magnitude <= E.maxDist then
-                    local role = getRole(p)
-                    if roleVisible(role) then
-                        used[p] = true
-                        local sig = style == "Outline Glow" and "hl" or (style == "Glow" and "glow" or "box")
-                        local d = chamObjs[p]
-                        if d and (d.char ~= c or d.sig ~= sig) then clearChams(p) d = nil end
-                        if not d then buildChams(p, c, sig) d = chamObjs[p] end
-                        local off = (p.UserId % 100) / 100
-                        local visC, hidC
-                        if E.chamMode == "Custom" then
-                            visC, hidC = E.chamVisible, E.chamHidden
-                        else
-                            local rc = espColor(p, role, t)
-                            visC, hidC = rc, rc:Lerp(Color3.new(0, 0, 0), 0.4)
-                        end
-                        if style == "Rainbow" then visC, hidC = rainbowAt(t, off), rainbowAt(t, off + 0.5) end
-                        local alpha = E.chamAlpha
-                        if style == "Pulse" then alpha = math.clamp(E.chamAlpha + math.sin(t * 3 + off * 6) * 0.2, 0, 0.95) end
-                        if d.hl then
-                            d.hl.FillColor, d.hl.OutlineColor = visC, hidC
-                            d.hl.FillTransparency = math.clamp(alpha + 0.3, 0, 1)
-                            d.hl.OutlineTransparency = 0
-                        else
-                            for _, l in ipairs(d.layers) do
-                                if l.a.Parent then
-                                    if l.kind == "hidden" then
-                                        l.a.Color3, l.a.Transparency = hidC, math.clamp(alpha + 0.2, 0, 1)
-                                    elseif l.kind == "visible" then
-                                        l.a.Color3, l.a.Transparency = visC, alpha
-                                    else
-                                        l.a.Color3, l.a.Transparency = visC, math.clamp(alpha + 0.42, 0, 1)
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    for p in pairs(chamObjs) do
-        if not used[p] then clearChams(p) end
-    end
-end
-onCleanup(function() for p in pairs(chamObjs) do clearChams(p) end end)
-
-ESP = {}
-function ESP.render(t)
+    local s = ESP.Settings
+    ESP.MaxDistance = E.maxDist
+    ESP.Tracers = E.tracer
+    s.box, s.boxThick, s.boxFill = E.box, E.boxThick, E.boxFill / 100
+    s.nameStyle, s.textSize, s.showDist = E.nameStyle, E.textSize, E.dist
+    s.hpBar, s.hpText = E.hpBar, E.hpText
+    s.skeleton, s.skelThick, s.headDot, s.lookLine = E.skeleton, E.skelThick, E.headDot, E.look
+    s.distFade, s.visCheck = E.fade, E.visCheck
+    s.tracerFrom, s.tracerThick = E.tracerFrom, E.tracerThick
+    s.arrows = E.arrows
     local vs = cam.ViewportSize
-    local center = vs / 2
-    local want = {}
-    if E.on then
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then
-                local o = pObjs[p]
-                if not o then o = newPlayerObj() pObjs[p] = o end
-                want[p] = true
-                pcall(renderPlayer, p, o, t, vs, center)
-            end
-        end
+    s.arrowRadius = E.arrowRadius * math.min(vs.X, vs.Y)
+    if E.on and E.chams ~= "Off" then
+        if E.chams == "Outline Glow" then s.chamsMode, s.chams = "Highlight", "Glow"
+        else s.chamsMode, s.chams = "Dual", E.chams end
+    else
+        s.chams = "Off"
     end
-    for p, o in pairs(pObjs) do
-        if not want[p] then
-            o.root.Visible, o.arrow.Visible = false, false
-            if not p.Parent then destroyObj(o) pObjs[p] = nil end
-        end
-    end
-    updateChams(t)
+    s.chamMode = E.chamMode == "Custom" and "Custom" or "Object"
+    s.chamVisible, s.chamHidden, s.chamAlpha = E.chamVisible, E.chamHidden, E.chamAlpha
 end
-onCleanup(function() for p, o in pairs(pObjs) do destroyObj(o) end pObjs = {} end)
 
--- world ESP: outlined items with labels --------------------------------------
+-- world ESP: пистолет и монеты тоже идут через движок ---------------------------
 local world = {}
-local function worldMake(inst, label)
-    local d = { inst = inst, label = label }
-    local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart", true)
-    -- outline: wireframe cube; fill: translucent box (both work on invisible parts, unlike SelectionBox / Highlight)
-    local half = (part and part.Size or Vector3.new(2, 2, 2)) / 2 * 1.2
-    d.wf = Instance.new("WireframeHandleAdornment")
-    d.wf.Adornee = part or inst
-    d.wf.AlwaysOnTop = true
-    d.wf.ZIndex = 3
-    d.wf.Scale = Vector3.one
-    local c = {}
-    for sx = -1, 1, 2 do for sy = -1, 1, 2 do for sz = -1, 1, 2 do c[#c + 1] = Vector3.new(half.X * sx, half.Y * sy, half.Z * sz) end end end
-    for _, e in ipairs(CUBE_EDGES) do d.wf:AddLine(c[e[1]], c[e[2]]) end
-    d.wf.Parent = espFolder
-    d.fillAd = Instance.new("BoxHandleAdornment")
-    d.fillAd.Adornee = part or inst
-    d.fillAd.Size = half * 2
-    d.fillAd.AlwaysOnTop = true
-    d.fillAd.ZIndex = 1
-    d.fillAd.Parent = espFolder
-    d.visual = inst:FindFirstChild("CoinVisual") or (inst:IsA("BasePart") and inst.Transparency < 0.95 and inst) or nil
-    d.bb = Instance.new("BillboardGui")
-    d.bb.AlwaysOnTop = true
-    d.bb.Size = UDim2.fromOffset(130, 24)
-    d.bb.StudsOffset = Vector3.new(0, 2.4, 0)
-    d.bb.Adornee = inst
-    d.bb.Parent = espFolder
-    local pill = Instance.new("Frame")
-    pill.Size = UDim2.fromScale(1, 1)
-    pill.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
-    pill.BackgroundTransparency = 0.15
-    pill.BorderSizePixel = 0
-    pill.Parent = d.bb
-    addCorner(pill, UDim.new(1, 0))
-    d.stroke = addStroke(pill, 1.2, Color3.new(1, 1, 1), 0.2)
-    d.tl = Instance.new("TextLabel")
-    d.tl.BackgroundTransparency = 1
-    d.tl.Size = UDim2.fromScale(1, 1)
-    d.tl.Font = Enum.Font.GothamBold
-    d.tl.TextSize = 12
-    d.tl.RichText = true
-    d.tl.TextColor3 = Color3.new(1, 1, 1)
-    d.tl.Parent = pill
-    return d
+local function worldAdd(inst, labelFn, colorFn, maxD)
+    if not world[inst] then
+        world[inst] = true
+        ESP:AddESP({
+            Object = inst, Text = "", TextFn = labelFn, ColorFn = colorFn,
+            NoTracer = true, NoArrow = true,
+        })
+    end
+    ESP.ObjectMaxDistance[inst] = maxD
 end
 local function worldRemove(inst)
-    local d = world[inst]
-    if d then
-        pcall(function() d.wf:Destroy() d.fillAd:Destroy() d.bb:Destroy() if d.hl then d.hl:Destroy() end end)
+    if world[inst] then
         world[inst] = nil
-    end
-end
-local function worldStyle(d, col, dist, maxD, glow)
-    local within = dist <= maxD
-    d.wf.Color3 = col
-    d.wf.Transparency = E.outline and 0 or 1
-    d.wf.Visible = within
-    d.fillAd.Color3 = col
-    d.fillAd.Transparency = E.fill and 0.8 or 1
-    d.fillAd.Visible = within
-    d.bb.Enabled = within and E.tag
-    d.stroke.Color = col
-    d.tl.Text = string.format('<font color="%s">%s</font>  %dm', hex(col), d.label, dist)
-    -- real glowing outline for the nearest few (Roblox allows ~31 Highlights at a time)
-    if glow and within and E.outline and d.visual then
-        if not d.hl then
-            d.hl = Instance.new("Highlight")
-            d.hl.Adornee = d.visual
-            d.hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            d.hl.FillTransparency = 0.55
-            d.hl.Parent = espFolder
-        end
-        d.hl.FillColor, d.hl.OutlineColor = col, Color3.new(1, 1, 1)
-    elseif d.hl then
-        d.hl:Destroy()
-        d.hl = nil
+        ESP:RemoveESP(inst)
+        ESP.ObjectMaxDistance[inst] = nil
     end
 end
 onCleanup(function() for i in pairs(world) do worldRemove(i) end end)
@@ -963,7 +534,6 @@ local lastDropSeen = false
 task.spawn(function()
     while alive do
         local me = hrpOf(lp)
-        local t = os.clock()
         local keep = {}
         local drop = gunDrop()
         if drop and not lastDropSeen and S.roleNotify then notify("Gun dropped", "The sheriff is dead - grab the gun", "warning", 4) end
@@ -971,11 +541,10 @@ task.spawn(function()
 
         if E.gun and drop then
             keep[drop] = true
-            local d = world[drop] or worldMake(drop, "GUN")
-            world[drop] = d
-            local part = drop:IsA("BasePart") and drop or drop:FindFirstChildWhichIsA("BasePart", true)
-            local dist = (me and part) and (part.Position - me.Position).Magnitude or 0
-            worldStyle(d, E.gunCol:Lerp(Color3.new(1, 1, 1), (math.sin(t * 4) + 1) * 0.15), dist, 5000, true)
+            worldAdd(drop,
+                function() return E.tag and "GUN" or "" end,
+                function(t) return E.gunCol:Lerp(Color3.new(1, 1, 1), (math.sin(t * 4) + 1) * 0.15) end,
+                5000)
         end
 
         if E.coins and me then
@@ -985,18 +554,19 @@ task.spawn(function()
                 local list = {}
                 for _, coin in ipairs(cc:GetChildren()) do
                     if coin:IsA("BasePart") then
-                        keep[coin] = true
                         list[#list + 1] = { coin = coin, dist = (coin.Position - me.Position).Magnitude }
                     end
                 end
                 table.sort(list, function(a, b) return a.dist < b.dist end)
-                for rank, it in ipairs(list) do
-                    local coin = it.coin
+                -- каждый объект движка стоит ~35 фреймов, поэтому только ближайшие
+                for rank = 1, math.min(#list, 15) do
+                    local coin = list[rank].coin
                     local id = tostring(coin:GetAttribute("CoinID") or "Coin")
-                    local d = world[coin] or worldMake(coin, id)
-                    world[coin] = d
-                    local col = id == "Candy" and E.coinCol or Color3.fromRGB(255, 205, 70)
-                    worldStyle(d, col, it.dist, E.coinMax, rank <= 12)
+                    keep[coin] = true
+                    worldAdd(coin,
+                        function() return E.tag and id or "" end,
+                        function() return id == "Candy" and E.coinCol or Color3.fromRGB(255, 205, 70) end,
+                        E.coinMax)
                 end
             end
         end
@@ -1006,8 +576,7 @@ task.spawn(function()
         task.wait(0.2)
     end
 end)
-
-end -- ESP engine
+end -- MoroVisuals bridge
 
 -- ESP + aim / fov rendering
 track(RunService.RenderStepped:Connect(function()
@@ -1023,7 +592,7 @@ track(RunService.RenderStepped:Connect(function()
     crossFrame.Visible = S.crosshair
     if S.fovOn then cam.FieldOfView = S.fovVal end
 
-    pcall(ESP.render, os.clock())
+    pcall(syncESP)
 
     -- aimbot
     if S.aimbot then
@@ -1474,32 +1043,20 @@ onCleanup(function()
     cam.FieldOfView = 70
 end)
 
-local xrayParts = {}
 local function setXray(on)
     if on then
-        local map = mapModel()
-        local base = map and map:FindFirstChild("Base")
-        if base then
-            for _, d in ipairs(base:GetDescendants()) do
-                if d:IsA("BasePart") and d.Transparency < 0.5 and not xrayParts[d] then
-                    xrayParts[d] = true
-                    d.LocalTransparencyModifier = 0.65
-                end
-            end
-        end
+        V.XRay.Start({
+            Roots = function()
+                local map = mapModel()
+                local base = map and map:FindFirstChild("Base")
+                return base and { base } or {}
+            end,
+            Amount = 0.65, Interval = 3,
+        })
     else
-        for d in pairs(xrayParts) do
-            if d.Parent then d.LocalTransparencyModifier = 0 end
-        end
-        xrayParts = {}
+        V.XRay.Stop()
     end
 end
-task.spawn(function()
-    while alive do
-        if S.xray then setXray(true) end
-        task.wait(3)
-    end
-end)
 onCleanup(function() setXray(false) end)
 
 --=====================================================================--
@@ -3994,117 +3551,24 @@ do
     onCleanup(function() F.jfx = false F.jfxPreview = nil end)
 end
 
---=== POST PROCESSING ==================================================
-local PF = { on = false, fx = {}, backup = nil, ui = {} }
-local PF_DEFAULT = {
-    b = 0, c = 0, s = 0, tint = Color3.new(1, 1, 1),
-    bi = 0, bs = 24, bt = 2, ri = 0, rs = 0.5,
-    dof = false, df = 50, dr = 30, dfar = 0, dnear = 0, blur = 0,
-    ad = 0.3, ao = 0, ac = Color3.fromRGB(199, 199, 199), adc = Color3.fromRGB(106, 112, 125), ag = 0, ah = 0,
-    clock = nil, amb = nil, expo = 0,
-}
-PF.v = {}
-for k, v in pairs(PF_DEFAULT) do PF.v[k] = v end
+--=== POST PROCESSING (движок в MoroVisuals.PostFX) ====================
+local PFX = V.PostFX
+local PF = { on = false, ui = {} }
+PF.v = PFX.Values            -- те же значения, что читает движок
+local PF_DEFAULT = PFX.Defaults
+local PF_NAMES = PFX.Names
 
-local PF_PRESETS = {
-    ["Cinematic"] = { b = 0.02, c = 0.22, s = 0.08, tint = Color3.fromRGB(255, 243, 228), bi = 0.7, bs = 32, bt = 0.95, ri = 0.12, rs = 0.7, dof = true, df = 38, dr = 14, dfar = 0.12,
-        ad = 0.3, ac = Color3.fromRGB(200, 205, 215), adc = Color3.fromRGB(120, 100, 90), ah = 1, clock = 17.2 },
-    ["Neon Night"] = { c = 0.35, s = 0.55, tint = Color3.fromRGB(200, 170, 255), bi = 1.6, bs = 42, bt = 0.75, ad = 0.35, ac = Color3.fromRGB(60, 40, 110), adc = Color3.fromRGB(180, 60, 255), ah = 2,
-        clock = 0, amb = Color3.fromRGB(70, 50, 120), expo = 0.1 },
-    ["Halloween"] = { c = 0.25, s = 0.35, tint = Color3.fromRGB(255, 170, 90), bi = 0.9, bs = 36, bt = 0.85, ad = 0.5, ac = Color3.fromRGB(255, 120, 40), adc = Color3.fromRGB(120, 30, 150), ah = 2.4,
-        clock = 0, amb = Color3.fromRGB(90, 40, 20), expo = 0.15 },
-    ["Blood Moon"] = { c = 0.3, s = 0.2, tint = Color3.fromRGB(255, 120, 120), bi = 1.0, bs = 40, bt = 0.8, ad = 0.45, ac = Color3.fromRGB(170, 20, 20), adc = Color3.fromRGB(60, 0, 0), ah = 2,
-        clock = 0, amb = Color3.fromRGB(80, 15, 15) },
-    ["Vaporwave"] = { c = 0.25, s = 0.6, tint = Color3.fromRGB(255, 190, 245), bi = 1.2, bs = 38, bt = 0.8, ad = 0.3, ac = Color3.fromRGB(255, 130, 220), adc = Color3.fromRGB(90, 200, 255), ah = 1.2,
-        clock = 18.2, amb = Color3.fromRGB(120, 80, 150) },
-    ["Noir"] = { b = -0.03, c = 0.45, s = -1, tint = Color3.fromRGB(235, 235, 235), bi = 0.3, ad = 0.25, ac = Color3.fromRGB(120, 120, 120), adc = Color3.fromRGB(60, 60, 60), ah = 1.5 },
-    ["Frozen"] = { b = 0.04, c = 0.15, s = -0.1, tint = Color3.fromRGB(190, 225, 255), bi = 0.8, bs = 34, bt = 0.9, ri = 0.1, ad = 0.38, ac = Color3.fromRGB(215, 235, 255), adc = Color3.fromRGB(170, 205, 235), ah = 1.4,
-        clock = 12 },
-    ["Matrix"] = { c = 0.3, s = -0.2, tint = Color3.fromRGB(150, 255, 170), bi = 0.9, bs = 30, bt = 0.85, ad = 0.34, ac = Color3.fromRGB(20, 90, 40), adc = Color3.fromRGB(0, 70, 20), ah = 1.8,
-        clock = 0, amb = Color3.fromRGB(10, 70, 25) },
-    ["Golden Hour"] = { b = 0.02, c = 0.2, s = 0.2, tint = Color3.fromRGB(255, 220, 170), bi = 0.8, bs = 36, bt = 0.9, ri = 0.3, rs = 0.9, ad = 0.32, ac = Color3.fromRGB(255, 200, 150), adc = Color3.fromRGB(255, 140, 80), ah = 1.2,
-        clock = 17.6 },
-    ["Dreamy"] = { b = 0.05, c = -0.05, s = 0.25, tint = Color3.fromRGB(255, 235, 250), bi = 1.4, bs = 52, bt = 0.7, dof = true, df = 30, dr = 10, dfar = 0.35, dnear = 0.1, ad = 0.3,
-        ac = Color3.fromRGB(240, 220, 255), adc = Color3.fromRGB(255, 200, 230), ah = 1 },
-    ["Toxic"] = { c = 0.3, s = 0.5, tint = Color3.fromRGB(190, 255, 120), bi = 1.1, bs = 36, bt = 0.8, ad = 0.45, ac = Color3.fromRGB(110, 190, 20), adc = Color3.fromRGB(40, 90, 0), ah = 2.2,
-        clock = 0, amb = Color3.fromRGB(40, 90, 15) },
-}
-local PF_NAMES = { "Cinematic", "Neon Night", "Halloween", "Blood Moon", "Vaporwave", "Noir", "Frozen", "Matrix", "Golden Hour", "Dreamy", "Toxic" }
-
-local function pfEnsure()
-    if PF.fx.cc then return end
-    local function mkfx(class, name)
-        local e = Instance.new(class)
-        e.Name = "MM2_" .. name
-        e.Parent = Lighting
-        return e
-    end
-    PF.fx.cc = mkfx("ColorCorrectionEffect", "CC")
-    PF.fx.bloom = mkfx("BloomEffect", "Bloom")
-    PF.fx.rays = mkfx("SunRaysEffect", "Rays")
-    PF.fx.dof = mkfx("DepthOfFieldEffect", "DOF")
-    PF.fx.blur = mkfx("BlurEffect", "Blur")
-    local existing = Lighting:FindFirstChildOfClass("Atmosphere")
-    if existing then
-        PF.fx.atmo = existing
-        PF.atmoBackup = { Density = existing.Density, Offset = existing.Offset, Color = existing.Color, Decay = existing.Decay, Glare = existing.Glare, Haze = existing.Haze }
-    else
-        PF.fx.atmo = mkfx("Atmosphere", "Atmo")
-        PF.atmoOwn = true
-    end
-    PF.backup = { ClockTime = Lighting.ClockTime, Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient, ExposureCompensation = Lighting.ExposureCompensation }
-end
-
-local function pfApply(smooth)
-    if not PF.on then return end
-    pfEnsure()
-    local v, fx = PF.v, PF.fx
-    local t = smooth and 1.2 or 0.05
-    local function to(inst, props) tw(inst, t, props, Enum.EasingStyle.Sine) end
-    to(fx.cc, { Brightness = v.b, Contrast = v.c, Saturation = v.s, TintColor = v.tint })
-    to(fx.bloom, { Intensity = v.bi, Size = v.bs, Threshold = v.bt })
-    to(fx.rays, { Intensity = v.ri, Spread = v.rs })
-    fx.dof.Enabled = v.dof
-    to(fx.dof, { FocusDistance = v.df, InFocusRadius = v.dr, FarIntensity = v.dfar, NearIntensity = v.dnear })
-    to(fx.blur, { Size = v.blur })
-    to(fx.atmo, { Density = v.ad, Offset = v.ao, Color = v.ac, Decay = v.adc, Glare = v.ag, Haze = v.ah })
-    if v.clock then Lighting.ClockTime = v.clock end
-    if v.amb then
-        Lighting.Ambient = v.amb
-        Lighting.OutdoorAmbient = v.amb
-    end
-    Lighting.ExposureCompensation = v.expo
-end
-
+local function pfApply(smooth) PFX.Apply(smooth) end
 local function pfEnable(on)
-    PF.on = on
-    if on then
-        pfEnsure()
-        pfApply(true)
-    else
-        for k, e in pairs(PF.fx) do
-            if k == "atmo" and not PF.atmoOwn then
-                for prop, val in pairs(PF.atmoBackup or {}) do pcall(function() e[prop] = val end) end
-            else
-                pcall(function() e:Destroy() end)
-            end
-        end
-        if PF.backup then
-            for k, val in pairs(PF.backup) do pcall(function() Lighting[k] = val end) end
-        end
-        PF.fx, PF.backup, PF.atmoBackup, PF.atmoOwn = {}, nil, nil, nil
-    end
+    PFX.Enable(on)
+    PF.on = PFX.On
 end
 onCleanup(function() pfEnable(false) setVignette(0) end)
 
 local function pfPreset(name)
-    local p = PF_PRESETS[name]
-    if not p then return end
-    for k, v in pairs(PF_DEFAULT) do PF.v[k] = v end
-    for k, v in pairs(p) do PF.v[k] = v end
-    PF.v.clock = p.clock
-    PF.v.amb = p.amb
-    if not PF.on and PF.toggle then PF.toggle.Set(true) else pfApply(true) end
+    if not PFX.Preset(name) then return end
+    PF.on = PFX.On
+    if PF.toggle then pcall(PF.toggle.Set, true) end
     for key, sl in pairs(PF.ui) do
         local val = PF.v[key]
         if typeof(val) == "number" then pcall(sl.Set, val, true) end
@@ -4365,6 +3829,8 @@ local MODEL_PRESETS = {
     { "Shrek", 34356843621214, "market" },
     { "Cristiano Ronaldo", { 946, 115658016588579, 104775751657638, 15917804613 }, "market" },
     { "Stylized Skeleton", 160527682802304, "market" },
+    { "Rabbid Classic", 141407388683693, "market" },
+    { "Verity", 235686917499405, "market" },
 }
 local MODEL_NAMES = {}
 local modelIdByName = {}
@@ -5140,7 +4606,7 @@ do
     local w = L:CreateSection({ Name = "World", Icon = "sun", Collapsible = true })
     w:AddToggle({ Name = "Fullbright", Callback = function(v) S.fullbright = v if not v then applyLighting(false) end end })
     w:AddToggle({ Name = "No Fog", Callback = function(v) S.noFog = v end })
-    w:AddToggle({ Name = "X-Ray", Description = "Makes map walls see-through", Callback = function(v) S.xray = v if not v then setXray(false) end end })
+    w:AddToggle({ Name = "X-Ray", Description = "Makes map walls see-through", Callback = function(v) S.xray = v setXray(v) end })
 
     local c = R:CreateSection({ Name = "Camera", Icon = "camera", Collapsible = true })
     c:AddToggle({ Name = "Custom FOV", Callback = function(v) S.fovOn = v if not v then cam.FieldOfView = 70 end end })
@@ -5375,7 +4841,7 @@ do
         local PETS = {
             { "Tung Tung Sahur", 164815366314625 }, { "Chubby Dog", 22202531681153 }, { "Capybara", 159803432748970 },
             { "Squirrel", 178960554982276 }, { "Rabbit", 38324265921292 }, { "Cat", 3623 },
-            { "Baby Frog", 187021437835849 }, { "Chunky Frog", 80198322906896 }, { "Mini Frog", 25322869002475 },
+            { "Frog", 187021437835849 }, { "BIG Verity", 33498031238003 },
         }
         local ANIM = {
             idle = "rbxassetid://507766666", walk = "rbxassetid://507777826", run = "rbxassetid://507767714",
@@ -5980,6 +5446,164 @@ do
             if TG.decline and declineTrade then pcall(function() declineTrade:FireServer() end) end
         end))
     end
+
+    -- Ghost: when the murderer gets close, your real body drops underground (where nothing can reach it) and a see-through
+    -- copy of you stays on the surface, mirroring every step and animation. It comes back when the murderer is gone.
+    local GH = { on = false, range = 30, alpha = 0.55, active = false, depth = 45, since = 0 }
+    function GH.ground(x, z, from)
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        local ex = {}
+        if GH.clone then ex[#ex + 1] = GH.clone end
+        if GH.plat then ex[#ex + 1] = GH.plat end
+        for _, p in ipairs(Players:GetPlayers()) do if p.Character then ex[#ex + 1] = p.Character end end
+        rp.FilterDescendantsInstances = ex
+        local hit = workspace:Raycast(Vector3.new(x, from + 8, z), Vector3.new(0, -160, 0), rp)
+        return hit and hit.Position.Y or from
+    end
+    function GH.applyAlpha()
+        GH.shownAlpha = GH.alpha
+        for _, pr in ipairs(GH.pairs or {}) do
+            if pr.vis and pr.clone.Parent then pr.clone.Transparency = GH.alpha end
+        end
+        if GH.clone then
+            for _, d in ipairs(GH.clone:GetDescendants()) do
+                if d:IsA("Decal") or d:IsA("Texture") then d.Transparency = math.max(d.Transparency, GH.alpha) end
+            end
+        end
+    end
+    function GH.start()
+        local c, r, h = lp.Character, hrpOf(lp), humOf(lp)
+        if GH.active or not (c and r and h) then return end
+        local arch = c.Archivable
+        c.Archivable = true
+        local ok, clone = pcall(function() return c:Clone() end)
+        c.Archivable = arch
+        if not (ok and clone) then return end
+        clone.Name = "MM2Ghost"
+        -- pair every real part with its copy (a clone keeps the same order), then drop tools and scripts from the copy
+        GH.pairs = {}
+        local function walk(ra, rb)
+            local used = {}
+            for _, ca in ipairs(ra:GetChildren()) do
+                -- match the same name, counting duplicates among siblings (several "Handle"s, accessories ...)
+                local n = (used[ca.Name] or 0) + 1
+                used[ca.Name] = n
+                local seen, cb = 0, nil
+                for _, x in ipairs(rb:GetChildren()) do
+                    if x.Name == ca.Name then
+                        seen += 1
+                        if seen == n then cb = x break end
+                    end
+                end
+                if cb and not ca:IsA("Tool") then
+                    if ca:IsA("BasePart") and cb:IsA("BasePart") then
+                        GH.pairs[#GH.pairs + 1] = { real = ca, clone = cb, vis = ca.Transparency < 0.99 and ca ~= r }
+                    end
+                    walk(ca, cb)
+                end
+            end
+        end
+        walk(c, clone)
+        local kill = {}
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("Tool") or d:IsA("LuaSourceContainer") or d:IsA("Animator") or d:IsA("Sound") then kill[#kill + 1] = d end
+        end
+        for _, d in ipairs(kill) do pcall(function() d:Destroy() end) end
+        local live = {}
+        for _, pr in ipairs(GH.pairs) do
+            if pr.clone:IsDescendantOf(clone) then
+                pr.clone.Anchored, pr.clone.CanCollide, pr.clone.CanQuery, pr.clone.CanTouch, pr.clone.CastShadow = true, false, false, false, false
+                if not pr.vis then pr.clone.Transparency = 1 end
+                live[#live + 1] = pr
+            end
+        end
+        GH.pairs = live
+        local ch = clone:FindFirstChildOfClass("Humanoid")
+        if ch then
+            ch.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+            ch.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+            ch.WalkSpeed = 0
+        end
+        GH.chum = ch
+        GH.clone = clone
+        local floorY = GH.ground(r.Position.X, r.Position.Z, r.Position.Y)
+        GH.floor = floorY
+        GH.plat0 = floorY - GH.depth
+        local plat = Instance.new("Part")
+        plat.Name = "MM2GhostFloor"
+        plat.Anchored, plat.CanCollide, plat.CanQuery, plat.CanTouch, plat.CastShadow = true, true, false, false, false
+        plat.Transparency = 1
+        plat.Size = Vector3.new(220, 2, 220)
+        plat.Position = Vector3.new(r.Position.X, GH.plat0 - 1, r.Position.Z)
+        plat.Parent = workspace.Terrain
+        GH.plat = plat
+        GH.applyAlpha()
+        clone.Parent = workspace.Terrain
+        c:PivotTo(c:GetPivot() - Vector3.new(0, GH.depth, 0))
+        r.AssemblyLinearVelocity = Vector3.zero
+        GH.active, GH.since = true, os.clock()
+        if ch then cam.CameraSubject = ch end
+        notify("Ghost", "Murderer nearby - your body is underground", "info", 3)
+    end
+    function GH.stop()
+        if not GH.active then return end
+        GH.active = false
+        local c, r = lp.Character, hrpOf(lp)
+        local cr = GH.clone and GH.clone:FindFirstChild("HumanoidRootPart")
+        if c and r and cr and visAlive(lp) then
+            c:PivotTo(cr.CFrame)
+            r.AssemblyLinearVelocity = Vector3.zero
+        end
+        if GH.clone then pcall(function() GH.clone:Destroy() end) end
+        if GH.plat then pcall(function() GH.plat:Destroy() end) end
+        GH.clone, GH.plat, GH.pairs, GH.chum = nil, nil, nil, nil
+        local h = humOf(lp)
+        if h then cam.CameraSubject = h end
+    end
+    track(RunService.RenderStepped:Connect(function()
+        if not GH.active then return end
+        local r = hrpOf(lp)
+        if not (r and GH.clone and GH.clone.Parent and visAlive(lp)) then return GH.stop() end
+        GH.floor = GH.floor + (GH.ground(r.Position.X, r.Position.Z, GH.floor) - GH.floor) * 0.35
+        local off = Vector3.new(0, GH.floor - GH.plat0, 0)
+        local parts, cfs = {}, {}
+        for _, pr in ipairs(GH.pairs) do
+            if pr.real.Parent and pr.clone.Parent then
+                parts[#parts + 1] = pr.clone
+                cfs[#cfs + 1] = pr.real.CFrame + off
+            end
+        end
+        workspace:BulkMoveTo(parts, cfs, Enum.BulkMoveMode.FireCFrameChanged)
+        GH.plat.Position = Vector3.new(r.Position.X, GH.plat0 - 1, r.Position.Z)
+        if GH.shownAlpha ~= GH.alpha then GH.applyAlpha() end
+        if GH.chum and cam.CameraSubject ~= GH.chum then cam.CameraSubject = GH.chum end
+    end))
+    task.spawn(function()
+        while alive do
+            pcall(function()
+                local role = getRole(lp)
+                if not GH.on or not visAlive(lp) or role == "Murderer" or role == "Lobby" then return GH.stop() end
+                local m = findByRole("Murderer")
+                local mr = m and m ~= lp and visAlive(m) and hrpOf(m)
+                local me = GH.active and GH.clone and GH.clone:FindFirstChild("HumanoidRootPart") or hrpOf(lp)
+                if not me then return end
+                local d = mr and (mr.Position - me.Position).Magnitude or math.huge
+                if not GH.active and d < GH.range then
+                    GH.start()
+                elseif GH.active and d > GH.range + 10 and os.clock() - GH.since > 1.5 then
+                    GH.stop()
+                    notify("Ghost", "Clear - you are back on the surface", "success", 2)
+                end
+            end)
+            task.wait(0.1)
+        end
+    end)
+    onCleanup(function() GH.on = false pcall(GH.stop) end)
+    df:AddToggle({ Name = "Ghost Mode", Icon = "ghost", Description = "When the murderer comes close your real body drops underground and a see-through copy of you stays on the map", Callback = function(v) GH.on = v if not v then GH.stop() end end })
+    df:AddSlider({ Name = "Ghost Range", Min = 10, Max = 80, Default = GH.range, Suffix = " st", Callback = function(v) GH.range = v end })
+    df:AddSlider({ Name = "Ghost Transparency", Min = 0.2, Max = 0.9, Default = GH.alpha, Decimals = 2, Callback = function(v) GH.alpha = v end })
+    df:AddStat({ Name = "Ghost", Interval = 0.5, Get = function() return GH.active and "underground" or (GH.on and "watching" or "off") end })
     end
 
     do
