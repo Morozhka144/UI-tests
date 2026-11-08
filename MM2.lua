@@ -4270,9 +4270,12 @@ local MiscSub = (function()
         if MiscTab.SubTab then return MiscTab:SubTab({ Name = name, Icon = icon }) end
         return Win:CreateTab({ Name = "Misc: " .. name, Icon = icon })
     end
-    local general, sounds = mk("General", "wrench"), mk("Sounds", "volume-2")
-    return { general = general, sounds = sounds, left = general:Column("left"), right = general:Column("right"),
-        soundL = sounds:Column("left"), soundR = sounds:Column("right") }
+    local general, defense, fling, sounds, round = mk("General", "wrench"), mk("Defense", "shield"), mk("Fling", "wind"), mk("Sounds", "volume-2"), mk("Round", "vote")
+    return { left = general:Column("left"), right = general:Column("right"),
+        defL = defense:Column("left"), defR = defense:Column("right"),
+        flingL = fling:Column("left"), flingR = fling:Column("right"),
+        soundL = sounds:Column("left"), soundR = sounds:Column("right"),
+        roundL = round:Column("left"), roundR = round:Column("right") }
 end)()
 Win:AddSettingsTab()
 
@@ -5216,7 +5219,7 @@ end
 
 -- HALLOWEEN ---------------------------------------------------------
 do
-    local HW = { collect = false, range = 400, speed = 60, avoid = true, got = 0, bad = {}, what = "Candies", resetFull = false, bag = 40,
+    local HW = { collect = false, range = 400, speed = 21, avoid = true, under = true, afk = true, gap = 3.2, got = 0, bad = {}, what = "Candies", resetFull = false, bag = 40,
         boxId = "Halloween2026Box", cur = "Candies2026", delay = 1.5, opened = 0, crateOn = false, crateBusy = false, lastDrop = "-" }
     local L, R = HalloweenTab:Column("left"), HalloweenTab:Column("right")
 
@@ -5272,68 +5275,285 @@ do
     ce:AddStat({ Name = "Collected", Interval = 1, Get = function() return tostring(HW.got) end })
 
     -- Candy collector ---------------------------------------------------
+    -- Moves like a careful player: capped speed (the game kicks above ~30 st/s), stays under the floor so nobody can hit it,
+    -- rises under a candy and touches it from there, learns how close it has to get, and follows the game's own bag/round events.
     local co = R:CreateSection({ Name = "Auto Farm", Icon = "candy", Collapsible = true })
-    co:AddToggle({ Name = "Auto Collect", Icon = "candy", Description = "Flies to the nearest candy by itself", Callback = function(v)
+    co:AddToggle({ Name = "Auto Collect", Icon = "candy", Description = "Collects candies by itself, from under the floor", Callback = function(v)
         HW.collect = v
-        HW.bad = {}
-        if not v then HW.flying = false end
+        HW.bad, HW.target, HW.phase = {}, nil, "go"
+        if v then HW.t0, HW.start = os.clock(), HW.got end
     end })
     co:AddDropdown({ Name = "Collect", Options = { "Candies", "Coins", "Both" }, Default = HW.what, Callback = function(v) HW.what = v or "Candies" end })
-    co:AddSlider({ Name = "Fly Speed", Min = 10, Max = 150, Default = HW.speed, Suffix = " st/s", Callback = function(v) HW.speed = v end })
-    co:AddToggle({ Name = "Reset On Full Bag", Description = "Resets your character when the bag is full, otherwise waits", Callback = function(v) HW.resetFull = v end })
-    co:AddSlider({ Name = "Bag Size", Min = 10, Max = 100, Default = HW.bag, Description = "Counts as full from this many", Callback = function(v) HW.bag = v end })
+    co:AddSlider({ Name = "Speed", Min = 8, Max = 28, Default = HW.speed, Suffix = " st/s", Description = "Above ~30 st/s the game kicks you", Callback = function(v) HW.speed = v end })
+    co:AddToggle({ Name = "Stay Underground", Default = true, Description = "Moves below the floor and only comes up under a candy", Callback = function(v) HW.under = v end })
+    co:AddToggle({ Name = "Avoid Murderer", Default = true, Description = "Prefers candies far from the murderer", Callback = function(v) HW.avoid = v end })
+    co:AddToggle({ Name = "Reset On Full Bag", Description = "Resets your character when the bag is full, otherwise waits under the floor", Callback = function(v) HW.resetFull = v end })
+    co:AddSlider({ Name = "Bag Size", Min = 10, Max = 100, Default = HW.bag, Description = "Only used if the game does not report a bag size", Callback = function(v) HW.bag = v end })
     co:AddSlider({ Name = "Range", Min = 50, Max = 800, Default = HW.range, Suffix = " st", Callback = function(v) HW.range = v end })
-    co:AddToggle({ Name = "Avoid Murderer", Default = true, Description = "Skips candies close to the murderer", Callback = function(v) HW.avoid = v end })
-    co:AddLabel("Flies to each candy in a straight line, through walls (noclip).")
+    co:AddStat({ Name = "Status", Interval = 0.5, Get = function() return HW.collect and (HW.status or "-") or "off" end })
+    co:AddStat({ Name = "Bag", Interval = 1, Get = function() return HW.bagN and (HW.bagN .. " / " .. tostring(HW.bagMax)) or "-" end })
+    co:AddStat({ Name = "Per Hour", Interval = 2, Get = function()
+        if not (HW.collect and HW.t0) then return "-" end
+        local mins = (os.clock() - HW.t0) / 60
+        return mins > 0.5 and tostring(math.floor((HW.got - (HW.start or 0)) / mins * 60 + 0.5)) or "-"
+    end })
 
-    -- Fly keeps the body from colliding with anything
+    HW.ex, HW.exAt, HW.info, HW.att, HW.saved = {}, 0, {}, {}, {}
+    local rayP = RaycastParams.new()
+    rayP.FilterType = Enum.RaycastFilterType.Exclude
+    pcall(function() rayP.RespectCanCollide = true end)
+    local function refreshEx(now)
+        if now - HW.exAt < 1 then return end
+        HW.exAt = now
+        local ex = {}
+        for _, p in ipairs(Players:GetPlayers()) do if p.Character then ex[#ex + 1] = p.Character end end
+        local map = mapModel()
+        local cc = map and map:FindFirstChild("CoinContainer")
+        if cc then ex[#ex + 1] = cc end
+        rayP.FilterDescendantsInstances = ex
+    end
+    local function floorAt(pos, off, depth)
+        local hit = workspace:Raycast(pos + Vector3.new(0, off or 0.5, 0), Vector3.new(0, -(depth or 50), 0), rayP)
+        return hit and hit.Position.Y
+    end
+    local function infoOf(coin)
+        local i = HW.info[coin]
+        if i then return i end
+        local p = coin.Position
+        local fl = floorAt(p, 0.5, 40) or (p.Y - 3)
+        i = { floor = fl, hide = Vector3.new(p.X, fl - 3.8, p.Z) }
+        HW.info[coin] = i
+        return i
+    end
+    local function valid(c)
+        return c and c.Parent and c:IsA("BasePart") and not c:GetAttribute("Collected") and not c:GetAttribute("Delete")
+    end
+    local function touchParts(ch)
+        local out = {}
+        local head = ch:FindFirstChild("Head")
+        if head then out[#out + 1] = head end
+        for _, a in ipairs(ch:GetChildren()) do
+            if a:IsA("Accessory") then local hd = a:FindFirstChild("Handle") if hd then out[#out + 1] = hd end end
+        end
+        for _, n in ipairs({ "UpperTorso", "Torso", "HumanoidRootPart", "LowerTorso" }) do
+            local p = ch:FindFirstChild(n)
+            if p then out[#out + 1] = p end
+        end
+        return out
+    end
+    local function touch(ch, coin)
+        if type(firetouchinterest) ~= "function" then return end
+        for _, p in ipairs(touchParts(ch)) do
+            pcall(function() firetouchinterest(p, coin, 0) firetouchinterest(p, coin, 1) end)
+        end
+    end
+    local function moveTo(r, target, dt)
+        local d = target - r.Position
+        local m = d.Magnitude
+        r.AssemblyLinearVelocity = Vector3.zero
+        r.AssemblyAngularVelocity = Vector3.zero
+        if m < 0.05 then return 0 end
+        local step = math.min(math.clamp(HW.speed, 8, 28) * dt, m)
+        r.CFrame = CFrame.new(r.Position + d.Unit * step) * (r.CFrame - r.CFrame.Position)
+        r.AssemblyLinearVelocity = Vector3.zero
+        r.AssemblyAngularVelocity = Vector3.zero
+        return m - step
+    end
+    local function score(coin, from, murd)
+        local i = infoOf(coin)
+        local s = (i.hide - from).Magnitude + math.max(0, coin.Position.Y - i.hide.Y) * 1.2
+        if murd then
+            local d = (coin.Position - murd).Magnitude
+            if d < 24 then s += HW.avoid and 1e6 or 300 elseif d < 48 then s += (48 - d) * 2 end
+        end
+        return s
+    end
+
+    -- bag state straight from the game: CoinCollected(kind, count, maximum)
+    local gp = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("Gameplay")
+    local function reset() HW.bagN, HW.bagMax = nil, nil HW.full, HW.target, HW.phase, HW.bad, HW.info, HW.att, HW.holdY = nil, nil, "go", {}, {}, {}, nil end
+    if gp then
+        local cr_ = gp:FindFirstChild("CoinCollected")
+        if cr_ and cr_:IsA("RemoteEvent") then
+            track(cr_.OnClientEvent:Connect(function(kind, count, maximum)
+                HW.got += 1
+                if tonumber(count) and tonumber(maximum) then
+                    HW.bagN, HW.bagMax = tonumber(count), tonumber(maximum)
+                    HW.full = HW.bagN >= HW.bagMax
+                end
+            end))
+        end
+        for _, n in ipairs({ "RoundStart", "CoinsStarted", "GameOver" }) do
+            local ev = gp:FindFirstChild(n)
+            if ev and ev:IsA("RemoteEvent") then track(ev.OnClientEvent:Connect(reset)) end
+        end
+    end
+    local function bagFull()
+        if HW.full ~= nil then return HW.full end
+        local n = tonumber(lp:GetAttribute("Coins"))
+        if not n then
+            local d = pdata(lp)
+            n = d and tonumber(d.Coins)
+        end
+        return n ~= nil and n >= HW.bag
+    end
+
+    local function release()
+        if not HW.active then return end
+        HW.active, HW.holdY = false, nil
+        local r, h = hrpOf(lp), humOf(lp)
+        for p, cc in pairs(HW.saved) do if p.Parent then p.CanCollide = cc end end
+        table.clear(HW.saved)
+        if h and h.Parent then h.PlatformStand = HW.oldPS or false end
+        if r then
+            -- back up to the surface
+            local c = lp.Character
+            rayP.FilterDescendantsInstances = c and { c } or {}
+            local hit = workspace:Raycast(r.Position, Vector3.new(0, 400, 0), rayP)
+            if hit then r.CFrame = CFrame.new(r.Position.X, hit.Position.Y + 5, r.Position.Z) end
+            r.AssemblyLinearVelocity = Vector3.zero
+        end
+        HW.exAt = 0
+    end
+    local function engage(r, h)
+        if HW.active then return end
+        HW.active, HW.oldPS = true, h.PlatformStand
+    end
     track(RunService.Stepped:Connect(function()
-        if not HW.flying then return end
+        if not HW.active then return end
         local c = lp.Character
+        local h = humOf(lp)
         if not c then return end
+        if h then h.PlatformStand = true end
+        local root = c:FindFirstChild("HumanoidRootPart")
+        if root then root.AssemblyLinearVelocity = Vector3.zero end   -- no gravity while we hold a position
         for _, p in ipairs(c:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false end
+            if p:IsA("BasePart") then
+                if HW.saved[p] == nil then HW.saved[p] = p.CanCollide end
+                p.CanCollide = false
+            end
         end
     end))
-    task.spawn(function()
-        while alive do
-            if HW.collect then
-                pcall(function()
-                    local r, h = hrpOf(lp), humOf(lp)
-                    if not (r and h and h.Health > 0 and visAlive(lp)) then return end
-                    if bagFull() then
-                        if HW.resetFull then h.Health = 0 task.wait(4) end
-                        return
-                    end
-                    local murd = (HW.avoid and getRole(lp) ~= "Murderer") and murdererPos() or nil
-                    local best, bd = nil, HW.range
-                    for _, c in ipairs(targets()) do
-                        local d = (c.Position - r.Position).Magnitude
-                        if d < bd and not (HW.bad[c] and os.clock() < HW.bad[c]) and not (murd and (c.Position - murd).Magnitude < 22) then
-                            best, bd = c, d
+
+    -- wait in place; if we are above the floor, sink once to the hiding depth and stay there
+    local function hold(r, dt, under)
+        if under and not HW.holdY then
+            local fl = floorAt(r.Position, 9, 40)
+            HW.holdY = fl and math.min(r.Position.Y, fl - 3.8) or r.Position.Y
+        end
+        moveTo(r, Vector3.new(r.Position.X, HW.holdY or r.Position.Y, r.Position.Z), dt)
+    end
+    local function step(dt)
+        local r, h = hrpOf(lp), humOf(lp)
+        local now = os.clock()
+        if not (r and h and h.Health > 0 and visAlive(lp)) then HW.status = "Waiting for character" return release() end
+        if now < (HW.waitUntil or 0) then return end
+        local role = getRole(lp)
+        local pd = pdata(lp)
+        if role == "Lobby" or (pd and (pd.Dead or pd.Killed)) then HW.status = "Not in the round" return release() end
+        local map = mapModel()
+        if not (map and map:FindFirstChild("CoinContainer")) then HW.status = "Waiting for a round" return release() end
+        refreshEx(now)
+        r.AssemblyLinearVelocity = Vector3.zero
+        local under = HW.under
+        local murd = (HW.avoid and getRole(lp) ~= "Murderer") and murdererPos() or nil
+        engage(r, h)
+
+        if bagFull() then
+            if HW.resetFull then
+                HW.status = "Bag full - resetting"
+                h.Health = 0
+                HW.waitUntil = now + 4
+                return release()
+            end
+            HW.status = "Bag full - waiting"
+            hold(r, dt, under)
+            return
+        end
+
+        local coin = HW.target
+        if coin and not valid(coin) then
+            if HW.phase == "rise" and coin.Parent == nil or coin:GetAttribute("Collected") then
+                local used = math.max(0.6, HW.gap - 0.45 * (HW.att[coin] or 0))
+                HW.gap = math.clamp(used + 0.5, 0.6, 4.5)   -- start closer to what worked next time
+            end
+            HW.target, HW.phase, coin = nil, "go", nil
+        end
+        if not coin or (HW.phase == "go" and now - (HW.pickT or 0) > 0.3) then
+            HW.pickT = now
+            local cc = map:FindFirstChild("CoinContainer")
+            local best, bs = nil, math.huge
+            for _, c in ipairs(cc:GetChildren()) do
+                if valid(c) and not (HW.bad[c] and now < HW.bad[c]) then
+                    local isCandy = tostring(c:GetAttribute("CoinID")) == "Candy"
+                    if HW.what == "Both" or (HW.what == "Candies" and isCandy) or (HW.what == "Coins" and not isCandy) then
+                        if (c.Position - r.Position).Magnitude <= HW.range then
+                            local s = score(c, r.Position, murd)
+                            if s < bs then best, bs = c, s end
                         end
                     end
-                    if not best then return end
-                    HW.flying = true
-                    local t0 = os.clock()
-                    while HW.collect and alive and best.Parent and os.clock() - t0 < 12 do
-                        r, h = hrpOf(lp), humOf(lp)
-                        if not (r and h and h.Health > 0) then break end
-                        local to = best.Position - r.Position
-                        if to.Magnitude < 2.5 then break end
-                        local dt = RunService.Heartbeat:Wait()
-                        local step = math.min(HW.speed * dt, to.Magnitude)
-                        r.CFrame = CFrame.new(r.Position + to.Unit * step) * (r.CFrame - r.CFrame.Position)
-                        r.AssemblyLinearVelocity = Vector3.zero
-                    end
-                    HW.flying = false
-                    if not best.Parent then HW.got += 1 else HW.bad[best] = os.clock() + 6 end
-                end)
+                end
             end
-            task.wait(0.12)
+            if best and bs >= 1e6 then best = nil end
+            if best and best ~= coin then
+                local cur = coin and valid(coin) and score(coin, r.Position, murd)
+                if not cur or bs + 6 < cur then HW.target, HW.phase, HW.goT, coin = best, "go", now, best end
+            end
+        end
+        if not coin then
+            HW.status = "No safe candies - hiding"
+            hold(r, dt, under)
+            return
+        end
+
+        HW.holdY = nil
+        local i = infoOf(coin)
+        if HW.phase ~= "rise" then
+            HW.status = "Going to candy"
+            local dest = under and i.hide or (coin.Position + Vector3.new(0, 1.2, 0))
+            local left = moveTo(r, dest, dt)
+            if left < 0.7 then HW.phase, HW.riseAt, HW.dwell = "rise", now, nil return end
+            if now - (HW.goT or now) > (dest - r.Position).Magnitude / math.max(HW.speed, 1) + 5 then
+                HW.bad[coin] = now + 20
+                HW.target = nil
+            end
+            return
+        end
+        -- rise under the candy and touch it
+        if murd and Vector3.new(coin.Position.X - murd.X, 0, coin.Position.Z - murd.Z).Magnitude < 12 then
+            HW.bad[coin], HW.target, HW.phase = now + 3, nil, "go"
+            return
+        end
+        HW.status = "Collecting"
+        local att = HW.att[coin] or 0
+        local gap = math.max(0.6, HW.gap - 0.45 * att)
+        local dest = under and Vector3.new(i.hide.X, math.max(coin.Position.Y - gap, i.hide.Y), i.hide.Z) or (coin.Position + Vector3.new(0, 0.5, 0))
+        local left = moveTo(r, dest, dt)
+        if now - (HW.touchAt or 0) >= 1 / 30 then
+            HW.touchAt = now
+            touch(lp.Character, coin)
+        end
+        if left < 0.3 then
+            HW.dwell = HW.dwell or now
+            if now - HW.dwell > 0.3 then
+                HW.att[coin], HW.dwell = att + 1, now      -- not taken from here: come a bit closer next time
+                if att + 1 > 7 then HW.bad[coin], HW.target, HW.phase = now + 30, nil, "go" end
+            end
+        end
+    end
+
+    task.spawn(function()
+        while alive do
+            local dt = RunService.Heartbeat:Wait()
+            if HW.collect then
+                local ok, err = pcall(step, dt)
+                if not ok then HW.status = "error" end
+            elseif HW.active then
+                pcall(release)
+            end
         end
     end)
-    onCleanup(function() HW.collect, HW.flying, HW.crateOn = false, false, false end)
+    onCleanup(function() HW.collect, HW.crateOn = false, false pcall(release) end)
 
     -- Mystery boxes: pays for a box with the chosen currency and opens it, once or on a loop
     local cr = L:CreateSection({ Name = "Mystery Boxes", Icon = "gift", Collapsible = true })
@@ -5384,7 +5604,7 @@ do
 
     do
     -- Defense ---------------------------------------------------------
-    local df = R:CreateSection({ Name = "Defense", Icon = "shield", Collapsible = true })
+    local df = MiscSub.defL:CreateSection({ Name = "Defense", Icon = "shield", Collapsible = true })
     local AA = { on = false, strength = 20 }
     df:AddToggle({ Name = "Anti Aim", Icon = "shield", Description = "Experimental: gives aimbots that predict your movement a jittering velocity", Callback = function(v) AA.on = v end })
     df:AddSlider({ Name = "Anti Aim Strength", Min = 5, Max = 80, Default = AA.strength, Suffix = " st/s", Callback = function(v) AA.strength = v end })
@@ -5600,10 +5820,11 @@ do
         end
     end)
     onCleanup(function() GH.on = false pcall(GH.stop) end)
-    df:AddToggle({ Name = "Ghost Mode", Icon = "ghost", Description = "When the murderer comes close your real body drops underground and a see-through copy of you stays on the map", Callback = function(v) GH.on = v if not v then GH.stop() end end })
-    df:AddSlider({ Name = "Ghost Range", Min = 10, Max = 80, Default = GH.range, Suffix = " st", Callback = function(v) GH.range = v end })
-    df:AddSlider({ Name = "Ghost Transparency", Min = 0.2, Max = 0.9, Default = GH.alpha, Decimals = 2, Callback = function(v) GH.alpha = v end })
-    df:AddStat({ Name = "Ghost", Interval = 0.5, Get = function() return GH.active and "underground" or (GH.on and "watching" or "off") end })
+    local gh = MiscSub.defR:CreateSection({ Name = "Ghost Mode", Icon = "ghost", Collapsible = true })
+    gh:AddToggle({ Name = "Ghost Mode", Icon = "ghost", Description = "When the murderer comes close your real body drops underground and a see-through copy of you stays on the map", Callback = function(v) GH.on = v if not v then GH.stop() end end })
+    gh:AddSlider({ Name = "Ghost Range", Min = 10, Max = 80, Default = GH.range, Suffix = " st", Callback = function(v) GH.range = v end })
+    gh:AddSlider({ Name = "Ghost Transparency", Min = 0.2, Max = 0.9, Default = GH.alpha, Decimals = 2, Callback = function(v) GH.alpha = v end })
+    gh:AddStat({ Name = "Ghost", Interval = 0.5, Get = function() return GH.active and "underground" or (GH.on and "watching" or "off") end })
     end
 
     do
@@ -5612,7 +5833,19 @@ do
         Ping = "rbxasset://sounds/electronicpingshort.wav", Oof = "rbxasset://sounds/uuhhh.mp3", Slash = "rbxasset://sounds/swordslash.wav",
         Snap = "rbxasset://sounds/snap.mp3", Bass = "rbxasset://sounds/bass.wav", Click = "rbxasset://sounds/clickfast.wav", Glass = "rbxasset://sounds/glassbreak.wav",
     }
-    local SOUND_NAMES = { "Ping", "Oof", "Slash", "Snap", "Bass", "Click", "Glass" }
+    local SOUND_NAMES = { "Ping", "Oof", "Slash", "Snap", "Bass", "Click", "Glass", "Nya" }
+    -- "Nya" is a file shipped with the script: downloaded once into the executor's workspace
+    local nyaId
+    local function nyaAsset()
+        if nyaId then return nyaId end
+        if not (getcustomasset and writefile and isfile) then return nil end
+        pcall(function()
+            if not isfile("MM2_nya.mp3") then writefile("MM2_nya.mp3", game:HttpGet("https://raw.githubusercontent.com/Morozhka144/UI-tests/main/nya.mp3")) end
+            nyaId = getcustomasset("MM2_nya.mp3")
+        end)
+        return nyaId
+    end
+    task.spawn(nyaAsset)
     local SND = {
         kill = { on = false, name = "Oof", vol = 60, mineOnly = true, custom = "" },
         shot = { on = false, name = "Click", vol = 50, custom = "" },
@@ -5622,7 +5855,8 @@ do
         local c = SND[kind]
         if not (c and c.on) then return end
         if kind == "kill" and c.mineOnly and not mine then return end
-        local id = (c.custom ~= "" and (tonumber(c.custom) and ("rbxassetid://" .. c.custom) or c.custom)) or SOUNDS[c.name]
+        local id = (c.custom ~= "" and (tonumber(c.custom) and ("rbxassetid://" .. c.custom) or c.custom)) or (c.name == "Nya" and nyaAsset()) or SOUNDS[c.name]
+        if not id then return end
         local s = Instance.new("Sound")
         s.SoundId, s.Volume = id, c.vol / 100 * 2
         s.Parent = SoundService
@@ -5682,7 +5916,7 @@ do
     do
     -- Emotes ----------------------------------------------------------
     local EM = { name = "ninja", auto = false }
-    local em = R:CreateSection({ Name = "Emotes", Icon = "smile", Collapsible = true })
+    local em = MiscSub.left:CreateSection({ Name = "Emotes", Icon = "smile", Collapsible = true })
     em:AddDropdown({ Name = "Emote", Options = { "ninja", "dab", "floss", "headless", "zen", "zombie", "sit" }, Default = EM.name, Callback = function(v) EM.name = v or EM.name end })
     local function fireEmote()
         local misc = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("Misc")
@@ -5705,47 +5939,14 @@ do
 
     do
     -- HUD / performance ----------------------------------------------
-    local hu = R:CreateSection({ Name = "HUD", Icon = "gauge", Collapsible = true })
-    local label = Instance.new("TextLabel")
-    label.Name = "MM2Hud"
-    label.AnchorPoint = Vector2.new(0, 0)
-    label.Position = UDim2.fromOffset(12, 12)
-    label.AutomaticSize = Enum.AutomaticSize.XY
-    label.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
-    label.BackgroundTransparency = 0.25
-    label.TextColor3 = Color3.new(1, 1, 1)
-    label.Font = Enum.Font.GothamMedium
-    label.TextSize = 14
-    label.Visible = false
-    label.ZIndex = 5
-    local pad = Instance.new("UIPadding") pad.PaddingLeft, pad.PaddingRight, pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 8), UDim.new(0, 8), UDim.new(0, 4), UDim.new(0, 4) pad.Parent = label
-    local corner = Instance.new("UICorner") corner.CornerRadius = UDim.new(0, 6) corner.Parent = label
-    label.Parent = overlay
-    local frames, fps = 0, 60
-    track(RunService.RenderStepped:Connect(function() frames += 1 end))
-    task.spawn(function()
-        while alive do
-            local t0 = os.clock()
-            local f0 = frames
-            task.wait(0.5)
-            fps = (frames - f0) / math.max(os.clock() - t0, 0.01)
-            if label.Visible then
-                local ping = safe(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end) or 0
-                label.Text = string.format("Moro MM2   %d fps   %d ms   %s", math.floor(fps + 0.5), math.floor(ping + 0.5), os.date("%H:%M"))
-            end
-        end
-    end)
-    hu:AddToggle({ Name = "Watermark", Description = "FPS, ping and time in the corner", Callback = function(v) label.Visible = v end })
+    local hu = MiscSub.right:CreateSection({ Name = "Performance", Icon = "gauge", Collapsible = true })
     hu:AddToggle({ Name = "FPS Unlocker", Description = "Removes the 60 fps cap", Callback = function(v)
         if setfpscap then pcall(setfpscap, v and 9999 or 60) else notify("HUD", "Your executor has no setfpscap", "warning") end
     end })
     hu:AddToggle({ Name = "Disable 3D Rendering", Description = "Black screen, almost no GPU use", Callback = function(v)
         pcall(function() RunService:Set3dRenderingEnabled(not v) end)
     end })
-    onCleanup(function()
-        label:Destroy()
-        pcall(function() RunService:Set3dRenderingEnabled(true) end)
-    end)
+    onCleanup(function() pcall(function() RunService:Set3dRenderingEnabled(true) end) end)
     end
 
     do
@@ -5824,7 +6025,7 @@ do
         if not ok then VT.status = "Error" end
         VT.busy = false
     end
-    local vt = R:CreateSection({ Name = "Map Votes", Icon = "vote", Collapsible = true })
+    local vt = MiscSub.roundL:CreateSection({ Name = "Map Votes", Icon = "vote", Collapsible = true })
     local padDd
     padDd = vt:AddDropdown({ Name = "Pad", Options = { "1", "2", "3" }, Default = "1", Callback = function(v) VT.pad = tonumber((tostring(v or "1"):match("^%d"))) or 1 end })
     vt:AddButton({ Name = "Show Map Names", Callback = function()
@@ -5852,7 +6053,7 @@ do
     do
     -- Auto Prestige ----------------------------------------------------
     local PR = { on = false, last = 0, level = "-", pres = "-" }
-    local acct = R:CreateSection({ Name = "Account", Icon = "crown", Collapsible = true })
+    local acct = MiscSub.roundR:CreateSection({ Name = "Account", Icon = "crown", Collapsible = true })
     acct:AddToggle({ Name = "Auto Prestige", Description = "Prestiges as soon as level 100 is reached", Callback = function(v) PR.on = v end })
     acct:AddStat({ Name = "Level / Prestige", Interval = 2, Get = function() return tostring(PR.level) .. " / " .. tostring(PR.pres) end })
     task.spawn(function()
@@ -5945,7 +6146,7 @@ do
 
     -- fling: Touch Fling spikes your own velocity so that whoever you touch is thrown; Anti-Fling makes other players' bodies harmless
     local FL = { touch = false, anti = false }
-    local fl = L:CreateSection({ Name = "Fling", Icon = "wind", Collapsible = true })
+    local fl = MiscSub.flingL:CreateSection({ Name = "Touch Fling", Icon = "wind", Collapsible = true })
     fl:AddToggle({ Name = "Touch Fling", Icon = "zap", Description = "Throws players you touch", Callback = function(v) FL.touch = v end })
     fl:AddToggle({ Name = "Anti-Fling", Icon = "shield", Description = "Other players can't push or throw you", Callback = function(v) FL.anti = v end })
     task.spawn(function()
@@ -6078,23 +6279,24 @@ do
         end)
         return tool
     end
-    fl:AddToggle({ Name = "Fling Stick", Icon = "wand", Description = "A hand on a stick appears in your hotbar; swing it at someone", Callback = function(v)
+    local fl2 = MiscSub.flingR:CreateSection({ Name = "Fling Tools", Icon = "wand", Collapsible = true })
+    fl2:AddToggle({ Name = "Fling Stick", Icon = "wand", Description = "A hand on a stick appears in your hotbar; swing it at someone", Callback = function(v)
         FS.on = v
         if not v and FS.tool then FS.tool:Destroy() FS.tool = nil end
     end })
-    fl:AddSlider({ Name = "Fling Power", Min = 10000, Max = 500000, Default = FS.power, Callback = function(v) FS.power = v end })
+    fl2:AddSlider({ Name = "Fling Power", Min = 10000, Max = 500000, Default = FS.power, Callback = function(v) FS.power = v end })
     -- role targets, click-to-fling and the two automatic modes all go through the same throw as the stick
-    fl:AddButton({ Name = "Fling Sheriff", Callback = function()
+    fl2:AddButton({ Name = "Fling Sheriff", Callback = function()
         local p = findByRole("Sheriff") or findByRole("Hero")
         if p and p ~= lp then flingPlayer(p) else notify("Fling", "No sheriff to fling", "warning") end
     end })
-    fl:AddButton({ Name = "Fling Murderer", Callback = function()
+    fl2:AddButton({ Name = "Fling Murderer", Callback = function()
         local p = findByRole("Murderer")
         if p and p ~= lp then flingPlayer(p) else notify("Fling", "No murderer to fling", "warning") end
     end })
-    fl:AddToggle({ Name = "Auto Fling Sheriff", Description = "Throws each new sheriff once", Callback = function(v) FS.autoSheriff = v FS.lastSheriff = nil end })
-    fl:AddToggle({ Name = "Auto End Round", Description = "While you are dead, keeps throwing the murderer", Callback = function(v) FS.autoEnd = v end })
-    fl:AddToggle({ Name = "Click Fling", Description = "Click or tap a player to throw them", Callback = function(v) FS.click = v end })
+    fl2:AddToggle({ Name = "Auto Fling Sheriff", Description = "Throws each new sheriff once", Callback = function(v) FS.autoSheriff = v FS.lastSheriff = nil end })
+    fl2:AddToggle({ Name = "Auto End Round", Description = "While you are dead, keeps throwing the murderer", Callback = function(v) FS.autoEnd = v end })
+    fl2:AddToggle({ Name = "Click Fling", Description = "Click or tap a player to throw them", Callback = function(v) FS.click = v end })
     task.spawn(function()
         while alive do
             if FS.autoSheriff then
