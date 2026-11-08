@@ -2023,6 +2023,75 @@ if Library then
             end
         end
     })
+
+    TrainTpSec:AddButton({
+        Name = "Enter Train (Instant)",
+        Primary = true,
+        Callback = function()
+            local enterRemote = remoteFolder and remoteFolder:FindFirstChild("EnterTrain")
+            if not enterRemote then
+                Notify("Error", "EnterTrain remote not found!", 2, "Error")
+                return
+            end
+            enterRemote:FireServer(true, CFrame.new(-1009.036376953125, -1952.4598388671875, -173.60595703125, -1.0000001192092896, 0, -8.742790669202805e-08, 0, 1, 0, 8.742790669202805e-08, 0, -1.0000001192092896))
+            Notify("Moro Soul", "Entering Infinity Train...", 2, "Success")
+        end
+    })
+
+    TrainTpSec:AddButton({
+        Name = "Enter Train (TP Only, No Timer)",
+        Primary = false,
+        Callback = function()
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not hrp then
+                Notify("Error", "Character not found!", 2, "Error")
+                return
+            end
+            local targetCF = CFrame.new(-1009.036376953125, -1952.4598388671875, -173.60595703125, -1.0000001192092896, 0, -8.742790669202805e-08, 0, 1, 0, 8.742790669202805e-08, 0, -1.0000001192092896)
+            local it = workspace:FindFirstChild("InfinityTrain")
+            local spawnAtt = it and it.PrimaryPart and it.PrimaryPart:FindFirstChild("PlayerSpawnPos")
+            if spawnAtt then
+                targetCF = spawnAtt.WorldCFrame
+            end
+            hrp.CFrame = targetCF
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            Notify("Moro Soul", "Teleported to train PlayerSpawnPos (no remote sent)", 2, "Success")
+        end
+    })
+
+    TrainTpSec:AddButton({
+        Name = "Enter Train (Remote false + CFrame, Test)",
+        Primary = false,
+        Callback = function()
+            local enterRemote = remoteFolder and remoteFolder:FindFirstChild("EnterTrain")
+            if not enterRemote then
+                Notify("Error", "EnterTrain remote not found!", 2, "Error")
+                return
+            end
+            local targetCF = CFrame.new(-1009.036376953125, -1952.4598388671875, -173.60595703125, -1.0000001192092896, 0, -8.742790669202805e-08, 0, 1, 0, 8.742790669202805e-08, 0, -1.0000001192092896)
+            local it = workspace:FindFirstChild("InfinityTrain")
+            local spawnAtt = it and it.PrimaryPart and it.PrimaryPart:FindFirstChild("PlayerSpawnPos")
+            if spawnAtt then
+                targetCF = spawnAtt.WorldCFrame
+            end
+            enterRemote:FireServer(false, targetCF)
+            Notify("Moro Soul", "Sent EnterTrain(false, CFrame)", 2, "Info")
+        end
+    })
+
+    TrainTpSec:AddButton({
+        Name = "Leave Train (Instant)",
+        Primary = false,
+        Callback = function()
+            local enterRemote = remoteFolder and remoteFolder:FindFirstChild("EnterTrain")
+            if not enterRemote then
+                Notify("Error", "EnterTrain remote not found!", 2, "Error")
+                return
+            end
+            enterRemote:FireServer(false)
+            Notify("Moro Soul", "Leaving Infinity Train...", 2, "Info")
+        end
+    })
     end
 
     -- =====================================================================
@@ -3842,7 +3911,6 @@ if Library then
     local ghostConn = nil
     local fakeCamPart = nil
     local ghostPlatform = nil
-    local ghostBall = nil
 
     ExploitsTab:Column("left")
 
@@ -3875,30 +3943,14 @@ if Library then
                 
                 Camera.CameraSubject = fakeCamPart
 
-                ghostBall = Instance.new("Part")
-                ghostBall.Name = "GhostVisualBall"
-                ghostBall.Shape = Enum.PartType.Ball
-                ghostBall.Size = Vector3.new(1.2, 1.2, 1.2)
-                ghostBall.Color = Color3.fromRGB(0, 255, 255)
-                ghostBall.Material = Enum.Material.Neon
-                ghostBall.Transparency = 0.3
-                ghostBall.CanCollide = false
-                ghostBall.Anchored = true
-                ghostBall.Parent = workspace
-
-                local light = Instance.new("PointLight")
-                light.Color = ghostBall.Color
-                light.Range = 10
-                light.Brightness = 2
-                light.Parent = ghostBall
-                
                 ghostConn = runService.Heartbeat:Connect(function()
                     if not isGhost or not hrp.Parent then return end
                     
                     local realCF = hrp.CFrame
                     fakeCamPart.CFrame = realCF
-                    if ghostBall then
-                        ghostBall.CFrame = realCF * CFrame.new(0, 3.5, 0)
+                    -- the body stays where it looks like it is, just see-through, instead of a glowing ball
+                    for _, d in ipairs(char:GetDescendants()) do
+                        if d:IsA("BasePart") and d ~= hrp then d.LocalTransparencyModifier = 0.55 end
                     end
 
                     local followPos = realCF * CFrame.new(0, -10, 0)
@@ -3913,7 +3965,11 @@ if Library then
                 if ghostConn then ghostConn:Disconnect() end
                 if hum then Camera.CameraSubject = hum end
                 if fakeCamPart then fakeCamPart:Destroy() end
-                if ghostBall then ghostBall:Destroy() ghostBall = nil end
+                if char then
+                    for _, d in ipairs(char:GetDescendants()) do
+                        if d:IsA("BasePart") then d.LocalTransparencyModifier = 0 end
+                    end
+                end
                 if ghostPlatform then ghostPlatform:Destroy() ghostPlatform = nil end
                 if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
             end
