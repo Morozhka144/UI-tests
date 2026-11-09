@@ -6737,7 +6737,7 @@ function GetESPTarget(object, _)
 end
 
 local notifier = {
-  PlaySound = nil, ShowAchievement = nil, ActiveItem = 0, SoundAssets = nil, SoundInstance = nil, ActiveAchievement = nil, ActiveEntity = 0, }
+  PlaySound = nil, ShowAchievement = nil, ActiveItem = 0, ActiveAchievement = nil, ActiveEntity = 0, }
 
 local function addCategoryESP(highlightPart, category, locked)
   local isEnabled = setting(ESPToggleKeys[category])
@@ -11277,60 +11277,11 @@ local function getEntityMessage(entityData)
   return "Entity detected!"
 end
 
-notifier.SoundAssets = {
-  Achievement = "rbxassetid://10469938989", Tone = nil, Alert = nil, ["Windows XP"] = nil, ["GTA Cell"] = nil, }
-
-pcall(function()
-  if isfolder then
-    if not isfolder("moro/Notification Sounds") then
-      makefolder("moro/Notification Sounds")
-    end
-
-    local function fetchData(soundName, url)
-      local text = "moro/Notification Sounds" .. "/" .. soundName .. "."
-        .. (url:match("%.([a-zA-Z0-9]+)$") or "mp3")
-
-      if not isfile(text) then
-        writefile(text, game:HttpGet(url))
-      end
-
-      return getcustomasset(text)
-    end
-
-    notifier.SoundAssets.Tone = fetchData(
-      "tone", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/tone%20notification.mp3"
-    )
-
-    notifier.SoundAssets.Alert = fetchData(
-      "alert", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/alert%20notification.mp3"
-    )
-
-    notifier.SoundAssets["Windows XP"] = fetchData(
-      "xp", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/windows%20xp%20exclamation.ogg"
-    )
-
-    notifier.SoundAssets["GTA Cell"] = fetchData(
-      "gta", "https://raw.githubusercontent.com/doram44/cheesy/main/notif%20sounds/gta%20notification.ogg"
-    )
-  end
-end)
-
-notifier.SoundInstance = Instance.new("Sound")
-notifier.SoundInstance.Name = "morohubnotifsound"
-notifier.SoundInstance.Volume = 0.65
-
-pcall(function() notifier.SoundInstance.Parent = SoundService end)
-
+-- notification sounds come from MoroElite's own set (MoroElite.SoundNames)
 function notifier.PlaySound(soundName)
-  soundName = soundName or "NotifySound"
-
-  pcall(function()
-    local achievement = notifier.SoundAssets[setting(soundName)] or notifier.SoundAssets.Achievement
-
-    notifier.SoundInstance.SoundId = achievement
-    notifier.SoundInstance.TimePosition = 0
-    notifier.SoundInstance:Play()
-  end)
+  local name = setting(soundName or "NotifySound")
+  if not table.find(MoroElite.SoundNames, name) then name = MoroElite.SoundNames[1] end
+  MoroElite:PlaySound(name, 0.65)
 end
 
 notifier.ActiveAchievement = {}
@@ -18587,14 +18538,6 @@ sections.MiscFun:AddButton({
   Callback = Handlers.UhhhhVal,
 })
 
-sections.MiscFun:AddButton({
-  Name = "Death Farm",
-  Description = "Execute this in the hotel at a start of run, either use it from here or execute the actual script",
-  Callback = function()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/doram44/cheesy/refs/heads/main/stuff/deathfarm.lua"))()
-  end,
-})
-
 ui.OrbitItems = sections.MiscFun:AddToggle({
   Name = "Orbit Items",
   Description = "Items that you have dropped will spin around you on the floor",
@@ -20148,8 +20091,8 @@ ui.NotifyStyle = sections.Visuals_Notifs:AddDropdown({
 
 ui.NotifySound = sections.Visuals_Notifs:AddDropdown({
   Name = "Notification Sound",
-  Options = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" },
-  Default = "GTA Cell",
+  Options = MoroElite.SoundNames,
+  Default = "Warn",
   Flag = "NotifySound",
 })
 
@@ -20194,8 +20137,8 @@ ui.ItemNotifyStyle = sections.Visuals_ItemNotifs:AddDropdown({
 
 ui.ItemNotifySound = sections.Visuals_ItemNotifs:AddDropdown({
   Name = "Notification Sound",
-  Options = { "Achievement", "Tone", "Alert", "Windows XP", "GTA Cell" },
-  Default = "Windows XP",
+  Options = MoroElite.SoundNames,
+  Default = "Soft",
   Flag = "ItemNotifySound",
 })
 
@@ -20713,13 +20656,11 @@ local function unloadScript()
 end
 
 getgenv().MoroUnload = unloadScript
-getgenv().CheesyUnload = unloadScript
 
 MoroElite:OnUnload(function()
   _Unloading = true
   unloadScript()
   getgenv().MoroUnload = nil
-  getgenv().CheesyUnload = nil
 end)
 
 if Window.Gui then
