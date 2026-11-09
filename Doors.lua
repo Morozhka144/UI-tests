@@ -740,7 +740,7 @@ do
         character:SetAttribute("Climbing", false)
         featureState.AnticheatDisabled = true
 
-        Window:Notify({ Title = "Disabled anticheat", Content = "Re-enables after cutscenes or halt", Duration = 5 })
+        Window:Notify({ Title = "Anticheat off", Content = "Back on after a cutscene or Halt", Duration = 5 })
       end
     end)
 
@@ -749,7 +749,7 @@ do
         if featureState.AnticheatDisabled and not arg1:find("SewerSeek") then
           featureState.AnticheatDisabled = false
 
-          Window:Notify({ Title = "Anticheat re-enabled", Content = "Interact with a ladder for re-disabling", Duration = 5 })
+          Window:Notify({ Title = "Anticheat on", Content = "Use a ladder to turn it off again", Duration = 5 })
         end
       end)
 
@@ -758,7 +758,7 @@ do
           if featureState.AnticheatDisabled then
             featureState.AnticheatDisabled = false
 
-            Window:Notify({ Title = "Anticheat re-enabled", Content = "Interact with a ladder for re-disabling", Duration = 5 })
+            Window:Notify({ Title = "Anticheat on", Content = "Use a ladder to turn it off again", Duration = 5 })
           end
 
           if latestRoomValue then
@@ -2864,7 +2864,7 @@ function Handlers.FakeRevive()
       localPlayer:SetAttribute("Alive", true)
       localPlayer:SetAttribute("FakeDeath", true)
 
-      Window:Notify({ Title = "Pick up a bandage to restore all interactions", Duration = 5 })
+      Window:Notify({ Title = "Take a bandage to restore interactions", Duration = 5 })
     end
   end)
 end
@@ -4169,7 +4169,7 @@ function Handlers.ShowLibraryCode()
   if functions then
     Window:Notify({ Title = "Library code: " .. functions, Duration = 5 })
   else
-    Window:Notify({ Title = "Could not read library code", Duration = 5 })
+    Window:Notify({ Title = "Library code unreadable", Duration = 5 })
   end
 end
 
@@ -4763,7 +4763,7 @@ local function handleRoomObject(object)
 
             if featureState.BruteForceCount % 750 == 0 then
               task.spawn(function()
-                Window:Notify({ Title = "Brute-force: checked " .. featureState.BruteForceCount .. " codes", Content = "Not found yet", Duration = 2 })
+                Window:Notify({ Title = "Brute-force", Content = featureState.BruteForceCount .. " codes tried, none fit yet", Duration = 2 })
               end)
             end
           end
@@ -4774,7 +4774,7 @@ local function handleRoomObject(object)
     object.Destroying:Once(function()
       if featureState.BruteForceCount and featureState.BruteForceCount > 0 then
         task.spawn(function()
-          Window:Notify({ Title = "Padlock code found after " .. featureState.BruteForceCount .. " attempts!", Content = "yay", Duration = 5 })
+          Window:Notify({ Title = "Padlock opened", Content = featureState.BruteForceCount .. " attempts", Duration = 5 })
         end)
       end
 
@@ -5728,7 +5728,7 @@ local function toggleChairBypass()
   releaseChair()
 
   if takeChairControl() then
-    Window:Notify({ Title = "Chair anticheat bypass", Content = "Bypass active, prompts are not able to be used while active, press ctrl and then space or turn off the toggle to stop it", Duration = 3 })
+    Window:Notify({ Title = "Chair bypass", Content = "Prompts are off while it runs. Ctrl, then Space, or the toggle stops it", Duration = 3 })
 
     return
   end
@@ -5765,7 +5765,7 @@ local function toggleChairBypass()
       if archiveChairFly and not chairSession then
         takeChairControl()
 
-        Window:Notify({ Title = "Chair anticheat bypass", Content = "Bypass active, prompts are not able to be used while active, press ctrl and then space or turn off the toggle to stop it", Duration = 3 })
+        Window:Notify({ Title = "Chair bypass", Content = "Prompts are off while it runs. Ctrl, then Space, or the toggle stops it", Duration = 3 })
       end
     end
   end)
@@ -7716,7 +7716,7 @@ function lobbyState.MainTab()
         return
       end
 
-      Window:Notify({ Title = "Redeeming " .. #featureState.CodesList .. " codes.", Duration = 5 })
+      Window:Notify({ Title = "Redeeming " .. #featureState.CodesList .. " codes", Duration = 5 })
       featureState.RedeemingCodes = true
 
       for _, codes in ipairs(featureState.CodesList) do
@@ -8319,14 +8319,14 @@ function Handlers.DroneTimerChanged(value)
                 if minutesLeft <= 60 and minutesLeft > 0 and not seen["h_" .. targetMinutes] then
                   seen["h_" .. targetMinutes] = true
 
-                  Window:Notify({ Title = "Drones", Content = string.format("Drone stampede in 1 hour (%s)", formatClockTime(targetMinutes)), Duration = 5 })
+                  Window:Notify({ Title = "Drones", Content = string.format("Stampede in 1 h (%s)", formatClockTime(targetMinutes)), Duration = 5 })
                 end
 
                 if minutesLeft <= 30 and minutesLeft > 0 and not seen["m_" .. targetMinutes] then
                   seen["m_" .. targetMinutes] = true
 
                   Window:Notify({ Title = "Drones", Content = string.format(
-                      "Drone stampede in 30 minutes (%s)", formatClockTime(targetMinutes)
+                      "Stampede in 30 min (%s)", formatClockTime(targetMinutes)
                     ), Duration = 5 })
                 end
               end
@@ -8352,7 +8352,7 @@ function Handlers.BypassWaterChanged(Value)
   end
 
   if Value then
-    Window:Notify({ Title = "Archives", Content = "PositionSpoof Will Break This!.", Duration = 4 })
+    Window:Notify({ Title = "Archives", Content = "Position spoof breaks this", Duration = 4 })
 
     local function ProcessWaterBypassRoom(WaterBypassRoom)
       if not tonumber(WaterBypassRoom.Name) then return end
@@ -8385,7 +8385,7 @@ function Handlers.BypassWaterChanged(Value)
 
       if WaterBypassPart.Size.Y > 3 then
         WaterBypassPart:Destroy()
-        Window:Notify({ Title = "Archives", Content = "Water Bypass removed: Softlock.", Duration = 4 })
+        Window:Notify({ Title = "Archives", Content = "Water bypass removed to avoid a softlock", Duration = 4 })
         return
       end
 
@@ -8649,7 +8649,7 @@ function Handlers.ForgetMeNotSolverChanged(Value)
     if not Room:FindFirstChild(localPlayer.Name, true) then
       if not ForgetMeNotNotified[Room] then
         ForgetMeNotNotified[Room] = true
-        Window:Notify({ Title = "Archives", Content = "Please Enter The First ForgetMeNot Door", Duration = 5 })
+        Window:Notify({ Title = "Archives", Content = "Enter the first ForgetMeNot door", Duration = 5 })
       end
 
       repeat
@@ -8708,7 +8708,7 @@ function Handlers.ForgetMeNotSolverChanged(Value)
         Character:PivotTo(CFrame.new(0, -120, 0))
         Character:PivotTo(CFrame.new(0, -120, 0))
         Character:PivotTo(CFrame.new(0, -120, 0))
-        Window:Notify({ Title = "Archives", Content = "Spam Void In Debug If Stuck In ForgetMeNot", Duration = 5 })
+        Window:Notify({ Title = "Archives", Content = "Stuck in ForgetMeNot? Spam Void in Debug", Duration = 5 })
       end
       ForgetMeNotNotified[Room] = nil
     end
@@ -9346,7 +9346,7 @@ function Handlers.BypassNoiseChanged(value)
     local tvStandCurrentCFrame = targetTvStand:GetPivot()
     if tvStandCurrentCFrame.Position.Y > -119 then
       targetTvStand:PivotTo(CFrame.new(tvStandCurrentCFrame.Position.X, -120, tvStandCurrentCFrame.Position.Z))
-      Window:Notify({ Title = "Stairwell", Content = "Unequip the tv.", Duration = 5 })
+      Window:Notify({ Title = "Stairwell", Content = "Unequip the TV first", Duration = 5 })
     end
   end
 
@@ -10287,7 +10287,7 @@ function Handlers.MinecartTeleportChanged(value)
     local findFirstChild = game:FindFirstChild("MinecartPos", true)
 
     if not findFirstChild then
-      Window:Notify({ Title = "Minecart Teleport", Content = "Minecart chase is not active yet.", Duration = 3 })
+      Window:Notify({ Title = "Minecart", Content = "The chase has not started", Duration = 3 })
 
       return
     end
@@ -10332,11 +10332,11 @@ end
 
 function Handlers.CompleteDoor200()
   if not character then
-    Window:Notify({ Title = "Error", Content = "Character not found", Duration = 3 })
+    Window:Notify({ Title = "No character", Content = "Try again after spawning", Duration = 3 })
     return
   end
 
-  Window:Notify({ Title = "Door 200", Content = "Starting water pump automation...", Duration = 3 })
+  Window:Notify({ Title = "Door 200", Content = "Pump automation on", Duration = 3 })
 
   local cutsceneActive = false
 
@@ -10412,7 +10412,7 @@ function Handlers.CompleteDoor200()
     connection:Disconnect()
   end
 
-  Window:Notify({ Title = "Door 200", Content = "Finished water pump automation", Duration = 4 })
+  Window:Notify({ Title = "Door 200", Content = "Pump automation done", Duration = 4 })
 end
 
 
@@ -11632,7 +11632,7 @@ runService.Heartbeat:Connect(function()
 
     if VulnerableLastY then
       if y - VulnerableLastY >= 3 and tick() - VulnerableNotifCooldown >= 3 then
-        Window:Notify({ Title = "Vulnerable", Content = "You've moved 3+ studs upward!", Duration = 3 })
+        Window:Notify({ Title = "Vulnerable", Content = "You rose 3+ studs", Duration = 3 })
 
         VulnerableNotifCooldown = tick()
       end
@@ -11698,7 +11698,7 @@ local function watchOxygen()
         local floorVal = math.floor(oxygen + 0.5)
 
         if floorVal ~= lastOxygen and TableFind(warningLevels, floorVal) then
-          Window:Notify({ Title = "Oxygen decreasing", Content = "Your oxygen is at " .. tostring(floorVal) .. "%", Duration = 3 })
+          Window:Notify({ Title = "Oxygen", Content = tostring(floorVal) .. "% left", Duration = 3 })
 
           lastOxygen = floorVal
         end
@@ -11716,7 +11716,7 @@ local function watchOxygen()
         if TableFind({ 90, 60, 30, 15 }, value) and value ~= lastSecond then
           lastSecond = value
 
-          Window:Notify({ Title = "Haste notification", Content = "Haste is coming in " .. value .. " seconds!", Duration = 3 })
+          Window:Notify({ Title = "Haste", Content = "In " .. value .. " s", Duration = 3 })
         end
       end
     end)
@@ -17589,12 +17589,12 @@ do (function()
   local function scrapDrops()
     local drops = workspace:FindFirstChild("Drops")
     if not drops then
-      Window:Notify({ Title = "Scrap Dropped Items", Content = "No Drops folder found", Duration = 4 })
+      Window:Notify({ Title = "Scrap Dropped Items", Content = "Nothing dropped", Duration = 4 })
       return
     end
     local grinder = nearestGrinder()
     if not grinder then
-      Window:Notify({ Title = "Scrap Dropped Items", Content = "No scrapper found", Duration = 4 })
+      Window:Notify({ Title = "Scrap Dropped Items", Content = "No scrapper nearby", Duration = 4 })
       return
     end
     local moved = 0
@@ -17607,7 +17607,7 @@ do (function()
       end
       if ok then moved = moved + 1 end
     end
-    Window:Notify({ Title = "Scrap Dropped Items", Content = "Sent " .. moved .. " item(s) to the scrapper", Duration = 3 })
+    Window:Notify({ Title = "Scrap Dropped Items", Content = moved .. " item(s) scrapped", Duration = 3 })
   end
 
   -- ------------------------------------------------------------------ Garden monuments
@@ -20675,7 +20675,7 @@ do
       if featureState.AnticheatDisabled then
         featureState.AnticheatDisabled = false
 
-        Window:Notify({ Title = "Anticheat re-enabled", Content = "Interact with a ladder for re-disabling", Duration = 5 })
+        Window:Notify({ Title = "Anticheat on", Content = "Use a ladder to turn it off again", Duration = 5 })
       end
 
       connect29:Disconnect()
@@ -20685,22 +20685,3 @@ end
 
 
 Window:Toggle(true)
-
-Window:Notify({ Title = "Loaded moro in " .. math.floor((tick() - LoadStart) * 1000) / 1000 .. " seconds", Content = "MoroLumina UI Framework", Duration = 5 })
-pcall(function() execName = RootEnv.identifyexecutor() end)
-
-if hasFirePrompt and hasFireTouch and hasReplicateSignal and hasNetworkOwner and hasHookMeta then
-  Window:Notify({ Title = "Yay", Content = "All features should work as all used functions are supported :D ("
-      .. tostring(execName) .. ")", Duration = 5 })
-else
-  Window:Notify({ Title = "Uh oh", Content = "Some features may not work as not all used functions are supported :( ("
-      .. tostring(execName) .. ")", Duration = 5 })
-end
-
-pcall(function()
-  local text = string.lower(tostring(execName))
-
-  if text:find("xeno", 1, true) or text:find("solara", 1, true) then
-    Window:Notify({ Title = "Executor not supported", Content = "Xeno and Solara are both very unstable and may/most likely will not work with the script, I advise using a better executor", Duration = 10 })
-  end
-end)
