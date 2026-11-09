@@ -6801,10 +6801,10 @@ local function notifyItemSpawn(locked, model)
       .. " m)"
   end
 
-  Window:Notify({ Title = "An item has spawned", Content = locked .. distanceText, Duration = 4 })
+  Window:Notify({ Title = "Item spawned", Content = locked .. distanceText, Duration = 4 })
 
   if setting("ItemNotifyStyle") ~= "Obsidian" then
-    task.spawn(function() notifier.ShowAchievement("An item has spawned", locked, distanceText) end)
+    task.spawn(function() notifier.ShowAchievement("Item spawned", locked, distanceText) end)
   end
 
   if setting("ItemChatToggle") then
@@ -11257,24 +11257,12 @@ end
 
 EntityNotifyData = {
   RushMoving = { Alias = "Rush", Danger = true }, AmbushMoving = { Alias = "Ambush", Danger = true }, A60 = { Alias = "A-60", Danger = true }, A120 = {
-    Alias = "A-120", Danger = true, GodmodeText = "A-120 is coming, godmode does not work, hide!", }, BackdoorRush = { Alias = "Blitz", Danger = true }, Eyes = { Alias = "Eyes", Text = "Eyes has spawned, look away!" }, Lookman = { Alias = "Lookman", Text = "Lookman has spawned, look away!" }, BackdoorLookman = { Alias = "Lookman", Text = "Lookman has spawned, look away!" }, MonumentEntity = { Alias = "Monument", Text = "Monument has spawned, look at it!" }, SallyMoving = { Alias = "Sally", Text = "Sally has spawned, drop an item for her!" }, GloombatSwarm = {
-    Alias = "Gloombat Swarm", Text = "Gloombats have spawned, turn off lights!", }, ["RNIUSHCG=="] = { Alias = "Glitch Rush", Danger = true }, AR0xMBUSH = { Alias = "Glitch Ambush", Danger = true }, GlitchRush = { Alias = "Glitch Rush", Danger = true }, GlitchAmbush = { Alias = "Glitch Ambush", Danger = true }, GiggleCeiling = { Alias = "Giggle" }, GrumbleRig = { Alias = "Grumble" }, DronesStampede = { Alias = "Drones", Danger = true, Text = "Drones are stampeding, hide!" }, BashMoving = { Alias = "Bash", Danger = true }, Water = { Alias = "Electric Puddle", Danger = false, Text = "Electric Puddle nearby!" }, TellerRig = { Alias = "Teller", Danger = true, NoNotify = true }, Scribbles = {
-    Alias = "Scribbles", Danger = true, Text = "Scribbles is coming, godmode does not work, hide!", }, Noise = { Alias = "Noise", Danger = true, NoNotify = true }, Creak = { Alias = "Creak", Danger = true, NoNotify = true }, }
+    Alias = "A-120", Danger = true, }, BackdoorRush = { Alias = "Blitz", Danger = true }, Eyes = { Alias = "Eyes" }, Lookman = { Alias = "Lookman" }, BackdoorLookman = { Alias = "Lookman" }, MonumentEntity = { Alias = "Monument" }, SallyMoving = { Alias = "Sally" }, GloombatSwarm = {
+    Alias = "Gloombat Swarm", }, ["RNIUSHCG=="] = { Alias = "Glitch Rush", Danger = true }, AR0xMBUSH = { Alias = "Glitch Ambush", Danger = true }, GlitchRush = { Alias = "Glitch Rush", Danger = true }, GlitchAmbush = { Alias = "Glitch Ambush", Danger = true }, GiggleCeiling = { Alias = "Giggle" }, GrumbleRig = { Alias = "Grumble" }, DronesStampede = { Alias = "Drones", Danger = true }, BashMoving = { Alias = "Bash", Danger = true }, Water = { Alias = "Electric Puddle", Danger = false }, TellerRig = { Alias = "Teller", Danger = true, NoNotify = true }, Scribbles = {
+    Alias = "Scribbles", Danger = true, }, Noise = { Alias = "Noise", Danger = true, NoNotify = true }, Creak = { Alias = "Creak", Danger = true, NoNotify = true }, }
 
-local function getEntityMessage(entityData)
-  if entityData.Text then
-    return entityData.Text
-  end
-
-  if entityData.GodmodeText then
-    return entityData.GodmodeText
-  end
-
-  if entityData.Danger then
-    return entityData.Alias .. " is coming, hide!"
-  end
-
-  return "Entity detected!"
+local function getEntityName(entityData)
+  return entityData.Alias or "Entity"
 end
 
 -- notification sounds come from MoroElite's own set (MoroElite.SoundNames)
@@ -11516,22 +11504,13 @@ function notifyEntitySpawn(object)
   notifier.ActiveEntity = notifier.ActiveEntity + 1
   notifier.PlaySound()
 
-  local message = getEntityMessage(entityData)
-
-  local dangerousEntities = {
-    RushMoving = true, AmbushMoving = true, A60 = true, BackdoorRush = true, ["RNIUSHCG=="] = true, AR0xMBUSH = true, BashMoving = true, }
-
-  if setting("Godmode") and dangerousEntities[object.Name] then
-    message = entityData.Alias .. " is coming, but you have godmode enabled so don't worry!"
-  end
+  local name = getEntityName(entityData)
 
   if setting("NotifyStyle") == "Obsidian" then
-    Window:Notify({ Title = "Entity detected", Content = message, Duration = 5 })
+    Window:Notify({ Title = "Entity spawned", Content = name, Duration = 5 })
   else
     task.spawn(function()
-      notifier.ShowAchievement(
-        "Entity detected", message, nil, "Entity '" .. (entityData.Alias or "") .. "' has spawned"
-      )
+      notifier.ShowAchievement("Entity spawned", name)
     end)
   end
 
