@@ -15560,7 +15560,7 @@ end
 
 -- Комната 49: самоубийство ради быстрого Play Again (быстрый цикл 1-49)
 local function ResetAtRoom49(char, hum)
-  KnobFarm.SetStatus("Room 49 reached! Resetting character for Play Again...")
+  KnobFarm.SetStatus("Room " .. tostring(GetLatestRoomNum and GetLatestRoomNum() or 49) .. " reached! Resetting character for Play Again...")
   SetFeature("Godmode", false)
   pcall(function()
     char = char or (localPlayer and localPlayer.Character)
@@ -15798,6 +15798,11 @@ local function Tick()
   -- Только когда бот реально В комнате 100. Раньше хватало LatestRoom >= 100: бот ещё стоял в 99-й,
   -- объекты 100-й не успевали загрузиться, список предохранителей был пуст, и он сразу шёл к рычагу.
   if roomNum and roomNum >= ROOMS.ELEVATOR then
+    -- Пока что на 100-й двери просто ресетаем персонажа (быстрый Play Again); решатель щитка отключён флагом
+    if KnobFarm.ResetAtRoom100 ~= false then
+      ResetAtRoom49(char, hum)
+      return
+    end
     local room2 = (curRooms and curRooms:FindFirstChild(tostring(ROOMS.ELEVATOR))) or room
     SolveRoom100(room2)
     return
