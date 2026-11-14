@@ -14724,22 +14724,23 @@ local function handleRoom(room, door)
     -- 2. Находим книги (LiveHintBook) и идем к каждой по полу
     KnobFarm.SetStatus("Room 50: Finding Books...")
     local books = {}
-    if targetRoom then
-      for _, desc in ipairs(targetRoom:GetDescendants()) do
-        if desc.Name == "LiveHintBook" then
-          table.insert(books, desc)
-        end
-      end
-    end
-    if #books == 0 and curRooms then
-      for _, desc in ipairs(curRooms:GetDescendants()) do
-        if desc.Name == "LiveHintBook" then
-          table.insert(books, desc)
+    -- Книги подгружаются не сразу: список собираем заново при каждом заходе в сбор (и при повторе кода),
+    -- иначе бот с пустым списком вечно «повторял код» и не брал ни одной книги.
+    local function scanBooks()
+      table.clear(books)
+      for _, container in ipairs({ targetRoom, curRooms }) do
+        if container and #books == 0 then
+          for _, desc in ipairs(container:GetDescendants()) do
+            if desc.Name == "LiveHintBook" then
+              table.insert(books, desc)
+            end
+          end
         end
       end
     end
 
     local function collectBooks()
+      scanBooks()
       while KnobFarm.Active and not _Unloading and PlayerAlive() do
         -- Если замок открылся или лист пропал во время сбора книг — немедленно выходим к двери
         if (sheetWasPresent and not hasSheet()) or (padlock and not padlock.Parent) then
@@ -14910,6 +14911,7 @@ local function handleRoom(room, door)
           pcall(function() remotesFolder.PL:FireServer(code) end)
         end
       else
+        scanBooks()
         for _, b in ipairs(books) do
           if b.Parent then KnobFarm.LootedObjects[b] = nil end
         end
@@ -15480,6 +15482,16 @@ local function StepSeek(char, hum, root, room, roomNum)
 
   if door then
     local doorPart = door:FindFirstChild("Door") or door:FindFirstChild("Hidden") or door.PrimaryPart
+    -- TEMP DEBUG (Seek diagnostics, removed once the chase stall is understood)
+    if tick() - (KnobFarm._seekDbg or 0) > 0.8 then
+      KnobFarm._seekDbg = tick()
+      local pr = door:FindFirstChildWhichIsA("ProximityPrompt", true)
+      local nextRoom = curRooms and curRooms:FindFirstChild(tostring((GetLatestRoomNum() or curRoomNum) + 1))
+      KnobFarm.SeekDebug = string.format("latest=%s door=%s opened=%s lock=%s prompt=%s/%s dist=%.1f nextRoom=%s skipped=%s",
+        tostring(GetLatestRoomNum()), door:GetFullName():gsub("Workspace.CurrentRooms.", ""), tostring(door:GetAttribute("Opened")),
+        tostring(door:FindFirstChild("Lock") ~= nil), tostring(pr ~= nil), tostring(pr and pr.Enabled),
+        doorPart and (doorPart.Position - root.Position).Magnitude or -1, tostring(nextRoom ~= nil), tostring(KnobFarm.SeekDoorsSkipped))
+    end
     if doorPart then
       root.CFrame = doorPart.CFrame * CFrame.new(0, 0, 3)
       root.AssemblyLinearVelocity = Vector3.zero
