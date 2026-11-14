@@ -11926,13 +11926,13 @@ local function UpdateStatsGUI(stats, lastNet)
     if sections and sections.AutoFarm_StatsNet then
       local sign = stats.NetProfit >= 0 and "+" or ""
       local lastTxt = lastNet and (" (Last: " .. (lastNet >= 0 and "+" or "") .. tostring(lastNet) .. ")") or ""
-      sections.AutoFarm_StatsNet:SetText("Net Profit: " .. sign .. tostring(stats.NetProfit) .. " Knobs" .. lastTxt)
+      sections.AutoFarm_StatsNet:Set("Net Profit: " .. sign .. tostring(stats.NetProfit) .. " Knobs" .. lastTxt)
     end
     if sections and sections.AutoFarm_StatsEarned then
-      sections.AutoFarm_StatsEarned:SetText("Total Earned: " .. tostring(stats.TotalEarned) .. " Knobs")
+      sections.AutoFarm_StatsEarned:Set("Total Earned: " .. tostring(stats.TotalEarned) .. " Knobs")
     end
     if sections and sections.AutoFarm_StatsRuns then
-      sections.AutoFarm_StatsRuns:SetText("Runs: " .. tostring(stats.RunsCompleted) .. " (Spent: " .. tostring(stats.TotalSpent) .. ")")
+      sections.AutoFarm_StatsRuns:Set("Runs: " .. tostring(stats.RunsCompleted) .. " (Spent: " .. tostring(stats.TotalSpent) .. ")")
     end
   end)
 end
@@ -11992,7 +11992,7 @@ function KnobFarm.SetStatus(txt)
   lastStatusText = txt
   pcall(function()
     if sections and sections.AutoFarm_Status then
-      sections.AutoFarm_Status:SetText("Status: " .. tostring(txt))
+      sections.AutoFarm_Status:Set("Status: " .. tostring(txt))
     end
   end)
 end
@@ -16013,7 +16013,7 @@ do (function()
     pcall(function() Window:Notify({ Title = title, Content = text, Duration = kind == "error" and 5 or 3 }) end)
   end
   local function setStatus(text)
-    if statusLabel then pcall(function() statusLabel:SetText(text) end) end
+    if statusLabel then pcall(function() statusLabel:Set(text) end) end
   end
 
   -- ------------------------------------------------------------------ asset loading (model library)
@@ -17853,7 +17853,7 @@ do (function()
   local statusLabel
 
   local function setStatus(text)
-    if statusLabel then pcall(function() statusLabel:SetText("Status: " .. text) end) end
+    if statusLabel then pcall(function() statusLabel:Set("Status: " .. text) end) end
   end
 
   local function playerRoot()
