@@ -15021,7 +15021,10 @@ local function SolveRoom100(room)
     or (curRooms and curRooms:FindFirstChild("100"))
     or room
 
-  -- 0. Ожидание угроз перед входом
+  -- 0. Ждём, пока Rush/Ambush пропадут: годмод включён всё это время, выключается только после них
+  KnobFarm.DisableGodmodeForBoss = false
+  SetFeature("Godmode", true)
+  SetFeature("GodmodeMethod", "On entity spawn", true)
   if HasEntityThreat() then
     KnobFarm.SetStatus("Room 100: Threat detected! Waiting...")
     while HasEntityThreat() and hum and hum.Health > 0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
@@ -15037,14 +15040,6 @@ local function SolveRoom100(room)
   SetCrouched(true)
   KnobFarm.Teleporting = false
   KnobFarm.AvoidFigure = true
-
-  -- Ожидание загрузки объектов комнаты 100 (до 3 сек)
-  local loadStart = tick()
-  while tick() - loadStart < 3.0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
-    local f = targetRoom and (targetRoom:FindFirstChild("FusePickup", true) or targetRoom:FindFirstChild("ElevatorBreaker", true))
-    if f then break end
-    task.wait(0.2)
-  end
 
   -- 1. Сбор всех предохранителей / рубильников (fuses / breaker switches) пешком в ноуклипе
   KnobFarm.SetStatus("Room 100: Finding Breaker Switches & Fuses...")
@@ -15076,16 +15071,6 @@ local function SolveRoom100(room)
       end
     end
     return items
-  end
-
-  -- Объекты комнаты могут подгружаться не сразу: пока предохранителей нет — ждём (до 8 секунд)
-  local searchStart = tick()
-  while #getFuses() == 0 and tick() - searchStart < 8.0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
-    KnobFarm.SetStatus("Room 100: Waiting for fuses to load...")
-    task.wait(0.5)
-  end
-  if #getFuses() == 0 then
-    KnobFarm.SetStatus("Room 100: No fuses found, continuing...")
   end
 
   local fuseStart = tick()
@@ -15126,36 +15111,41 @@ local function SolveRoom100(room)
     end
   end
 
-  -- 2. Сначала собираем ВСЁ нужное: после предохранителей — ключ от щитовой (вверх по лестнице), избегая Фигуру
-  local elecKey = (targetRoom and (targetRoom:FindFirstChild("ElectricalKeyObtain", true) or targetRoom:FindFirstChild("KeyElectrical", true)
-    or targetRoom:FindFirstChild("Electrical Key", true) or targetRoom:FindFirstChild("ElectricalRoomKey", true)))
-    or (curRooms and (curRooms:FindFirstChild("ElectricalKeyObtain", true) or curRooms:FindFirstChild("KeyElectrical", true)))
+  -- 2. Ключ от щитовой (вверх по лестнице, избегая Фигуру). Если есть отмычка, ключ не нужен: сразу к двери.
+  local function collectElectricalKey()
+    local elecKey = (targetRoom and (targetRoom:FindFirstChild("ElectricalKeyObtain", true) or targetRoom:FindFirstChild("KeyElectrical", true)
+      or targetRoom:FindFirstChild("Electrical Key", true) or targetRoom:FindFirstChild("ElectricalRoomKey", true)))
+      or (curRooms and (curRooms:FindFirstChild("ElectricalKeyObtain", true) or curRooms:FindFirstChild("KeyElectrical", true)))
 
-  if elecKey then
-    KnobFarm.SetStatus("Room 100: Walking up stairs to Electrical Key...")
-    local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
-    if kPos then
-      WaitFigureClear(kPos, 20)
-      local floorPos = GetFloorPosition(kPos) or kPos
-      KnobFarm.FlyTo(floorPos, "Electrical Key")
+    if elecKey then
+      KnobFarm.SetStatus("Room 100: Walking up stairs to Electrical Key...")
+      local kPos = (elecKey:IsA("BasePart") and elecKey.Position) or (elecKey:IsA("Model") and elecKey:GetPivot().Position)
+      if kPos then
+        WaitFigureClear(kPos, 20)
+        local floorPos = GetFloorPosition(kPos) or kPos
+        KnobFarm.FlyTo(floorPos, "Electrical Key")
 
-      local curChar = localPlayer and localPlayer.Character
-      local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
-      local dist = curRoot and (curRoot.Position - kPos).Magnitude or 999
-      if dist <= 14.0 then
-        CollectBossItem(elecKey)
-        task.wait(0.2)
-      end
+        local curChar = localPlayer and localPlayer.Character
+        local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+        local dist = curRoot and (curRoot.Position - kPos).Magnitude or 999
+        if dist <= 14.0 then
+          CollectBossItem(elecKey)
+          task.wait(0.2)
+        end
 
-      -- Берем ключ в руки
-      local curHum = curChar and curChar:FindFirstChildOfClass("Humanoid")
-      local keyTool = FindTool("KeyElectrical", "ElectricalKeyObtain")
-      if keyTool and curHum and keyTool.Parent ~= curChar then
-        pcall(function() curHum:EquipTool(keyTool) end)
-        task.wait(0.2)
+        -- Берем ключ в руки
+        local curHum = curChar and curChar:FindFirstChildOfClass("Humanoid")
+        local keyTool = FindTool("KeyElectrical", "ElectricalKeyObtain")
+        if keyTool and curHum and keyTool.Parent ~= curChar then
+          pcall(function() curHum:EquipTool(keyTool) end)
+          task.wait(0.2)
+        end
       end
     end
   end
+
+  local useLockpick = HasLockpick()
+  if not useLockpick then collectElectricalKey() end
 
   -- 3. Только теперь, когда всё собрано, идём к воротам и дёргаем рычаг (Gate Lever)
   local lever = (targetRoom and (targetRoom:FindFirstChild("LeverForGate", true) or targetRoom:FindFirstChild("Lever", true)))
@@ -15177,7 +15167,7 @@ local function SolveRoom100(room)
   end
 
   -- Перед щитовой убеждаемся, что ключ в руках (после рычага он мог остаться в рюкзаке)
-  do
+  if not useLockpick then
     local character2 = localPlayer and localPlayer.Character
     local humanoid2 = character2 and character2:FindFirstChildOfClass("Humanoid")
     local keyElectrical = FindTool("KeyElectrical", "ElectricalKeyObtain")
@@ -15200,14 +15190,32 @@ local function SolveRoom100(room)
     if lockPart then
       KnobFarm.SetStatus("Room 100: Walking to Electrical Door...")
       local lPos = lockPart.Position
-      WaitFigureClear(lPos, 20)
       local floorPos = GetFloorPosition(lPos) or lPos
-      KnobFarm.FlyTo(floorPos, "Electrical Door")
-      WaitFigureClear(lPos, 15)
       local lockPrompt = (elecLock and elecLock:FindFirstChildWhichIsA("ProximityPrompt", true))
         or (elecDoor and elecDoor:FindFirstChildWhichIsA("ProximityPrompt", true))
-      if lockPrompt and lockPrompt.Enabled then
-        FirePrompt(lockPrompt, false, true)
+
+      -- открыть замок щитовой отмычкой или ключом (что сейчас в руках), до 3 секунд
+      local function unlockElectricalDoor()
+        local started = tick()
+        while lockPrompt and lockPrompt.Parent and lockPrompt.Enabled and tick() - started < 3.0
+          and KnobFarm.Active and not _Unloading and PlayerAlive() do
+          EquipUnlockTool(useLockpick)
+          FirePrompt(lockPrompt, useLockpick, true)
+          task.wait(0.1)
+        end
+        return not (lockPrompt and lockPrompt.Parent and lockPrompt.Enabled)
+      end
+
+      WaitFigureClear(lPos, 20)
+      KnobFarm.FlyTo(floorPos, "Electrical Door")
+      WaitFigureClear(lPos, 15)
+      local opened = unlockElectricalDoor()
+      -- отмычка не открыла (кончилась): берём ключ и пробуем им
+      if not opened and useLockpick then
+        useLockpick = false
+        collectElectricalKey()
+        KnobFarm.FlyTo(floorPos, "Electrical Door")
+        unlockElectricalDoor()
       end
       task.wait(0.4)
     end
