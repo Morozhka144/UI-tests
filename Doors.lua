@@ -6132,8 +6132,10 @@ Connections.GodmodeEnforce = runService.RenderStepped:Connect(function()
       featureState.OriginalC1 = root.C1
     end
 
+    -- Some executors make Motor6D.C1 read-only: the error used to abort this whole handler every frame,
+    -- so the collision parts and the Crouch remote below never ran and godmode did nothing.
     if root and featureState.OriginalC1 then
-      root.C1 = featureState.OriginalC1 * CFrame.new(0, godmodeActive and -2.346 or 0, 0)
+      pcall(function() root.C1 = featureState.OriginalC1 * CFrame.new(0, godmodeActive and -2.346 or 0, 0) end)
     end
 
     local collisionOffsetY = godmodeActive and 2.328 or 0.18
