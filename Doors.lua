@@ -14541,6 +14541,17 @@ function KnobFarm.FlyTo(targetPos, label, timeout)
   end
 
   KnobFarm.StopFly()
+
+  -- Если после посадки персонаж провалился ниже пола — возвращаем на высоту посадки
+  task.wait(0.2)
+  local curRoot = root.Parent and root
+  if curRoot and curRoot.Position.Y < landY - 4 then
+    KnobFarm.Teleporting = true
+    curRoot.CFrame = CFrame.new(targetPos.X, landY + 1, targetPos.Z)
+    curRoot.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.15)
+    KnobFarm.Teleporting = false
+  end
   return arrived or flat <= 6
 end
 
@@ -15071,6 +15082,14 @@ local function SolveRoom100(room)
       end
     end
     return items
+  end
+
+  -- Предметы комнаты подгружаются не мгновенно: без предохранителей бот шёл сразу к рычагу, и щиток нечем было решать.
+  -- Ждём не фиксированное время, а только пока список пуст (до 8 секунд).
+  local searchStart = tick()
+  while #getFuses() == 0 and tick() - searchStart < 8.0 and KnobFarm.Active and not _Unloading and PlayerAlive() do
+    KnobFarm.SetStatus("Room 100: Waiting for fuses...")
+    task.wait(0.25)
   end
 
   local fuseStart = tick()
