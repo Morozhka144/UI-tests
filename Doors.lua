@@ -11990,6 +11990,7 @@ function KnobFarm.SetStatus(txt)
   txt = tostring(txt)
   if txt == lastStatusText then return end -- не дёргаем GUI 25 раз в секунду одним и тем же текстом
   lastStatusText = txt
+  KnobFarm.Status = txt
   pcall(function()
     if sections and sections.AutoFarm_Status then
       sections.AutoFarm_Status:Set("Status: " .. tostring(txt))
